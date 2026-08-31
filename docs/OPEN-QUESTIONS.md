@@ -139,6 +139,13 @@ when a burst of students all order at once.
 
 ## Surfaced during Phase 5
 
+### ~~The vendor never sees the customer's phone number~~ — DECIDED
+
+V1 keeps the customer's number hidden from vendors, and the Phase 2 RLS policy
+that permitted it has been dropped. Support handles those conversations.
+
+Original note follows.
+
 ### The vendor never sees the customer's phone number
 
 The vendor screens deliberately show no customer identity at all. RLS still
@@ -156,6 +163,14 @@ audited. If the latter, that RLS policy should be dropped.
 types in the code the Partner reads aloud. Phase 8 needs to decide whether that
 lands on the vendor board or in a dedicated handoff view.
 
+### ~~Vendors cannot edit their own menu~~ — PARTLY DECIDED
+
+Vendors can now toggle item AVAILABILITY through
+`vendor_set_menu_item_available()`. Prices remain admin-only. Still open: should
+a vendor be able to add or rename their own items?
+
+Original note follows.
+
 ### Vendors cannot edit their own menu
 
 Phase 4 kept menu and price control entirely with the admin. That is safe, but
@@ -164,3 +179,29 @@ it means a stall cannot mark themselves out of jollof without calling someone.
 **Decide:** should a vendor be able to toggle item availability (not price) for
 their own stall? Toggling availability is low-risk and would remove a lot of
 phone calls; changing prices is not, since it affects what customers are quoted.
+
+## Surfaced during Phase 6
+
+### A customer cannot cancel their own order
+
+Not built, deliberately. Before the vendor accepts, an order costs nothing and
+expires by itself in 60 seconds. After acceptance it is a commitment on both
+sides, and unwinding it means a refund — which depends on the unresolved
+provider question.
+
+**Decide:** should there be a customer-facing cancel while the order is still
+AWAITING_VENDOR? It is cheap to add and costs nobody anything.
+
+### The service fee is charged even on a rejected order? No — but check the intent
+
+Nothing is charged until the vendor accepts, so a rejected or expired order
+costs the customer nothing at all. Confirm that is the commercial intent: some
+platforms charge a fee for the attempt. Campus Dash currently does not.
+
+### Vendor-facing SMS volume
+
+A vendor now receives an SMS on submission and another on payment. At lunchtime
+peak that could be two messages per order per stall, which costs real money.
+
+**Decide before launch:** is the payment-confirmed SMS to the vendor worth it,
+given the in-app board already updates and beeps?

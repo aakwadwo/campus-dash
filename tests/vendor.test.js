@@ -685,6 +685,112 @@ describe('vendor module', () => {
   });
 
   // =========================================================================
+  // Item availability — a vendor decision, unlike price
+  // =========================================================================
+  test('a vendor can mark their own item unavailable, and it stops being orderable', async () => {
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select public.vendor_set_menu_item_available($1, false)', [MENU.jollof]),
+      { commit: true }
+    );
+
+    const error = await expectRejection(
+      submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] })
+    );
+    assert.match(error.message, /unavailable/);
+
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select public.vendor_set_menu_item_available($1, true)', [MENU.jollof]),
+      { commit: true }
+    );
+
+    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] });
+    assert.ok(order.order_id, 'and orderable again once it is back');
+  });
+
+  test('toggling availability cannot change the price', async () => {
+    const before = await asService(
+      async (c) =>
+        (await c.query('select * from public.menu_items where id = $1', [MENU.jollof])).rows[0]
+    );
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select public.vendor_set_menu_item_available($1, false)', [MENU.jollof]),
+      { commit: true }
+    );
+
+    const after = await asService(
+      async (c) =>
+        (await c.query('select * from public.menu_items where id = $1', [MENU.jollof])).rows[0]
+    );
+    assert.equal(after.price_pesewas, before.price_pesewas);
+    assert.equal(after.name, before.name);
+    assert.equal(after.sort_order, before.sort_order);
+    assert.equal(after.is_available, false, 'only availability moved');
+  });
+
+  test('a vendor still cannot change a price by any route', async () => {
+    const viaAdmin = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.admin_update_menu_item($1, $2, null, null, $3)', [
+          MENU.jollof,
+          'raising my price',
+          9900,
+        ])
+      )
+    );
+    assert.match(viaAdmin.message, /admin privileges required/);
+
+    const direct = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('update public.menu_items set price_pesewas = 9900 where id = $1', [MENU.jollof])
+      )
+    );
+    assert.match(direct.message, /permission denied/i);
+  });
+
+  test("a vendor cannot toggle another vendor's item", async () => {
+    const error = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.vendor_set_menu_item_available($1, false)', [MENU.shawarma])
+      )
+    );
+    assert.match(error.message, /not authorised for this menu item/);
+
+    const stored = await asService(
+      async (c) =>
+        (await c.query('select is_available from public.menu_items where id = $1', [MENU.shawarma]))
+          .rows[0]
+    );
+    assert.equal(stored.is_available, true);
+  });
+
+  test('a customer cannot toggle availability at all', async () => {
+    const error = await expectRejection(
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.vendor_set_menu_item_available($1, false)', [MENU.jollof])
+      )
+    );
+    assert.match(error.message, /not authorised for this menu item/);
+  });
+
+  // =========================================================================
+  // Privacy: the customer's phone number
+  // =========================================================================
+  test('a vendor cannot read the customer behind a live order', async () => {
+    const order = await submitOrder({ customer: ACTORS.customerAma });
+    await vendorAccept(order.order_id);
+
+    const rows = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (await c.query('select * from public.users where id = $1', [ACTORS.customerAma])).rows
+    );
+    assert.equal(rows.length, 0, 'V1 keeps the customer anonymous to the vendor');
+  });
+
+  // =========================================================================
   // Audit
   // =========================================================================
   test('the whole vendor journey is reconstructable from the event log', async () => {

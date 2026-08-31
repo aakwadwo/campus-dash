@@ -78,6 +78,12 @@ describe('schema invariants', () => {
       // Places an order AS a given customer. Server contexts only — a client
       // grant here would let anyone order in someone else's name.
       'submit_order_for',
+      // Prices an order. Reachable only through quote_order (read-only) and
+      // submit_order_for; never directly, so a client cannot probe pricing for
+      // a vendor or item it should not see.
+      'price_order',
+      // Writes the provider's transaction id onto a payment.
+      'attach_payment_transaction',
     ];
     const callable = await asService(
       async (c) =>
@@ -170,6 +176,7 @@ describe('schema invariants', () => {
     // may call it fails here rather than shipping quietly.
     const ANON = [
       'current_user_id',
+      'deliverable_locations',
       'is_admin',
       'is_vendor_staff',
       'location_path',
@@ -201,6 +208,9 @@ describe('schema invariants', () => {
       'admin_update_location',
       'admin_update_menu_item',
       'admin_update_vendor',
+      'customer_order_detail',
+      'customer_order_list',
+      'customer_order_stage',
       'get_delivery_offers',
       'get_my_delivery_code',
       'get_my_pickup_code',
@@ -209,6 +219,7 @@ describe('schema invariants', () => {
       'partner_cancel_delivery',
       'partner_complete_delivery',
       'partner_set_availability',
+      'quote_order',
       'submit_order',
       'update_my_profile',
       'vendor_accept_order',
@@ -222,6 +233,7 @@ describe('schema invariants', () => {
       'vendor_pending_count',
       'vendor_reject_order',
       'vendor_set_accepting_orders',
+      'vendor_set_menu_item_available',
     ];
 
     for (const [role, allowed] of [

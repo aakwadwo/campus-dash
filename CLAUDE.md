@@ -6,7 +6,7 @@ verified student **Partner** bring it to a predefined campus destination.
 
 Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is where
 most of the safety lives. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
-and `docs/VENDOR.md` the vendor module. `docs/STATE-MACHINE.md` covers order state.
+`docs/VENDOR.md` the vendor module, and `docs/CUSTOMER.md` customer ordering. `docs/STATE-MACHINE.md` covers order state.
 `docs/OPEN-QUESTIONS.md` lists what is genuinely still undecided — do not code
 around those as if they were settled.
 
