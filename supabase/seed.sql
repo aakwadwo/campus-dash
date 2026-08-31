@@ -22,24 +22,65 @@
 -- ---------------------------------------------------------------------------
 -- auth.users — phone-based accounts (no passwords; V1 is phone OTP)
 -- ---------------------------------------------------------------------------
+-- IMPORTANT: GoTrue stores phone numbers WITHOUT the leading '+', and matches
+-- on that form at sign-in. Seeding them WITH a '+' looks harmless but means a
+-- seeded account can never be found: GoTrue creates a SECOND auth user, which
+-- then collides on public.users' unique phone. public.users keeps the '+'
+-- (our E.164 form); auth.users must not have it.
+-- Two things here look cosmetic and are not:
+--
+--   1. Phone numbers carry NO leading '+'. GoTrue stores and matches them in
+--      that form. Seeding them with a '+' means a seeded account can never be
+--      found at sign-in: GoTrue creates a SECOND auth user, which then collides
+--      on public.users' unique phone. (public.users keeps the '+' — that is our
+--      E.164 form, and the provisioning trigger adds it back.)
+--
+--   2. The token columns are '' and never NULL. GoTrue scans them into Go
+--      strings and fails with "converting NULL to string is unsupported",
+--      surfacing as "Database error finding user" on every sign-in. Several of
+--      these columns have no database default, so they are set explicitly.
 insert into auth.users (
-  instance_id, id, aud, role, phone, phone_confirmed_at,
-  raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+  instance_id, id, aud, role,
+  phone, phone_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change,
+  email_change_token_current, phone_change, phone_change_token, reauthentication_token
 )
 values
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated', '+233200000001', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Dev Admin"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated', '+233200000011', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Muni Owner (test)"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000012', 'authenticated', 'authenticated', '+233200000012', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Grill Owner (test)"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000021', 'authenticated', 'authenticated', '+233200000021', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Ama Test-Customer"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000022', 'authenticated', 'authenticated', '+233200000022', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kwesi Test-Customer"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000023', 'authenticated', 'authenticated', '+233200000023', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Efua Test-Customer"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000031', 'authenticated', 'authenticated', '+233200000031', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Yaw Test-Partner"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000032', 'authenticated', 'authenticated', '+233200000032', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Adjoa Test-Partner"}', now(), now()),
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000033', 'authenticated', 'authenticated', '+233200000033', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kofi Test-Applicant"}', now(), now());
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated',
+   '233200000001', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Dev Admin"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated',
+   '233200000011', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Muni Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000012', 'authenticated', 'authenticated',
+   '233200000012', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Grill Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000021', 'authenticated', 'authenticated',
+   '233200000021', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Ama Test-Customer"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000022', 'authenticated', 'authenticated',
+   '233200000022', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kwesi Test-Customer"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000023', 'authenticated', 'authenticated',
+   '233200000023', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Efua Test-Customer"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000031', 'authenticated', 'authenticated',
+   '233200000031', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Yaw Test-Partner"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000032', 'authenticated', 'authenticated',
+   '233200000032', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Adjoa Test-Partner"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000033', 'authenticated', 'authenticated',
+   '233200000033', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kofi Test-Applicant"}',
+   now(), now(), '', '', '', '', '', '', '', '');
 
 -- ---------------------------------------------------------------------------
 -- public.users — profiles
 -- ---------------------------------------------------------------------------
+-- The on_auth_user_created trigger has ALREADY created a base profile for each
+-- auth.users row above. This upsert only adds what the trigger cannot know:
+-- who is an admin, and which student ID backs a Partner application.
 insert into public.users (id, phone, full_name, is_admin, student_id_number) values
   ('00000000-0000-4000-8000-000000000001', '+233200000001', 'Dev Admin',            true,  null),
   ('00000000-0000-4000-8000-000000000011', '+233200000011', 'Muni Owner (test)',    false, null),
@@ -49,7 +90,11 @@ insert into public.users (id, phone, full_name, is_admin, student_id_number) val
   ('00000000-0000-4000-8000-000000000023', '+233200000023', 'Efua Test-Customer',   false, null),
   ('00000000-0000-4000-8000-000000000031', '+233200000031', 'Yaw Test-Partner',     false, 'TEST-STU-0031'),
   ('00000000-0000-4000-8000-000000000032', '+233200000032', 'Adjoa Test-Partner',   false, 'TEST-STU-0032'),
-  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false, 'TEST-STU-0033');
+  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false, 'TEST-STU-0033')
+on conflict (id) do update
+   set full_name         = excluded.full_name,
+       is_admin          = excluded.is_admin,
+       student_id_number = excluded.student_id_number;
 
 -- ---------------------------------------------------------------------------
 -- Partner profiles

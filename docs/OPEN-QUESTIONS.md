@@ -102,10 +102,37 @@ must come from the university before this is used with real students. Related:
 are room-level deliveries acceptable to the university everywhere, or only to
 common areas in some blocks?
 
-### Supabase CLI version
+### ~~Supabase CLI version~~ — RESOLVED in Phase 3
 
-The installed CLI (v2.72.7) rejects a `secret` key under
-`[auth.hook.send_sms]`. The Send SMS Hook needs that shared secret to
-authenticate Supabase as the caller — an unauthenticated hook endpoint is an
-open SMS-sending door. Upgrade (`brew upgrade supabase`, v2.116.0 is current)
-before Phase 3 wires phone OTP.
+The CLI is now pinned in the repo as a dev dependency (v2.116.0) rather than
+installed globally, so every machine and CI run uses the same one. The hook
+secret is configured and verified; the field is `secrets` (plural), not
+`secret`.
+
+## Surfaced during Phase 3
+
+### Terms & Conditions — not built
+
+`terms_acceptances` does not exist. Users must eventually agree to
+version-stamped terms (Customer, Vendor, Partner), with the version, user and
+timestamp recorded — a bare checkbox is not enough. Registration is where this
+belongs, but it needs the actual terms text and a versioning decision first.
+Blocked on legal, not on engineering.
+
+### Stub SMS provider in config.toml
+
+GoTrue gates phone login behind `GOTRUE_EXTERNAL_PHONE_ENABLED`, which the CLI
+only sets when an SMS _provider_ block is enabled — the Send SMS Hook alone is
+not enough. `[auth.sms.twilio]` is therefore enabled with non-functional
+placeholder credentials purely to switch phone login on; verified locally that
+GoTrue delivers through the hook and never contacts the provider.
+
+**Check this again when configuring the hosted project.** If the same trick is
+needed in production, the placeholder must stay obviously non-functional so a
+misconfiguration cannot silently start sending real Twilio messages.
+
+### OTP rate limits are Supabase defaults
+
+30 SMS per hour and 30 verification attempts per five minutes, unchanged from
+the CLI defaults. Nobody has decided whether those suit a campus at lunchtime,
+when a burst of students all order at once.

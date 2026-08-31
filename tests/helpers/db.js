@@ -155,6 +155,24 @@ export async function resetTransactionalState() {
     `);
     await c.query(`update public.vendors set status = 'ACTIVE', is_accepting_orders = true`);
     await c.query(`update public.users set is_suspended = false`);
+    // Restore seeded display names: tests rename accounts and commit.
+    await c.query(`
+      update public.users u set full_name = v.name
+        from (values
+          ('00000000-0000-4000-8000-000000000001','Dev Admin'),
+          ('00000000-0000-4000-8000-000000000011','Muni Owner (test)'),
+          ('00000000-0000-4000-8000-000000000012','Grill Owner (test)'),
+          ('00000000-0000-4000-8000-000000000021','Ama Test-Customer'),
+          ('00000000-0000-4000-8000-000000000022','Kwesi Test-Customer'),
+          ('00000000-0000-4000-8000-000000000023','Efua Test-Customer'),
+          ('00000000-0000-4000-8000-000000000031','Yaw Test-Partner'),
+          ('00000000-0000-4000-8000-000000000032','Adjoa Test-Partner'),
+          ('00000000-0000-4000-8000-000000000033','Kofi Test-Applicant')
+        ) as v(id, name)
+       where u.id = v.id::uuid
+    `);
+    // Remove accounts created by the auth provisioning tests.
+    await c.query(`delete from auth.users where phone like '23320999%'`);
   });
 }
 

@@ -138,11 +138,24 @@ Governed entirely by RLS on `users`:
   customer's row. The customer can read the Partner's.
 - After completion: access ends. Phone numbers do not appear in order history.
 
-## Scheduled jobs (not yet wired)
+## Scheduled jobs
 
-`expire_stale_orders()` and `expire_partner_search()` are implemented and tested
-but nothing calls them on a timer yet. Phase 3 should schedule both — via
-`pg_cron` or a Vercel cron hitting a route handler.
+Both timeout sweeps run under `pg_cron`, inside the database:
 
-Until then the 60-second vendor window and the dispatch search window only close
-when something invokes them. **This is a known gap, not an oversight.**
+| Job                                 | Schedule     | Effect                                                                                                             |
+| ----------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `campus-dash-expire-stale-orders`   | every 30s    | `SUBMITTED` past its deadline → `EXPIRED`. No payment was ever taken.                                              |
+| `campus-dash-expire-partner-search` | every minute | `SEARCHING` past its deadline → `FAILED_NO_PARTNER`. **Delivery state only** — the order stays `READY` and `PAID`. |
+
+The vendor window is 60 seconds, so a 30-second sweep bounds the visible error
+at half a window. They run in the database rather than from an application cron:
+no HTTP call to miss, no deploy that silently drops the schedule, and no second
+copy of the business rule.
+
+`pg_cron` runs jobs as the database owner, so `session_user` is `postgres` and
+`assert_service_or_admin()` passes — exactly the "direct database connection"
+case it was written for. Neither function is callable by a signed-in user.
+
+A scheduler that silently stops is worse than none, because the symptom (orders
+stuck at `SUBMITTED`) looks like an application bug. `admin_scheduled_job_status()`
+exposes each job's last run, status and error to admins.

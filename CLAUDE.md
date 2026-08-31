@@ -5,7 +5,7 @@ order from approved vendors and either collect the order themselves or have a
 verified student **Partner** bring it to a predefined campus destination.
 
 Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is where
-most of the safety lives. `docs/STATE-MACHINE.md` covers order state.
+most of the safety lives. `docs/AUTH.md` covers phone OTP and the Send SMS Hook. `docs/STATE-MACHINE.md` covers order state.
 `docs/OPEN-QUESTIONS.md` lists what is genuinely still undecided — do not code
 around those as if they were settled.
 
@@ -57,7 +57,7 @@ npm run dev        # Next.js dev server on :3000
 npm run build      # production build
 npm run lint       # eslint
 npm run format     # prettier
-npm test           # 85 database tests (needs the local stack running)
+npm test           # full suite (needs the local stack; auth e2e skips without `npm run dev`)
 npm run db:start   # local Supabase (needs Docker running)
 npm run db:reset   # re-apply all migrations + seed
 npm run db:status  # local Supabase URLs and keys
@@ -67,7 +67,8 @@ Tests run against the local database and share it, so they run serially. They
 connect as `authenticator` — the role PostgREST itself uses — so RLS and grants
 are exercised exactly as a real browser request would hit them.
 
-Environment: copy `.env.example` to `.env.local`. `SMS_PROVIDER=fake` prints
+Environment: copy `.env.example` to `.env.local`, and put `SEND_SMS_HOOK_SECRET`
+in `.env` — the Supabase CLI reads only that file, while Next.js reads both. `SMS_PROVIDER=fake` prints
 SMS and phone OTPs to the server console; `PAYMENT_PROVIDER=fake` simulates a
 ~2s asynchronous collection.
 
@@ -77,3 +78,7 @@ SMS and phone OTPs to the server console; `PAYMENT_PROVIDER=fake` simulates a
 - `@/` path alias maps to the project root.
 - `process.env` is read only in `lib/config.js`.
 - Schema changes go in `supabase/migrations/` — never applied by hand.
+- The Supabase CLI is pinned as a dev dependency; `npm run db:*` uses it. Do not
+  rely on a globally installed one.
+- Auth roles come from `my_capabilities()`, derived from the database on every
+  request. Never trust a role sent by the client.

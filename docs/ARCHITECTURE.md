@@ -104,6 +104,8 @@ One account per person. Partner capability is a **role on the same account**, no
 a second login — a user can be Customer and Partner and switch modes in the UI.
 
 - Customer: phone OTP only. No ID upload, no selfie, no manual approval.
+  Supabase Auth owns the code; our Send SMS Hook delivers it through the same
+  `SmsProvider` seam as every other notification. See `docs/AUTH.md`.
 - Partner: phone OTP **plus** student ID photo **plus** a live face photograph
   captured with the device camera. No gallery or file upload — the point is to
   let an admin compare the face to the ID. Approval is manual in V1.
@@ -151,6 +153,8 @@ lib/
   payments/                 PaymentProvider + FakePaymentProvider
   sms/                      SmsProvider + FakeSmsProvider
   notifications/            domain events → copy → channels
+  auth/session.js           session + capabilities, derived from the database
+  auth/webhook-signature.js Standard Webhooks HMAC for the Send SMS Hook
   orders/state.js           the three state machines
   orders/transitions.js     the ONLY way the app changes order state
   util/money.js             integer pesewas

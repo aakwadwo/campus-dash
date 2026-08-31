@@ -14,8 +14,8 @@
     "db:reset": "supabase db reset",
     "db:diff": "supabase db diff",
     "db:status": "supabase status",
-    "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
-    "test:watch": "node --test --watch --test-concurrency=1 \"tests/**/*.test.js\""
+    "test": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local \"tests/**/*.test.js\"",
+    "test:watch": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local --watch \"tests/**/*.test.js\""
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
@@ -33,6 +33,7 @@
     "postcss": "^8.5.26",
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
+    "supabase": "^2.116.0",
     "tailwindcss": "^4.3.3"
   }
 }
