@@ -136,3 +136,31 @@ misconfiguration cannot silently start sending real Twilio messages.
 30 SMS per hour and 30 verification attempts per five minutes, unchanged from
 the CLI defaults. Nobody has decided whether those suit a campus at lunchtime,
 when a burst of students all order at once.
+
+## Surfaced during Phase 5
+
+### The vendor never sees the customer's phone number
+
+The vendor screens deliberately show no customer identity at all. RLS still
+permits a vendor to read the customer's row for a LIVE order (added in Phase 2,
+for "phone someone about a wrong order"), but nothing surfaces it.
+
+**Decide before launch:** should a vendor be able to call a customer about a
+missing item, or should every such conversation go through Campus Dash support?
+If the former, the vendor detail screen needs a reveal, and it should be
+audited. If the latter, that RLS policy should be dropped.
+
+### Partner handoff belongs to which module?
+
+`vendor_confirm_pickup()` is built and tested, but the screen is not. The vendor
+types in the code the Partner reads aloud. Phase 8 needs to decide whether that
+lands on the vendor board or in a dedicated handoff view.
+
+### Vendors cannot edit their own menu
+
+Phase 4 kept menu and price control entirely with the admin. That is safe, but
+it means a stall cannot mark themselves out of jollof without calling someone.
+
+**Decide:** should a vendor be able to toggle item availability (not price) for
+their own stall? Toggling availability is low-risk and would remove a lot of
+phone calls; changing prices is not, since it affects what customers are quoted.

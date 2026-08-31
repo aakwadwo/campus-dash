@@ -75,6 +75,9 @@ describe('schema invariants', () => {
       'log_order_event',
       'handle_new_auth_user',
       'handle_new_auth_user_for',
+      // Places an order AS a given customer. Server contexts only — a client
+      // grant here would let anyone order in someone else's name.
+      'submit_order_for',
     ];
     const callable = await asService(
       async (c) =>
@@ -213,6 +216,10 @@ describe('schema invariants', () => {
       'vendor_confirm_pickup',
       'vendor_mark_preparing',
       'vendor_mark_ready',
+      'vendor_order_board',
+      'vendor_order_bucket',
+      'vendor_order_detail',
+      'vendor_pending_count',
       'vendor_reject_order',
       'vendor_set_accepting_orders',
     ];
@@ -243,20 +250,30 @@ describe('schema invariants', () => {
   });
 
   test('new functions are deny-by-default, not PUBLIC-by-default', async () => {
+    // Scoped to the 'postgres' role, because that is who migrations run as and
+    // therefore whose default privileges govern the functions we create. The
+    // separate supabase_admin row is platform-owned: it applies only to objects
+    // supabase_admin itself creates, and is not ours to change.
     const defaults = await asService(async (c) =>
       (
         await c.query(`
-        select unnest(defaclacl)::text as grant_entry
+        select unnest(d.defaclacl)::text as grant_entry
           from pg_default_acl d
           join pg_namespace n on n.oid = d.defaclnamespace
-         where n.nspname = 'public' and d.defaclobjtype = 'f'
+          join pg_roles r on r.oid = d.defaclrole
+         where n.nspname = 'public' and d.defaclobjtype = 'f' and r.rolname = 'postgres'
       `)
       ).rows.map((r) => r.grant_entry)
     );
-    assert.ok(
-      !defaults.some((entry) => entry.startsWith('=X/')),
-      'ALTER DEFAULT PRIVILEGES must not leave EXECUTE granted to PUBLIC'
-    );
+    // Supabase ships its own default ACLs granting EXECUTE to anon and
+    // authenticated on functions in this schema, so revoking PUBLIC alone
+    // leaves new functions reachable. All three must be gone.
+    for (const grantee of ['', 'anon', 'authenticated']) {
+      assert.ok(
+        !defaults.some((entry) => entry.startsWith(`${grantee}=X/`)),
+        `default privileges must not grant EXECUTE to ${grantee || 'PUBLIC'}`
+      );
+    }
   });
 
   test('every admin function re-checks is_admin() in its own body', async () => {

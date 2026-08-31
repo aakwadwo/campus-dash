@@ -176,9 +176,29 @@ begin
   returning * into v_order;
 
   if not found then
+    -- Re-read. v_prev was captured BEFORE the update, so after losing a race it
+    -- describes the world as it was, not as it is — and "cannot be accepted
+    -- from state SUBMITTED" is nonsense to the colleague who was a second slow.
+    select order_status into v_prev from public.orders where id = p_order_id;
+
+    -- Nothing to attach a log entry to, and order_events has a foreign key to
+    -- orders — so bail out before logging rather than after.
+    if v_prev is null then
+      return row(false, 'that order no longer exists')::public.transition_result;
+    end if;
+
     perform public.log_order_event(p_order_id, 'VENDOR_ACCEPT', false, 'VENDOR',
       'order_status', v_prev::text, 'ACCEPTED', 'order was not SUBMITTED within its window');
-    return row(false, format('order cannot be accepted from state %s', v_prev))::public.transition_result;
+
+    if v_prev = 'SUBMITTED' then
+      -- Still SUBMITTED but the update matched nothing: the answer window has
+      -- closed and the sweep has not caught up yet.
+      return row(false, 'the 60-second answer window has closed')::public.transition_result;
+    elsif v_prev = 'ACCEPTED' then
+      return row(false, 'someone else already accepted this order')::public.transition_result;
+    else
+      return row(false, format('order cannot be accepted from state %s', v_prev))::public.transition_result;
+    end if;
   end if;
 
   perform public.log_order_event(p_order_id, 'VENDOR_ACCEPT', true, 'VENDOR',
@@ -211,6 +231,10 @@ begin
   returning * into v_order;
 
   if not found then
+    select order_status into v_prev from public.orders where id = p_order_id;
+    if v_prev is null then
+      return row(false, 'that order no longer exists')::public.transition_result;
+    end if;
     perform public.log_order_event(p_order_id, 'VENDOR_REJECT', false, 'VENDOR',
       'order_status', v_prev::text, 'REJECTED', 'order was not SUBMITTED');
     return row(false, format('order cannot be rejected from state %s', v_prev))::public.transition_result;
@@ -285,6 +309,10 @@ begin
   returning * into v_order;
 
   if not found then
+    select order_status into v_prev from public.orders where id = p_order_id;
+    if v_prev is null then
+      return row(false, 'that order no longer exists')::public.transition_result;
+    end if;
     perform public.log_order_event(p_order_id, 'VENDOR_PREPARING', false, 'VENDOR',
       'order_status', v_prev::text, 'PREPARING', 'order was not ACCEPTED and PAID');
     return row(false, format('order cannot start preparing from state %s (payment must be PAID)', v_prev))::public.transition_result;
@@ -333,6 +361,10 @@ begin
   returning * into v_order;
 
   if not found then
+    select order_status into v_prev from public.orders where id = p_order_id;
+    if v_prev is null then
+      return row(false, 'that order no longer exists')::public.transition_result;
+    end if;
     perform public.log_order_event(p_order_id, 'VENDOR_READY', false, 'VENDOR',
       'order_status', v_prev::text, 'READY', 'order was not PREPARING');
     return row(false, format('order cannot be marked ready from state %s', v_prev))::public.transition_result;

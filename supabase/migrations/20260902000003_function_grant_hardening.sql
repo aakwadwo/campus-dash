@@ -17,7 +17,13 @@ revoke execute on all functions in schema public from public, anon, authenticate
 
 -- 2. Stop it happening again. Functions created from here on are deny-by-default
 --    and must be granted deliberately, the same as every other capability.
-alter default privileges in schema public revoke execute on functions from public;
+--
+--    Revoking from PUBLIC alone is NOT enough: Supabase ships its own default
+--    ACLs that grant EXECUTE on functions in this schema to anon and
+--    authenticated explicitly, so a new function stays reachable even after the
+--    PUBLIC default is gone. All three have to be revoked.
+alter default privileges in schema public
+  revoke execute on functions from public, anon, authenticated;
 
 -- 3. Re-grant exactly what a client is meant to reach.
 
