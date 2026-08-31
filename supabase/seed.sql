@@ -194,7 +194,7 @@ insert into public.menu_items (id, vendor_id, name, description, price_pesewas, 
 -- Pricing — PLACEHOLDER figures pending a commercial decision
 -- ---------------------------------------------------------------------------
 -- GH₵2.00 service fee, GH₵5.00 flat delivery fee, Partner receives all of it.
--- See docs/OPEN-QUESTIONS.md — none of these are agreed numbers.
+-- See docs/PILOT-QUESTIONS.md — none of these are agreed numbers.
 update public.pricing_config
    set service_fee_pesewas = 200,
        delivery_fee_pesewas = 500,
@@ -208,7 +208,7 @@ update public.pricing_config
 -- These are NOT legal terms. They exist so the acceptance mechanism can be
 -- exercised end to end. Real text must come from a lawyer familiar with
 -- Ghanaian consumer and contractor law before anyone relies on it — see
--- docs/OPEN-QUESTIONS.md.
+-- docs/PILOT-QUESTIONS.md.
 insert into public.terms_documents (audience, version, title, body, published_at) values
   ('CUSTOMER', 1, 'Campus Dash customer terms (PLACEHOLDER)',
    E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'

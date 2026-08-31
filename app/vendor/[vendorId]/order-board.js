@@ -30,7 +30,7 @@ const GROUPS = [
   { key: 'CLOSED', title: 'Finished today', tone: 'border-black/10 bg-white', dot: 'bg-black/20' },
 ];
 
-export default function OrderBoard({ vendor, buckets, initialPending }) {
+export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000 }) {
   const router = useRouter();
   const [openState, toggleOpen, toggling] = useActionState(setAcceptingOrdersAction, {});
   const pending = buckets.NEW.length;
@@ -218,7 +218,7 @@ function Age({ seconds }) {
  * number goes UP the page refreshes and a short tone plays, because a phone on
  * a counter is not being watched.
  */
-function useNewOrderAlert({ vendorId, pending, initialPending, onChange }) {
+function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange }) {
   const previous = useRef(initialPending ?? pending);
 
   useEffect(() => {
@@ -245,12 +245,12 @@ function useNewOrderAlert({ vendorId, pending, initialPending, onChange }) {
       }
     }
 
-    const timer = setInterval(poll, 8000);
+    const timer = setInterval(poll, pollMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [vendorId, onChange]);
+  }, [vendorId, pollMs, onChange]);
 }
 
 /** Two short tones via Web Audio — no asset to load, no permission to ask for. */

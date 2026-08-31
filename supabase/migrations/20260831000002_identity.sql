@@ -14,7 +14,7 @@ create table public.users (
   is_suspended        boolean not null default false,
   -- Student status stays deliberately lightweight and nullable: the
   -- verification method is still being evaluated, and customers must never be
-  -- blocked on it. See docs/OPEN-QUESTIONS.md.
+  -- blocked on it. See docs/PILOT-QUESTIONS.md.
   student_id_number   text,
   student_verified_at timestamptz,
   created_at          timestamptz not null default now(),

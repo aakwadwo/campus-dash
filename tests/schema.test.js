@@ -84,6 +84,11 @@ describe('schema invariants', () => {
       'price_order',
       // Writes the provider's transaction id onto a payment.
       'attach_payment_transaction',
+      // Sweeps payments the provider never confirmed.
+      'expire_stale_payments',
+      // Asked before sending, to stop a retry buzzing somebody twice.
+      'mark_payment_failed_internal',
+      'notification_already_sent',
       // Writes the SMS delivery log. Server contexts only — a client that could
       // write here could forge a record of a message nobody sent.
       'record_notification',
@@ -186,6 +191,7 @@ describe('schema invariants', () => {
       'location_path',
       'location_zone',
       'my_vendor_ids',
+      'platform_config',
     ];
     const AUTHENTICATED = [
       ...ANON,
@@ -199,6 +205,7 @@ describe('schema invariants', () => {
       'admin_create_vendor',
       'admin_delete_location',
       'admin_delete_menu_item',
+      'admin_failed_notifications',
       'admin_list_actions',
       'admin_notification_log',
       'admin_order_board',
@@ -208,8 +215,11 @@ describe('schema invariants', () => {
       'admin_mark_refunded',
       'admin_partner_documents_due_for_purge',
       'admin_payments',
+      'admin_pilot_metrics',
+      'admin_provider_transaction_ids',
       'admin_pending_settlement',
       'admin_reassign_delivery',
+      'admin_reconcile_against_provider',
       'admin_reconciliation',
       'admin_remove_vendor_user',
       'admin_resolve_dispute',
@@ -220,10 +230,12 @@ describe('schema invariants', () => {
       'admin_set_location_active',
       'admin_set_menu_item_available',
       'admin_set_vendor_status',
+      'admin_update_config',
       'admin_update_location',
       'admin_update_menu_item',
       'admin_update_vendor',
       'admin_webhook_events',
+      'customer_abandon_stuck_payment',
       'customer_collect_instead',
       'customer_dispute_delivery',
       'customer_keep_waiting',

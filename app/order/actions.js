@@ -1,5 +1,9 @@
 'use server';
 
+const CONTEXT = 'customer action';
+
+import { actionFailure } from '@/lib/errors';
+
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { submitOrder } from '@/lib/orders/transitions';
@@ -15,8 +19,13 @@ import { NOTIFICATION_EVENT } from '@/lib/notifications';
  * destination. It sends no prices, no totals and no fees — and if it did they
  * would be ignored, because price_order() reads only ids and quantities.
  */
+/**
+ * Never lets a raw error reach a screen. toUserError() logs the detail
+ * server-side and returns a sentence a person can act on, classified so a lost
+ * race does not read like a catastrophe.
+ */
 function fail(error) {
-  return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  return actionFailure(error, CONTEXT);
 }
 
 /**

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getMyOrder } from '@/lib/customer';
+import { getPollIntervals } from '@/lib/platform-config';
 import { formatPesewas } from '@/lib/util/money';
 import { STAGE } from '../stage';
 import OrderStatus from './order-status';
@@ -15,7 +16,7 @@ export default async function CustomerOrderPage({ params }) {
   // Returns nothing unless the order belongs to the signed-in customer, so
   // another customer's id lands on a 404 rather than a message confirming it
   // exists.
-  const order = await getMyOrder(orderId);
+  const [order, intervals] = await Promise.all([getMyOrder(orderId), getPollIntervals()]);
   if (!order) notFound();
 
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
@@ -36,7 +37,7 @@ export default async function CustomerOrderPage({ params }) {
         <p className="text-muted mt-2 font-mono text-xs">{order.order_number}</p>
       </header>
 
-      <OrderStatus order={order} />
+      <OrderStatus order={order} pollMs={intervals.customerMs} />
 
       <section className="mt-4 rounded-lg bg-white p-4 ring-1 ring-black/5">
         <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Your order</h2>

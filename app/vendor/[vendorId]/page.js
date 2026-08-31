@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
-import { getOrderBoard, getMyVendors, groupBoard } from '@/lib/vendor';
-import { getPendingCount } from '@/lib/vendor';
+import { getOrderBoard, getMyVendors, groupBoard, getPendingCount } from '@/lib/vendor';
+import { getPollIntervals } from '@/lib/platform-config';
 import OrderBoard from './order-board';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +14,18 @@ export default async function VendorBoardPage({ params }) {
   const vendor = vendors.find((v) => v.id === vendorId);
   if (!vendor) notFound();
 
-  const [rows, pending] = await Promise.all([getOrderBoard(vendorId), getPendingCount(vendorId)]);
+  const [rows, pending, intervals] = await Promise.all([
+    getOrderBoard(vendorId),
+    getPendingCount(vendorId),
+    getPollIntervals(),
+  ]);
 
-  return <OrderBoard vendor={vendor} buckets={groupBoard(rows)} initialPending={pending} />;
+  return (
+    <OrderBoard
+      vendor={vendor}
+      buckets={groupBoard(rows)}
+      initialPending={pending}
+      pollMs={intervals.vendorMs}
+    />
+  );
 }

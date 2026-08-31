@@ -4,7 +4,7 @@
 -- Deliberately provider-agnostic. Whether the provider splits the money itself
 -- (Option A) or we collect centrally and transfer out later (Option B), the
 -- shape below is unchanged — only which rows get written, and when.
--- See docs/OPEN-QUESTIONS.md.
+-- See docs/PILOT-QUESTIONS.md.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------

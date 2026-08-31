@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
 import { getOffers, getActiveDelivery, getMyApplication } from '@/lib/partner';
+import { getPollIntervals } from '@/lib/platform-config';
 import { formatPesewas } from '@/lib/util/money';
 import OfferList from './offer-list';
 
@@ -14,7 +15,10 @@ export default async function PartnerOffersPage() {
   const [active, application] = await Promise.all([getActiveDelivery(), getMyApplication()]);
   if (active) redirect('/partner/delivery');
 
-  const offers = application?.is_available ? await getOffers() : [];
+  const [offers, intervals] = await Promise.all([
+    application?.is_available ? getOffers() : Promise.resolve([]),
+    getPollIntervals(),
+  ]);
 
   return (
     <main className="mx-auto max-w-md px-4 pt-5 pb-16">
@@ -28,7 +32,7 @@ export default async function PartnerOffersPage() {
           You are offline, so no offers are shown. Go online from the Partner home screen.
         </p>
       ) : (
-        <OfferList offers={offers ?? []} />
+        <OfferList offers={offers ?? []} pollMs={intervals.partnerMs} />
       )}
 
       <p className="text-muted mt-6 text-xs leading-relaxed">

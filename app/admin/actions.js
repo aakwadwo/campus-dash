@@ -1,5 +1,9 @@
 'use server';
 
+const CONTEXT = 'admin action';
+
+import { actionFailure } from '@/lib/errors';
+
 import { revalidatePath } from 'next/cache';
 import * as admin from '@/lib/admin';
 import { purgePartnerDocuments } from '@/lib/admin/documents';
@@ -20,8 +24,13 @@ function ok(message) {
   return { ok: true, message };
 }
 
+/**
+ * Never lets a raw error reach a screen. toUserError() logs the detail
+ * server-side and returns a sentence a person can act on, classified so a lost
+ * race does not read like a catastrophe.
+ */
 function fail(error) {
-  return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  return actionFailure(error, CONTEXT);
 }
 
 async function run(fn, successMessage, paths = ['/admin']) {
@@ -366,4 +375,26 @@ export async function retryPayoutsAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
+}
+
+// --- Pilot configuration -----------------------------------------------------
+
+/** Blank means "leave alone", so a partial edit cannot reset what it never saw. */
+export async function updateConfigAction(_prev, formData) {
+  return run(
+    () =>
+      admin.updateConfig({
+        reason: str(formData, 'reason'),
+        serviceFeePesewas: num(formData, 'service_fee_pesewas'),
+        deliveryFeePesewas: num(formData, 'delivery_fee_pesewas'),
+        vendorResponseSeconds: num(formData, 'vendor_response_seconds'),
+        partnerSearchSeconds: num(formData, 'partner_search_seconds'),
+        customerAbsentWaitSeconds: num(formData, 'customer_absent_wait_seconds'),
+        paymentPendingTimeoutSeconds: num(formData, 'payment_pending_timeout_seconds'),
+        minPayoutPesewas: num(formData, 'min_payout_pesewas'),
+        customerPollSeconds: num(formData, 'customer_poll_seconds'),
+      }),
+    'Settings saved. Fee changes apply to the next order.',
+    ['/admin/pilot']
+  );
 }

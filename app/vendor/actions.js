@@ -1,5 +1,9 @@
 'use server';
 
+const CONTEXT = 'vendor action';
+
+import { actionFailure } from '@/lib/errors';
+
 import { revalidatePath } from 'next/cache';
 import {
   vendorAcceptOrder,
@@ -28,8 +32,13 @@ function outcome(result, successMessage) {
     : { ok: false, message: result.reason ?? 'That is no longer possible.' };
 }
 
+/**
+ * Never lets a raw error reach a screen. toUserError() logs the detail
+ * server-side and returns a sentence a person can act on, classified so a lost
+ * race does not read like a catastrophe.
+ */
 function fail(error) {
-  return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  return actionFailure(error, CONTEXT);
 }
 
 async function run(fn, successMessage, vendorId) {

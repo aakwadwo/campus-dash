@@ -27,6 +27,9 @@ describe('scheduled jobs', () => {
     assert.deepEqual(jobs, [
       { jobname: 'campus-dash-expire-partner-search', schedule: '* * * * *', active: true },
       { jobname: 'campus-dash-expire-stale-orders', schedule: '30 seconds', active: true },
+      // A payment the provider never confirms would otherwise strand the order
+      // for ever: one live intent per order means the customer cannot retry.
+      { jobname: 'campus-dash-expire-stale-payments', schedule: '*/15 * * * *', active: true },
     ]);
   });
 
@@ -141,7 +144,7 @@ describe('scheduled jobs', () => {
       ACTORS.admin,
       async (c) => (await c.query('select * from public.admin_scheduled_job_status()')).rows
     );
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 3);
     assert.ok(rows.every((r) => r.active));
 
     const asCustomer = await asUser(

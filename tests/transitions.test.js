@@ -203,7 +203,7 @@ describe('state transitions', () => {
   // "cancel" — is deliberately NOT implemented. Converting a paid delivery
   // order to pickup means refunding part of a captured payment, and the refund
   // mechanics depend on the unresolved Hubtel/Paystack question. See
-  // docs/OPEN-QUESTIONS.md. The schema supports every option; the business rule
+  // docs/PILOT-QUESTIONS.md. The schema supports every option; the business rule
   // is not ours to invent.
 
   // --- 9 -------------------------------------------------------------------

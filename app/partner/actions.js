@@ -1,5 +1,9 @@
 'use server';
 
+const CONTEXT = 'partner action';
+
+import { actionFailure } from '@/lib/errors';
+
 import { revalidatePath } from 'next/cache';
 import * as partner from '@/lib/partner';
 
@@ -10,8 +14,13 @@ import * as partner from '@/lib/partner';
  * the database checks approval, availability, and whether this delivery is
  * theirs.
  */
+/**
+ * Never lets a raw error reach a screen. toUserError() logs the detail
+ * server-side and returns a sentence a person can act on, classified so a lost
+ * race does not read like a catastrophe.
+ */
 function fail(error) {
-  return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  return actionFailure(error, CONTEXT);
 }
 
 function outcome(result, successMessage) {

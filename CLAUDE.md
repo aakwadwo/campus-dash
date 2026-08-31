@@ -7,8 +7,11 @@ verified student **Partner** bring it to a predefined campus destination.
 Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is where
 most of the safety lives. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
 `docs/VENDOR.md` the vendor module, `docs/CUSTOMER.md` customer ordering,
-`docs/PARTNER.md` the Partner system, and `docs/MONEY.md` allocation and settlement. `docs/STATE-MACHINE.md` covers order state.
-`docs/OPEN-QUESTIONS.md` lists what is genuinely still undecided — do not code
+`docs/PARTNER.md` the Partner system, `docs/MONEY.md` allocation and settlement,
+`docs/SECURITY.md` the security model, `docs/NOTIFICATIONS.md` messaging,
+`docs/OPERATIONS.md` running the pilot, `docs/SETUP.md` local setup and
+`docs/TESTING.md` the suite. `docs/STATE-MACHINE.md` covers order state.
+`docs/PILOT-QUESTIONS.md` lists what is genuinely still undecided — do not code
 around those as if they were settled.
 
 ## Vocabulary
@@ -69,8 +72,9 @@ Tests run against the local database and share it, so they run serially. They
 connect as `authenticator` — the role PostgREST itself uses — so RLS and grants
 are exercised exactly as a real browser request would hit them.
 
-Environment: copy `.env.example` to `.env.local`, and put `SEND_SMS_HOOK_SECRET`
-in `.env` — the Supabase CLI reads only that file, while Next.js reads both. `SMS_PROVIDER=fake` prints
+Environment: see `docs/SETUP.md`. Fees and timeouts are NOT env vars — they live
+in `pricing_config`, editable at `/admin/pilot`, so the pilot can retune without
+a deploy. `SMS_PROVIDER=fake` prints
 SMS and phone OTPs to the server console; `PAYMENT_PROVIDER=fake` simulates a
 ~2s asynchronous collection.
 
@@ -80,6 +84,11 @@ SMS and phone OTPs to the server console; `PAYMENT_PROVIDER=fake` simulates a
 - `@/` path alias maps to the project root.
 - `process.env` is read only in `lib/config.js`.
 - Schema changes go in `supabase/migrations/` — never applied by hand.
+- Adding a table or function will fail the schema allowlist test until you
+  decide who may reach it. That is the point: Supabase's default grants expose
+  new objects to `anon`, and this has bitten three times.
+- Operational numbers live in `pricing_config`, not in code. If you find
+  yourself typing a timeout, put it there instead.
 - The Supabase CLI is pinned as a dev dependency; `npm run db:*` uses it. Do not
   rely on a globally installed one.
 - Auth roles come from `my_capabilities()`, derived from the database on every

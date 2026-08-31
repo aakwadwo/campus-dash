@@ -17,7 +17,7 @@ import { formatPesewas } from '@/lib/util/money';
  * The customer can start a payment. They cannot mark one paid — that only ever
  * happens when a verified provider event reaches the server.
  */
-export default function OrderStatus({ order }) {
+export default function OrderStatus({ order, pollMs = 6000 }) {
   const router = useRouter();
   const [payState, pay, paying] = useActionState(payOrderAction, {});
 

@@ -12,15 +12,15 @@ import { formatPesewas } from '@/lib/util/money';
  * hiding them would make the decision a gamble. What is not shown is who the
  * customer is or which room, because that is not needed to judge the job.
  */
-export default function OfferList({ offers }) {
+export default function OfferList({ offers, pollMs = 10000 }) {
   const router = useRouter();
   const [state, accept, accepting] = useActionState(acceptDeliveryAction, {});
 
   // Offers go stale fast: somebody else is looking at this list too.
   useEffect(() => {
-    const timer = setInterval(() => router.refresh(), 10000);
+    const timer = setInterval(() => router.refresh(), pollMs);
     return () => clearInterval(timer);
-  }, [router]);
+  }, [router, pollMs]);
 
   if (offers.length === 0) {
     return (

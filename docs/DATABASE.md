@@ -110,7 +110,7 @@ Nothing in the schema assumes how money physically moves. Whether the provider
 splits at source (Option A) or we collect centrally and transfer later
 (Option B), the same `payments`, `allocations`, `settlement_runs` and `payouts`
 rows are written. Only which adapter fills in `provider_transaction_id` and
-`provider_transfer_id` changes. See `docs/OPEN-QUESTIONS.md`.
+`provider_transfer_id` changes. See `docs/PILOT-QUESTIONS.md`.
 
 ## Codes and the handoff
 
