@@ -1,4 +1,6 @@
+import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
+import { outstandingTerms } from '@/lib/terms';
 import { signOut } from '@/app/(auth)/login/actions';
 import { setPartnerAvailability } from './actions';
 
@@ -12,6 +14,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function AccountPage() {
   const me = await requireUser();
+  const outstanding = await outstandingTerms();
 
   return (
     <main className="mx-auto max-w-lg px-6 py-12">
@@ -20,6 +23,16 @@ export default async function AccountPage() {
         {me.full_name ?? 'Your account'}
       </h1>
       <p className="text-muted mt-1 text-sm tabular-nums">{me.phone}</p>
+
+      {outstanding?.length ? (
+        <Link
+          href="/terms"
+          className="mt-6 block rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <span className="font-semibold">Updated terms need your agreement.</span> Tap to read and
+          accept.
+        </Link>
+      ) : null}
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold tracking-wide uppercase">Modes</h2>

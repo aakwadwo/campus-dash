@@ -254,7 +254,21 @@ describe('customer ordering', () => {
     await vendorPrepare(order.order_id);
     assert.equal(await stageNow(), 'PREPARING');
     await vendorReady(order.order_id);
-    assert.equal(await stageNow(), 'READY');
+    // A DELIVERY order at READY is not "ready" to the customer — it is waiting
+    // for someone to carry it.
+    assert.equal(await stageNow(), 'SEARCHING_PARTNER');
+  });
+
+  test('a pickup order reads READY, because there is nobody to wait for', async () => {
+    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
+    await vendorAccept(order.order_id);
+    await payOrder(order.order_id);
+    await vendorPrepare(order.order_id);
+    await vendorReady(order.order_id);
+
+    const view = await myOrder(ACTORS.customerAma, order.order_id);
+    assert.equal(view.stage, 'READY');
+    assert.equal(view.delivery_status, 'NONE');
   });
 
   test('a rejected order says so, and shows the reason, with no charge', async () => {

@@ -30,9 +30,11 @@ describe('admin — Partner approval and suspension', () => {
   // --- the review queue -----------------------------------------------------
   test('the review queue puts applications waiting on a human first', async () => {
     const rows = await adminRows('select * from public.admin_list_partner_applications()');
-    assert.equal(rows.length, 3, 'two approved, one pending');
-    assert.equal(rows[0].status, 'PENDING_REVIEW', 'the one needing a decision leads');
-    assert.equal(rows[0].phone, '+233200000033');
+    assert.equal(rows.length, 5, 'three approved, two pending');
+    // Applications waiting on a human lead, oldest first.
+    assert.equal(rows[0].status, 'PENDING_REVIEW');
+    assert.equal(rows[1].status, 'PENDING_REVIEW');
+    assert.ok(rows.slice(2).every((r) => r.status !== 'PENDING_REVIEW'));
   });
 
   test('the queue exposes document PATHS, never URLs', async () => {
@@ -49,7 +51,7 @@ describe('admin — Partner approval and suspension', () => {
     const approved = await adminRows(
       "select * from public.admin_list_partner_applications('APPROVED')"
     );
-    assert.equal(approved.length, 2);
+    assert.equal(approved.length, 3);
     assert.ok(approved.every((a) => a.status === 'APPROVED'));
   });
 

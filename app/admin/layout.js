@@ -6,6 +6,9 @@ export const metadata = { title: 'Admin · Campus Dash' };
 
 const NAV = [
   { href: '/admin', label: 'Overview' },
+  { href: '/admin/orders', label: 'Orders' },
+  { href: '/admin/money', label: 'Money' },
+  { href: '/admin/settlements', label: 'Settlements' },
   { href: '/admin/vendors', label: 'Vendors' },
   { href: '/admin/locations', label: 'Locations' },
   { href: '/admin/partners', label: 'Partners' },

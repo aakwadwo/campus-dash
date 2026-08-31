@@ -36,7 +36,39 @@ export const STAGE = {
     tone: 'text-brand-700',
     detail: 'Your food is being made.',
   },
-  READY: { label: 'Ready', tone: 'text-blue-700', detail: null },
+  READY: {
+    label: 'Ready to collect',
+    tone: 'text-blue-700',
+    detail: 'Go to the vendor and pick it up.',
+  },
+
+  // Delivery, described as STEPS. There is no GPS, so the customer is never
+  // told where the Partner is — only what has happened so far.
+  SEARCHING_PARTNER: {
+    label: 'Finding a Partner',
+    tone: 'text-blue-700',
+    detail: 'Your food is cooked and waiting. We are looking for someone to bring it.',
+  },
+  PARTNER_ASSIGNED: {
+    label: 'Partner on the way to the vendor',
+    tone: 'text-blue-700',
+    detail: 'They are collecting your order now.',
+  },
+  ON_THE_WAY: {
+    label: 'On the way to you',
+    tone: 'text-blue-700',
+    detail: 'Have your delivery code ready — the Partner will ask for it.',
+  },
+  NO_PARTNER: {
+    label: 'No Partner available',
+    tone: 'text-amber-800',
+    detail: 'Nobody has taken this yet. Your food is made and paid for — choose what to do below.',
+  },
+  CUSTOMER_ABSENT: {
+    label: 'Could not reach you',
+    tone: 'text-red-700',
+    detail: 'The Partner waited and could not reach you. Campus Dash support will be in touch.',
+  },
   COMPLETED: { label: 'Completed', tone: 'text-muted', detail: 'Thanks for using Campus Dash.' },
   REJECTED: {
     label: 'Vendor could not take it',

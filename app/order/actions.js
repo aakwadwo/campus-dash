@@ -99,3 +99,60 @@ export async function refreshOrderAction(orderId) {
   }
   revalidatePath(`/orders/${orderId}`);
 }
+
+// --- When nobody takes the delivery ------------------------------------------
+
+/**
+ * The food exists and is paid for, so the customer decides — the order is never
+ * cancelled out from under them, and the vendor does nothing either way.
+ */
+export async function keepWaitingAction(_prev, formData) {
+  return customerChoice(formData, 'customer_keep_waiting', 'Looking again for a Partner.');
+}
+
+export async function collectInsteadAction(_prev, formData) {
+  return customerChoice(
+    formData,
+    'customer_collect_instead',
+    'Go to the vendor and collect your order.'
+  );
+}
+
+export async function disputeAction(_prev, formData) {
+  const orderId = String(formData.get('order_id') ?? '');
+  const reason = String(formData.get('reason') ?? '').trim();
+  try {
+    const { createClient } = await import('@/lib/supabase/server');
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('customer_dispute_delivery', {
+      p_order_id: orderId,
+      p_reason: reason,
+    });
+    if (error) throw new Error(error.message);
+    const envelope = Array.isArray(data) ? data[0] : data;
+    revalidatePath(`/orders/${orderId}`);
+    return envelope?.success
+      ? { ok: true, message: 'Reported. Campus Dash support will look into it.' }
+      : { ok: false, message: envelope?.reason ?? 'Could not report that.' };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+async function customerChoice(formData, fn, successMessage) {
+  const orderId = String(formData.get('order_id') ?? '');
+  try {
+    const { createClient } = await import('@/lib/supabase/server');
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc(fn, { p_order_id: orderId });
+    if (error) throw new Error(error.message);
+
+    const envelope = Array.isArray(data) ? data[0] : data;
+    revalidatePath(`/orders/${orderId}`);
+    return envelope?.success
+      ? { ok: true, message: successMessage }
+      : { ok: false, message: envelope?.reason ?? 'That is no longer possible.' };
+  } catch (error) {
+    return fail(error);
+  }
+}

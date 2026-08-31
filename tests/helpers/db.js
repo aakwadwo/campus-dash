@@ -119,7 +119,8 @@ export async function resetTransactionalState() {
         public.order_events, public.order_secrets, public.order_items,
         public.allocations, public.payouts, public.settlement_runs,
         public.payments, public.orders,
-        public.webhook_events, public.idempotency_keys
+        public.webhook_events, public.idempotency_keys,
+        public.notification_events
       restart identity cascade
     `);
     // admin_actions is append-only: its trigger blocks DELETE, but TRUNCATE is
@@ -130,17 +131,59 @@ export async function resetTransactionalState() {
     await c.query(`
       update public.partner_profiles
          set status = 'APPROVED', is_available = true,
-             reviewed_at = now(), reviewed_by = '00000000-0000-4000-8000-000000000001'
+             reviewed_at = now(), reviewed_by = '00000000-0000-4000-8000-000000000001',
+             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg',
+             face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg',
+             review_notes = null, documents_purge_after = null
        where user_id in (
          '00000000-0000-4000-8000-000000000031',
-         '00000000-0000-4000-8000-000000000032'
+         '00000000-0000-4000-8000-000000000032',
+         '00000000-0000-4000-8000-000000000034'
        )
     `);
     await c.query(`
       update public.partner_profiles
          set status = 'PENDING_REVIEW', is_available = false,
-             reviewed_at = null, reviewed_by = null, documents_purge_after = null
-       where user_id = '00000000-0000-4000-8000-000000000033'
+             reviewed_at = null, reviewed_by = null, documents_purge_after = null,
+             review_notes = null,
+             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg',
+             face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg'
+       where user_id in (
+         '00000000-0000-4000-8000-000000000033',
+         '00000000-0000-4000-8000-000000000035'
+       )
+    `);
+    // Applications created by tests, and any profile for a non-seeded user.
+    await c.query(`
+      delete from public.partner_profiles
+       where user_id not in (
+         '00000000-0000-4000-8000-000000000031',
+         '00000000-0000-4000-8000-000000000032',
+         '00000000-0000-4000-8000-000000000033',
+         '00000000-0000-4000-8000-000000000034',
+         '00000000-0000-4000-8000-000000000035'
+       )
+    `);
+    // Student ID numbers are unique across approved Partners; tests set them.
+    await c.query(`
+      update public.users u set student_id_number = v.sid
+        from (values
+          ('00000000-0000-4000-8000-000000000031','TEST-STU-0031'),
+          ('00000000-0000-4000-8000-000000000032','TEST-STU-0032'),
+          ('00000000-0000-4000-8000-000000000033','TEST-STU-0033'),
+          ('00000000-0000-4000-8000-000000000034','TEST-STU-0034'),
+          ('00000000-0000-4000-8000-000000000035','TEST-STU-0035')
+        ) as v(id, sid)
+       where u.id = v.id::uuid
+    `);
+    await c.query(`
+      update public.users set student_id_number = null
+       where id in (
+         '00000000-0000-4000-8000-000000000021',
+         '00000000-0000-4000-8000-000000000022',
+         '00000000-0000-4000-8000-000000000023',
+         '00000000-0000-4000-8000-000000000024'
+       )
     `);
     await c.query(`
       update public.pricing_config
@@ -259,7 +302,10 @@ export async function resetTransactionalState() {
           ('00000000-0000-4000-8000-000000000023','Efua Test-Customer'),
           ('00000000-0000-4000-8000-000000000031','Yaw Test-Partner'),
           ('00000000-0000-4000-8000-000000000032','Adjoa Test-Partner'),
-          ('00000000-0000-4000-8000-000000000033','Kofi Test-Applicant')
+          ('00000000-0000-4000-8000-000000000033','Kofi Test-Applicant'),
+          ('00000000-0000-4000-8000-000000000034','Esi Test-Partner'),
+          ('00000000-0000-4000-8000-000000000035','Kojo Test-Applicant'),
+          ('00000000-0000-4000-8000-000000000024','Abena Test-Customer')
         ) as v(id, name)
        where u.id = v.id::uuid
     `);
@@ -279,6 +325,9 @@ export const ACTORS = {
   partnerYaw: '00000000-0000-4000-8000-000000000031',
   partnerAdjoa: '00000000-0000-4000-8000-000000000032',
   applicantKofi: '00000000-0000-4000-8000-000000000033',
+  partnerEsi: '00000000-0000-4000-8000-000000000034',
+  applicantKojo: '00000000-0000-4000-8000-000000000035',
+  customerAbena: '00000000-0000-4000-8000-000000000024',
 };
 
 export const VENDORS = {

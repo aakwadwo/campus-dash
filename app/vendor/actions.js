@@ -6,6 +6,7 @@ import {
   vendorRejectOrder,
   vendorMarkPreparing,
   vendorMarkReady,
+  vendorConfirmPickup,
   vendorCompletePickupOrder,
   vendorSetAcceptingOrders,
 } from '@/lib/orders/transitions';
@@ -76,6 +77,20 @@ export async function markReadyAction(_prev, formData) {
   return run(
     () => vendorMarkReady(str(formData, 'order_id')),
     'Marked ready.',
+    str(formData, 'vendor_id')
+  );
+}
+
+/**
+ * The Partner reads their code aloud; the vendor types in what they hear.
+ *
+ * The vendor cannot READ the stored code — order_secrets has no policy and no
+ * grant for anyone — so they cannot confirm a handoff that never happened.
+ */
+export async function confirmPartnerPickupAction(_prev, formData) {
+  return run(
+    () => vendorConfirmPickup(str(formData, 'order_id'), str(formData, 'pickup_code')),
+    'Handed over. The Partner now has the delivery address.',
     str(formData, 'vendor_id')
   );
 }

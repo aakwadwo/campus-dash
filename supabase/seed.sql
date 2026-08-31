@@ -73,6 +73,15 @@ values
    now(), now(), '', '', '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000033', 'authenticated', 'authenticated',
    '233200000033', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kofi Test-Applicant"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000034', 'authenticated', 'authenticated',
+   '233200000034', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Esi Test-Partner"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000035', 'authenticated', 'authenticated',
+   '233200000035', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Kojo Test-Applicant"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000024', 'authenticated', 'authenticated',
+   '233200000024', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Abena Test-Customer"}',
    now(), now(), '', '', '', '', '', '', '', '');
 
 -- ---------------------------------------------------------------------------
@@ -90,7 +99,10 @@ insert into public.users (id, phone, full_name, is_admin, student_id_number) val
   ('00000000-0000-4000-8000-000000000023', '+233200000023', 'Efua Test-Customer',   false, null),
   ('00000000-0000-4000-8000-000000000031', '+233200000031', 'Yaw Test-Partner',     false, 'TEST-STU-0031'),
   ('00000000-0000-4000-8000-000000000032', '+233200000032', 'Adjoa Test-Partner',   false, 'TEST-STU-0032'),
-  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false, 'TEST-STU-0033')
+  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false, 'TEST-STU-0033'),
+  ('00000000-0000-4000-8000-000000000034', '+233200000034', 'Esi Test-Partner',     false, 'TEST-STU-0034'),
+  ('00000000-0000-4000-8000-000000000035', '+233200000035', 'Kojo Test-Applicant',  false, 'TEST-STU-0035'),
+  ('00000000-0000-4000-8000-000000000024', '+233200000024', 'Abena Test-Customer',  false, null)
 on conflict (id) do update
    set full_name         = excluded.full_name,
        is_admin          = excluded.is_admin,
@@ -113,6 +125,12 @@ insert into public.partner_profiles (
    now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000033', 'PENDING_REVIEW', false,
    'partner-docs/dev/0033/student-id.jpg', 'partner-docs/dev/0033/face.jpg',
+   null, null),
+  ('00000000-0000-4000-8000-000000000034', 'APPROVED', true,
+   'partner-docs/dev/0034/student-id.jpg', 'partner-docs/dev/0034/face.jpg',
+   now(), '00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000035', 'PENDING_REVIEW', false,
+   'partner-docs/dev/0035/student-id.jpg', 'partner-docs/dev/0035/face.jpg',
    null, null);
 
 -- ---------------------------------------------------------------------------
@@ -182,3 +200,64 @@ update public.pricing_config
        delivery_fee_pesewas = 500,
        partner_share_of_delivery_bps = 10000
  where id;
+
+
+-- ---------------------------------------------------------------------------
+-- Terms documents — PLACEHOLDER TEXT
+-- ---------------------------------------------------------------------------
+-- These are NOT legal terms. They exist so the acceptance mechanism can be
+-- exercised end to end. Real text must come from a lawyer familiar with
+-- Ghanaian consumer and contractor law before anyone relies on it — see
+-- docs/OPEN-QUESTIONS.md.
+insert into public.terms_documents (audience, version, title, body, published_at) values
+  ('CUSTOMER', 1, 'Campus Dash customer terms (PLACEHOLDER)',
+   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
+   'You order from independent vendors around Academic City. Campus Dash takes '
+   'payment, passes the food amount to the vendor, and arranges delivery by a '
+   'verified student Partner when you ask for one.\n\n'
+   'You are not charged until a vendor accepts your order. Prices are set by '
+   'vendors. Campus Dash charges a service fee, and a delivery fee when a '
+   'Partner brings your order.\n\n'
+   'You will be given a delivery code. Give it only to the Partner who brings '
+   'your order.', now()),
+
+  ('VENDOR', 1, 'Campus Dash vendor terms (PLACEHOLDER)',
+   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
+   'You accept or reject orders within the response window shown in the app. '
+   'Prices are yours; Campus Dash does not change them. You mark food READY '
+   'only when it is actually ready.\n\n'
+   'Campus Dash settles the food amount to you daily. Campus Dash does not hold '
+   'your money as a balance.\n\n'
+   'You verify a Partner''s pickup code before handing over any order.', now()),
+
+  ('PARTNER', 1, 'Campus Dash Partner terms (PLACEHOLDER)',
+   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
+   'You are an independent student Partner, not an employee of Campus Dash.\n\n'
+   'You carry one delivery at a time. You collect orders using the pickup code '
+   'shown in your app and complete them using the code the customer gives you.\n\n'
+   'Customer contact details are shown only while you are carrying their order, '
+   'and must not be recorded, shared or used for anything else.\n\n'
+   'Campus Dash pays Partner earnings weekly.', now());
+
+-- Seeded actors have already accepted the current terms, so development does not
+-- start behind a wall. New sign-ups get the real prompt.
+insert into public.terms_acceptances (user_id, terms_id, audience, version)
+select u.id, t.id, t.audience, t.version
+  from public.users u
+  cross join public.terms_documents t
+ where t.audience = 'CUSTOMER'
+on conflict do nothing;
+
+insert into public.terms_acceptances (user_id, terms_id, audience, version)
+select vu.user_id, t.id, t.audience, t.version
+  from public.vendor_users vu
+  cross join public.terms_documents t
+ where t.audience = 'VENDOR'
+on conflict do nothing;
+
+insert into public.terms_acceptances (user_id, terms_id, audience, version)
+select p.user_id, t.id, t.audience, t.version
+  from public.partner_profiles p
+  cross join public.terms_documents t
+ where t.audience = 'PARTNER' and p.status = 'APPROVED'
+on conflict do nothing;

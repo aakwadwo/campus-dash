@@ -84,6 +84,9 @@ describe('schema invariants', () => {
       'price_order',
       // Writes the provider's transaction id onto a payment.
       'attach_payment_transaction',
+      // Writes the SMS delivery log. Server contexts only — a client that could
+      // write here could forge a record of a message nobody sent.
+      'record_notification',
     ];
     const callable = await asService(
       async (c) =>
@@ -175,6 +178,7 @@ describe('schema invariants', () => {
     // This asserts the WHOLE surface, so adding a function without deciding who
     // may call it fails here rather than shipping quietly.
     const ANON = [
+      'current_terms',
       'current_user_id',
       'deliverable_locations',
       'is_admin',
@@ -185,6 +189,7 @@ describe('schema invariants', () => {
     ];
     const AUTHENTICATED = [
       ...ANON,
+      'accept_terms',
       'admin_add_vendor_user',
       'admin_cancel_order',
       'admin_clear_partner_documents',
@@ -195,19 +200,33 @@ describe('schema invariants', () => {
       'admin_delete_location',
       'admin_delete_menu_item',
       'admin_list_actions',
+      'admin_notification_log',
+      'admin_order_board',
+      'admin_order_board_summary',
+      'admin_order_money',
       'admin_list_partner_applications',
       'admin_mark_refunded',
       'admin_partner_documents_due_for_purge',
+      'admin_payments',
+      'admin_pending_settlement',
       'admin_reassign_delivery',
+      'admin_reconciliation',
       'admin_remove_vendor_user',
+      'admin_resolve_dispute',
       'admin_review_partner',
       'admin_scheduled_job_status',
+      'admin_settlement_payouts',
+      'admin_settlement_runs',
       'admin_set_location_active',
       'admin_set_menu_item_available',
       'admin_set_vendor_status',
       'admin_update_location',
       'admin_update_menu_item',
       'admin_update_vendor',
+      'admin_webhook_events',
+      'customer_collect_instead',
+      'customer_dispute_delivery',
+      'customer_keep_waiting',
       'customer_order_detail',
       'customer_order_list',
       'customer_order_stage',
@@ -215,9 +234,17 @@ describe('schema invariants', () => {
       'get_my_delivery_code',
       'get_my_pickup_code',
       'my_capabilities',
+      'my_outstanding_terms',
+      'my_partner_application',
       'partner_accept_delivery',
+      'partner_active_delivery',
+      'partner_apply',
       'partner_cancel_delivery',
       'partner_complete_delivery',
+      'partner_confirm_customer_absent',
+      'partner_delivery_history',
+      'partner_earnings_summary',
+      'partner_report_customer_absent',
       'partner_set_availability',
       'quote_order',
       'submit_order',
@@ -225,6 +252,7 @@ describe('schema invariants', () => {
       'vendor_accept_order',
       'vendor_complete_pickup_order',
       'vendor_confirm_pickup',
+      'vendor_earnings_summary',
       'vendor_mark_preparing',
       'vendor_mark_ready',
       'vendor_order_board',
@@ -257,6 +285,30 @@ describe('schema invariants', () => {
         actual,
         [...allowed].sort(),
         `${role} can call functions that are not on the allowlist (or vice versa)`
+      );
+    }
+  });
+
+  test('new TABLES are deny-by-default too', async () => {
+    // The same hole as functions, and it bit for real: Supabase ships default
+    // ACLs granting anon and authenticated full DML on tables in this schema,
+    // so every table added after Phase 2's revoke came back writable — an
+    // anonymous visitor briefly held TRUNCATE on the notification audit log.
+    const defaults = await asService(async (c) =>
+      (
+        await c.query(`
+        select unnest(d.defaclacl)::text as grant_entry
+          from pg_default_acl d
+          join pg_namespace n on n.oid = d.defaclnamespace
+          join pg_roles r on r.oid = d.defaclrole
+         where n.nspname = 'public' and d.defaclobjtype = 'r' and r.rolname = 'postgres'
+      `)
+      ).rows.map((r) => r.grant_entry)
+    );
+    for (const grantee of ['', 'anon', 'authenticated']) {
+      assert.ok(
+        !defaults.some((entry) => entry.startsWith(`${grantee}=`)),
+        `default table privileges must grant nothing to ${grantee || 'PUBLIC'}`
       );
     }
   });

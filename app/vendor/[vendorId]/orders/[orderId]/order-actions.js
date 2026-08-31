@@ -7,6 +7,7 @@ import {
   markPreparingAction,
   markReadyAction,
   completePickupAction,
+  confirmPartnerPickupAction,
 } from '@/app/vendor/actions';
 
 /**
@@ -23,6 +24,7 @@ export default function OrderActions({ order, vendorId }) {
   const [prepare, prepareAction, preparing] = useActionState(markPreparingAction, {});
   const [ready, readyAction, marking] = useActionState(markReadyAction, {});
   const [pickup, pickupAction, completing] = useActionState(completePickupAction, {});
+  const [handoff, handoffAction, handingOver] = useActionState(confirmPartnerPickupAction, {});
   const [showReject, setShowReject] = useState(false);
 
   const hidden = (
@@ -32,7 +34,7 @@ export default function OrderActions({ order, vendorId }) {
     </>
   );
 
-  const result = [accept, reject, prepare, ready, pickup].find((state) => state.message);
+  const result = [accept, reject, prepare, ready, pickup, handoff].find((state) => state.message);
 
   return (
     <div className="space-y-3">
@@ -126,11 +128,36 @@ export default function OrderActions({ order, vendorId }) {
       ) : null}
 
       {order.order_status === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
-        <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
-          {order.partner_assigned
-            ? 'A Partner is on the way to collect this. They will read you a 4-digit pickup code — check it before handing the food over.'
-            : 'Looking for a Partner. Nothing for you to do.'}
-        </p>
+        order.delivery_status === 'ASSIGNED' ? (
+          <form action={handoffAction} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+            {hidden}
+            <p className="text-sm font-medium">A Partner is here to collect this order.</p>
+            <p className="text-muted mt-1 text-xs">
+              Ask them for their 4-digit pickup code and type it in. Do not hand over the food until
+              the code is accepted.
+            </p>
+            <input
+              name="pickup_code"
+              inputMode="numeric"
+              required
+              pattern="\d{4}"
+              maxLength={4}
+              placeholder="1234"
+              className="mt-3 w-full rounded border border-black/15 px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
+            />
+            <BigButton disabled={handingOver} tone="ready">
+              {handingOver ? 'Checking…' : 'Confirm pickup'}
+            </BigButton>
+          </form>
+        ) : order.delivery_status === 'PICKED_UP' ? (
+          <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
+            Handed to the Partner. Nothing more for you to do on this order.
+          </p>
+        ) : (
+          <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
+            Looking for a Partner. Nothing for you to do — the order stays exactly as it is.
+          </p>
+        )
       ) : null}
 
       {result ? (

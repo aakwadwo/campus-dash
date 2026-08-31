@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import * as admin from '@/lib/admin';
 import { purgePartnerDocuments } from '@/lib/admin/documents';
+import { runSettlement, retryFailedPayouts, periodFor } from '@/lib/settlement';
 import { pesewasFromCedisInput } from '@/lib/util/money';
 
 /**
@@ -274,4 +275,95 @@ export async function purgePartnerDocumentsAction(_prev, formData) {
     'Verification documents deleted.',
     ['/admin/partners']
   );
+}
+
+// --- Order overrides ---------------------------------------------------------
+
+export async function cancelOrderAction(_prev, formData) {
+  return run(
+    () =>
+      admin.cancelOrder({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
+    'Order cancelled. Any money taken is marked for refund.',
+    ['/admin/orders']
+  );
+}
+
+export async function completeOrderAction(_prev, formData) {
+  return run(
+    () =>
+      admin.completeOrder({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
+    'Order force-completed.',
+    ['/admin/orders']
+  );
+}
+
+export async function reassignDeliveryAction(_prev, formData) {
+  return run(
+    () =>
+      admin.reassignDelivery({
+        orderId: str(formData, 'order_id'),
+        reason: str(formData, 'reason'),
+      }),
+    'Partner removed. The order is back in the pool with a fresh pickup code.',
+    ['/admin/orders']
+  );
+}
+
+export async function markRefundedAction(_prev, formData) {
+  return run(
+    () =>
+      admin.markRefunded({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
+    'Marked as refunded.',
+    ['/admin/orders']
+  );
+}
+
+export async function resolveDisputeAction(_prev, formData) {
+  return run(
+    () =>
+      admin.resolveDispute({
+        orderId: str(formData, 'order_id'),
+        reason: str(formData, 'reason'),
+        notes: str(formData, 'notes'),
+      }),
+    'Dispute closed.',
+    ['/admin/orders']
+  );
+}
+
+// --- Settlement --------------------------------------------------------------
+
+/**
+ * Runs a settlement batch. Safe to press twice: the run for a period is
+ * returned rather than recreated, its allocations are already claimed, and its
+ * payouts are already PAID.
+ */
+export async function runSettlementAction(_prev, formData) {
+  const payeeType = str(formData, 'payee_type');
+  try {
+    const { periodStart, periodEnd } = periodFor(payeeType);
+    const result = await runSettlement({ payeeType, periodStart, periodEnd });
+    revalidatePath('/admin/settlements', 'layout');
+    return {
+      ok: result.failed === 0,
+      message:
+        result.attempted === 0
+          ? 'Nothing was owed for that period.'
+          : `${result.paid} of ${result.attempted} payouts sent.` +
+            (result.failed ? ` ${result.failed} failed — you can retry them.` : ''),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export async function retryPayoutsAction(_prev, formData) {
+  try {
+    const results = await retryFailedPayouts(str(formData, 'run_id'));
+    revalidatePath('/admin/settlements', 'layout');
+    const paid = results.filter((r) => r.ok).length;
+    return { ok: true, message: `${paid} of ${results.length} retried payouts succeeded.` };
+  } catch (error) {
+    return fail(error);
+  }
 }

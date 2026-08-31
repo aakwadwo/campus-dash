@@ -205,3 +205,48 @@ peak that could be two messages per order per stall, which costs real money.
 
 **Decide before launch:** is the payment-confirmed SMS to the vendor worth it,
 given the in-app board already updates and beeps?
+
+
+## Surfaced during the operational build
+
+### Terms text is placeholder, and that is a launch blocker
+`terms_documents` holds three PLACEHOLDER documents so the acceptance mechanism
+could be built and tested. They are clearly marked and are **not legal terms**.
+
+Real text is needed before anyone outside the team uses Campus Dash, covering at
+minimum: the Partner contractor relationship, what Campus Dash is and is not
+liable for on a wrong or missing order, and the data-protection basis for
+holding student ID photographs. **Blocked on a lawyer, not on engineering.**
+
+### Who pays when the customer is absent?
+Implemented: the Partner is paid, because they collected the order and
+travelled. What is NOT decided is what happens to the food, and whether the
+customer is refunded the food amount, the delivery fee, both or neither. The
+system records the event and hands it to an admin.
+
+**Decide before launch** — it will happen in the first week.
+
+### The delivery fee is not refunded when a customer collects instead
+`customer_collect_instead()` deliberately does not refund. A partial refund
+depends entirely on what the payment provider supports, and inventing one the
+provider cannot perform is worse than not offering it. The screen says so
+plainly and points at support.
+
+### Partner document retention has a deadline but no sweeper
+`documents_purge_after` is set on review (90 days approved, 30 rejected), and
+`admin_partner_documents_due_for_purge()` lists what is due. Nothing deletes
+them automatically — an admin must act. That is a Data Protection Commission
+question as much as an engineering one: what retention period is actually
+defensible for a government-ID photograph?
+
+### Settlement is manual
+There are buttons, not a schedule. `pg_cron` already runs the timeout sweeps, so
+adding daily and weekly settlement jobs is small — but running money on a timer
+before anyone has watched it run by hand seemed like the wrong order.
+
+### SMS volume and cost
+Every party is now notified at several points. At lunchtime peak that is real
+money in Ghana. `notification_events` records every send, so the first week of
+real use will show exactly which messages are worth keeping.
+
+**Decide after pilot data**, not before.
