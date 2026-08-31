@@ -149,11 +149,103 @@ export async function resetTransactionalState() {
              vendor_response_seconds = 60, partner_search_seconds = 600
        where id
     `);
+    // Restore the seeded CATALOGUE, not just its flags. Admin tests rename,
+    // disable, reprice and delete these rows; without a real restore, damage
+    // from one test file silently breaks the next one. Learned the hard way:
+    // a cleanup matching on name once deleted a seeded vendor a test had
+    // renamed into its own match pattern.
     await c.query(`
-      update public.menu_items set price_pesewas = 3500
-       where id = '30000000-0000-4000-8000-000000000001'
+      delete from public.vendors
+       where id not in (
+         '20000000-0000-4000-8000-000000000001',
+         '20000000-0000-4000-8000-000000000002'
+       )
     `);
-    await c.query(`update public.vendors set status = 'ACTIVE', is_accepting_orders = true`);
+    await c.query(`
+      insert into public.vendors (id, name, phone, status, is_accepting_orders, location_id, walk_minutes_to_campus)
+      values
+        ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One', '+233200000011', 'ACTIVE', true,
+         '10000000-0000-4000-8000-000000000030', 4),
+        ('20000000-0000-4000-8000-000000000002', 'Test Grill Two', '+233200000012', 'ACTIVE', true,
+         '10000000-0000-4000-8000-000000000040', 6)
+      on conflict (id) do update
+         set name = excluded.name, phone = excluded.phone, status = excluded.status,
+             is_accepting_orders = excluded.is_accepting_orders,
+             location_id = excluded.location_id,
+             walk_minutes_to_campus = excluded.walk_minutes_to_campus
+    `);
+    await c.query(`
+      insert into public.vendor_users (vendor_id, user_id) values
+        ('20000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000011'),
+        ('20000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000012')
+      on conflict do nothing
+    `);
+    await c.query(`
+      delete from public.vendor_users
+       where (vendor_id, user_id) not in (
+         ('20000000-0000-4000-8000-000000000001'::uuid, '00000000-0000-4000-8000-000000000011'::uuid),
+         ('20000000-0000-4000-8000-000000000002'::uuid, '00000000-0000-4000-8000-000000000012'::uuid)
+       )
+    `);
+    await c.query(`
+      insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order)
+      values
+        ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, 1),
+        ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special', 'Waakye, egg, gari, stew', 3000, true, 2),
+        ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef', 'Fried rice and beef', 4000, true, 3),
+        ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water', '500ml', 300, true, 4),
+        ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele', 'Spiced fried plantain', 1500, false, 5),
+        ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, 1),
+        ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, 2),
+        ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, 3),
+        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4)
+      on conflict (id) do update
+         set vendor_id = excluded.vendor_id, name = excluded.name,
+             description = excluded.description, price_pesewas = excluded.price_pesewas,
+             is_available = excluded.is_available, sort_order = excluded.sort_order
+    `);
+    await c.query(`
+      delete from public.menu_items
+       where vendor_id in ('20000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000002')
+         and id not in (
+           '30000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000002',
+           '30000000-0000-4000-8000-000000000003','30000000-0000-4000-8000-000000000004',
+           '30000000-0000-4000-8000-000000000005','30000000-0000-4000-8000-000000000011',
+           '30000000-0000-4000-8000-000000000012','30000000-0000-4000-8000-000000000013',
+           '30000000-0000-4000-8000-000000000014'
+         )
+    `);
+    // Locations: drop anything a test created, then restore the seeded rows'
+    // full state. is_deliverable in particular is toggled by admin tests, and
+    // restoring only is_active leaves the next file ordering to a floor.
+    await c.query(`
+      delete from public.locations
+       where id::text not like '10000000-0000-4000-8000-%'
+    `);
+    await c.query(`
+      update public.locations l
+         set name = v.name, is_deliverable = v.deliverable,
+             walk_minutes = v.walk, is_active = true
+        from (values
+          ('10000000-0000-4000-8000-000000000001','Academic City',     false, 0),
+          ('10000000-0000-4000-8000-000000000010','Hostel Block A',    false, 5),
+          ('10000000-0000-4000-8000-000000000020','Hostel Block B',    false, 7),
+          ('10000000-0000-4000-8000-000000000030','Academic Block',    false, 3),
+          ('10000000-0000-4000-8000-000000000040','Sports Complex',    false, 9),
+          ('10000000-0000-4000-8000-000000000011','Floor 1',           false, null),
+          ('10000000-0000-4000-8000-000000000012','Floor 2',           false, null),
+          ('10000000-0000-4000-8000-000000000021','Floor 1',           false, null),
+          ('10000000-0000-4000-8000-000000000031','Ground Floor',      false, null),
+          ('10000000-0000-4000-8000-000000000111','Room 101',          true,  null),
+          ('10000000-0000-4000-8000-000000000112','Room 102',          true,  null),
+          ('10000000-0000-4000-8000-000000000121','Room 204',          true,  null),
+          ('10000000-0000-4000-8000-000000000122','Room 205',          true,  null),
+          ('10000000-0000-4000-8000-000000000211','Room 110',          true,  null),
+          ('10000000-0000-4000-8000-000000000311','Library Entrance',  true,  null),
+          ('10000000-0000-4000-8000-000000000411','Main Field',        true,  null)
+        ) as v(id, name, deliverable, walk)
+       where l.id = v.id::uuid
+    `);
     await c.query(`update public.users set is_suspended = false`);
     // Restore seeded display names: tests rename accounts and commit.
     await c.query(`

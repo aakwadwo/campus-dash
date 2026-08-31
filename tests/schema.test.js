@@ -73,6 +73,8 @@ describe('schema invariants', () => {
       'expire_partner_search',
       'generate_numeric_code',
       'log_order_event',
+      'handle_new_auth_user',
+      'handle_new_auth_user_for',
     ];
     const callable = await asService(
       async (c) =>
@@ -153,6 +155,144 @@ describe('schema invariants', () => {
         ).rows
     );
     assert.deepEqual(nonInteger, [], 'money is always integer pesewas');
+  });
+
+  test('the set of client-callable functions matches an explicit allowlist', async () => {
+    // Postgres grants EXECUTE to PUBLIC by default, so a new function is
+    // reachable by anon unless something takes that away. A blanket revoke only
+    // covers functions that exist when it runs — which is exactly how three
+    // auth provisioning helpers ended up anon-callable after Phase 3.
+    //
+    // This asserts the WHOLE surface, so adding a function without deciding who
+    // may call it fails here rather than shipping quietly.
+    const ANON = [
+      'current_user_id',
+      'is_admin',
+      'is_vendor_staff',
+      'location_path',
+      'location_zone',
+      'my_vendor_ids',
+    ];
+    const AUTHENTICATED = [
+      ...ANON,
+      'admin_add_vendor_user',
+      'admin_cancel_order',
+      'admin_clear_partner_documents',
+      'admin_complete_order',
+      'admin_create_location',
+      'admin_create_menu_item',
+      'admin_create_vendor',
+      'admin_delete_location',
+      'admin_delete_menu_item',
+      'admin_list_actions',
+      'admin_list_partner_applications',
+      'admin_mark_refunded',
+      'admin_partner_documents_due_for_purge',
+      'admin_reassign_delivery',
+      'admin_remove_vendor_user',
+      'admin_review_partner',
+      'admin_scheduled_job_status',
+      'admin_set_location_active',
+      'admin_set_menu_item_available',
+      'admin_set_vendor_status',
+      'admin_update_location',
+      'admin_update_menu_item',
+      'admin_update_vendor',
+      'get_delivery_offers',
+      'get_my_delivery_code',
+      'get_my_pickup_code',
+      'my_capabilities',
+      'partner_accept_delivery',
+      'partner_cancel_delivery',
+      'partner_complete_delivery',
+      'partner_set_availability',
+      'submit_order',
+      'update_my_profile',
+      'vendor_accept_order',
+      'vendor_complete_pickup_order',
+      'vendor_confirm_pickup',
+      'vendor_mark_preparing',
+      'vendor_mark_ready',
+      'vendor_reject_order',
+      'vendor_set_accepting_orders',
+    ];
+
+    for (const [role, allowed] of [
+      ['anon', ANON],
+      ['authenticated', AUTHENTICATED],
+    ]) {
+      const actual = await asService(async (c) =>
+        (
+          await c.query(
+            `select distinct p.proname
+               from pg_proc p
+               join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public'
+                and has_function_privilege($1, p.oid, 'EXECUTE')
+              order by p.proname`,
+            [role]
+          )
+        ).rows.map((r) => r.proname)
+      );
+      assert.deepEqual(
+        actual,
+        [...allowed].sort(),
+        `${role} can call functions that are not on the allowlist (or vice versa)`
+      );
+    }
+  });
+
+  test('new functions are deny-by-default, not PUBLIC-by-default', async () => {
+    const defaults = await asService(async (c) =>
+      (
+        await c.query(`
+        select unnest(defaclacl)::text as grant_entry
+          from pg_default_acl d
+          join pg_namespace n on n.oid = d.defaclnamespace
+         where n.nspname = 'public' and d.defaclobjtype = 'f'
+      `)
+      ).rows.map((r) => r.grant_entry)
+    );
+    assert.ok(
+      !defaults.some((entry) => entry.startsWith('=X/')),
+      'ALTER DEFAULT PRIVILEGES must not leave EXECUTE granted to PUBLIC'
+    );
+  });
+
+  test('every admin function re-checks is_admin() in its own body', async () => {
+    // A grant only decides who may ATTEMPT a call. If one of these ever stops
+    // checking, any signed-in user becomes an admin for that operation.
+    const unchecked = await asService(async (c) =>
+      (
+        await c.query(`
+        select p.proname
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public'
+           and p.proname like 'admin\\_%'
+           and pg_get_functiondef(p.oid) not like '%is_admin()%'
+      `)
+      ).rows.map((r) => r.proname)
+    );
+    assert.deepEqual(unchecked, [], 'every admin function must gate on is_admin()');
+  });
+
+  test('every admin MUTATION writes an audit row in the same transaction', async () => {
+    const missing = await asService(async (c) =>
+      (
+        await c.query(`
+        select p.proname
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public'
+           and p.provolatile = 'v'
+           and p.proname like 'admin\\_%'
+           and p.proname <> 'admin_list_actions'
+           and pg_get_functiondef(p.oid) not like '%log_admin_action%'
+      `)
+      ).rows.map((r) => r.proname)
+    );
+    assert.deepEqual(missing, [], 'an administrative change with no audit row is not auditable');
   });
 
   test('the three state dimensions are separate enum types', async () => {
