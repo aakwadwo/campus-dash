@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+
+/*
+ * Campus Dash design tokens.
+ * Deliberately minimal for V1 — the vendor screen has to be readable at arm's
+ * length on a cheap phone in a hot kitchen, so we favour large type and high
+ * contrast over decoration.
+ */
+@theme {
+  --color-brand-50: oklch(0.97 0.02 150);
+  --color-brand-500: oklch(0.62 0.16 152);
+  --color-brand-600: oklch(0.54 0.15 152);
+  --color-brand-700: oklch(0.45 0.13 152);
+
+  --color-ink: oklch(0.22 0.01 250);
+  --color-muted: oklch(0.55 0.01 250);
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: oklch(0.99 0.003 250);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}

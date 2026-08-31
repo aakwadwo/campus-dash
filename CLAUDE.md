@@ -1,0 +1,79 @@
+# Campus Dash
+
+Campus-only ordering and delivery for Academic City University, Ghana. Customers
+order from approved vendors and either collect the order themselves or have a
+verified student **Partner** bring it to a predefined campus destination.
+
+Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is where
+most of the safety lives. `docs/STATE-MACHINE.md` covers order state.
+`docs/OPEN-QUESTIONS.md` lists what is genuinely still undecided — do not code
+around those as if they were settled.
+
+## Vocabulary
+
+- Delivery people are **Partners**. Never "runners", never "drivers".
+- Money is **integer pesewas**. 1 GHS = 100 pesewas. Never floats, anywhere.
+
+## Hard rules
+
+1. **The server is authoritative** for prices, fees, order state, payment state,
+   Partner assignment, permissions and settlement. Never trust the client for
+   any of them — including "the payment succeeded".
+2. **Three independent state dimensions** — `order_status`, `payment_status`,
+   `delivery_status`. Never merge them. A failed delivery does not fail the food
+   order.
+3. **Race-sensitive transitions happen in SQL**, as conditional updates guarded
+   on the current state. Zero rows affected = the transition failed; log it,
+   never overwrite.
+4. **Money operations are idempotent**, backed by unique constraints — payment
+   creation, webhook processing, payout creation.
+5. **Admin overrides append to `admin_actions`** — who, what, which entity, when,
+   why.
+6. **Clients get SELECT only.** There are no INSERT/UPDATE/DELETE grants for
+   `anon` or `authenticated` on any table. Every write goes through a SECURITY
+   DEFINER function in `supabase/migrations/`, reached from
+   `lib/orders/transitions.js`. Do not add a write grant to make something
+   easier.
+7. **Never import `lib/supabase/admin.js` into client code.** It bypasses RLS.
+   Service-role keys never reach the browser.
+8. **RLS is not optional.** Frontend route protection is not access control.
+9. **Transitions return `{ success, reason }` for state and contention failures**
+   and RAISE for authorisation failures. Logging-then-raising would roll back
+   the log, so rejections must not raise. See `docs/DATABASE.md`.
+10. **External providers sit behind interfaces.** Payments and SMS are reached
+    only through `lib/payments` and `lib/sms`. No provider-specific logic
+    anywhere else.
+
+## Not in V1
+
+Ratings, reviews, loyalty, coupons, promotions, AI recommendations, Google Maps,
+GPS, live tracking, multiple simultaneous Partner deliveries, Partner scoring,
+automatic penalties, analytics, microservices, native apps, push notifications.
+
+## Commands
+
+```
+npm run dev        # Next.js dev server on :3000
+npm run build      # production build
+npm run lint       # eslint
+npm run format     # prettier
+npm test           # 85 database tests (needs the local stack running)
+npm run db:start   # local Supabase (needs Docker running)
+npm run db:reset   # re-apply all migrations + seed
+npm run db:status  # local Supabase URLs and keys
+```
+
+Tests run against the local database and share it, so they run serially. They
+connect as `authenticator` — the role PostgREST itself uses — so RLS and grants
+are exercised exactly as a real browser request would hit them.
+
+Environment: copy `.env.example` to `.env.local`. `SMS_PROVIDER=fake` prints
+SMS and phone OTPs to the server console; `PAYMENT_PROVIDER=fake` simulates a
+~2s asynchronous collection.
+
+## Conventions
+
+- JavaScript only. No TypeScript.
+- `@/` path alias maps to the project root.
+- `process.env` is read only in `lib/config.js`.
+- Schema changes go in `supabase/migrations/` — never applied by hand.
