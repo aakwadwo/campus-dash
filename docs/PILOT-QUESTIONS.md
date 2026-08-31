@@ -13,7 +13,9 @@ Last reviewed: 2026-09-06
 ## Pricing
 
 **1. What service fee will students accept?**
-Currently GH₵2.00. A guess.
+Currently 10% of the food subtotal (`service_fee_bps = 1000`). A guess — and
+being a percentage, it is the number that decides whether a GH₵80 group order
+is worth placing.
 
 **2. What delivery fee will Partners accept for a campus walk?**
 Currently GH₵5.00, all of it to the Partner

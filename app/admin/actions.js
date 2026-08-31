@@ -385,7 +385,7 @@ export async function updateConfigAction(_prev, formData) {
     () =>
       admin.updateConfig({
         reason: str(formData, 'reason'),
-        serviceFeePesewas: num(formData, 'service_fee_pesewas'),
+        serviceFeeBps: num(formData, 'service_fee_bps'),
         deliveryFeePesewas: num(formData, 'delivery_fee_pesewas'),
         vendorResponseSeconds: num(formData, 'vendor_response_seconds'),
         partnerSearchSeconds: num(formData, 'partner_search_seconds'),

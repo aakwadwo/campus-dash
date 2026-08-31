@@ -193,12 +193,23 @@ insert into public.menu_items (id, vendor_id, name, description, price_pesewas, 
 -- ---------------------------------------------------------------------------
 -- Pricing — PLACEHOLDER figures pending a commercial decision
 -- ---------------------------------------------------------------------------
--- GH₵2.00 service fee, GH₵5.00 flat delivery fee, Partner receives all of it.
+-- 10% Campus Dash fee, GH₵5.00 flat delivery fee, Partner receives all of it.
 -- See docs/PILOT-QUESTIONS.md — none of these are agreed numbers.
+--
+-- The timing values below are widened FOR LOCAL MANUAL TESTING ONLY. A human
+-- clicking between four browser profiles cannot beat the real 60-second vendor
+-- window, and every order would expire mid-walkthrough. The migration defaults
+-- (60 / 600 / 300) remain the product intent and are what production gets,
+-- because production runs migrations without this seed file. The automated
+-- tests reset these to the real values themselves — see tests/helpers/db.js.
 update public.pricing_config
-   set service_fee_pesewas = 200,
+   set service_fee_bps = 1000,
        delivery_fee_pesewas = 500,
-       partner_share_of_delivery_bps = 10000
+       partner_share_of_delivery_bps = 10000,
+       vendor_response_seconds = 1800,
+       partner_search_seconds = 1800,
+       customer_absent_wait_seconds = 60,
+       payment_pending_timeout_seconds = 300
  where id;
 
 

@@ -187,9 +187,11 @@ export async function resetTransactionalState() {
     `);
     await c.query(`
       update public.pricing_config
-         set service_fee_pesewas = 200, delivery_fee_pesewas = 500,
+         set service_fee_bps = 1000, delivery_fee_pesewas = 500,
              partner_share_of_delivery_bps = 10000,
-             vendor_response_seconds = 60, partner_search_seconds = 600
+             vendor_response_seconds = 60, partner_search_seconds = 600,
+             customer_absent_wait_seconds = 300,
+             payment_pending_timeout_seconds = 900
        where id
     `);
     // Restore the seeded CATALOGUE, not just its flags. Admin tests rename,

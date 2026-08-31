@@ -16,7 +16,8 @@
     "db:status": "supabase status",
     "test": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local \"tests/**/*.test.js\"",
     "test:watch": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local --watch \"tests/**/*.test.js\"",
-    "seed:orders": "node scripts/seed-orders.mjs"
+    "seed:orders": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-orders.mjs",
+    "seed:documents": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-partner-documents.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

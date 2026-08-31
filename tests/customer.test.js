@@ -69,11 +69,11 @@ describe('customer ordering', () => {
       LOCATIONS.room204,
     ]);
 
-    // 2 × GH₵35 + GH₵3 = GH₵73 food, + GH₵2 service + GH₵5 delivery = GH₵80
+    // 2 × GH₵35 + GH₵3 = GH₵73 food, + 10% (GH₵7.30) + GH₵5 delivery = GH₵85.30
     assert.equal(result.subtotal_pesewas, 7300);
-    assert.equal(result.service_fee_pesewas, 200);
+    assert.equal(result.service_fee_pesewas, 730);
     assert.equal(result.delivery_fee_pesewas, 500);
-    assert.equal(result.total_pesewas, 8000);
+    assert.equal(result.total_pesewas, 8530);
     assert.equal(result.lines[0].unit_price_pesewas, 3500, 'the menu price, not the sent one');
   });
 
@@ -85,7 +85,9 @@ describe('customer ordering', () => {
       null,
     ]);
     assert.equal(result.delivery_fee_pesewas, 0);
-    assert.equal(result.total_pesewas, 3700);
+    // GH₵35 food + 10% = GH₵38.50
+    assert.equal(result.service_fee_pesewas, 350);
+    assert.equal(result.total_pesewas, 3850);
   });
 
   test('the quote and the submitted order always agree', async () => {
@@ -204,7 +206,7 @@ describe('customer ordering', () => {
   // =========================================================================
   test('a price change after submission never touches the placed order', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(order.total_pesewas, 7700);
+    assert.equal(order.total_pesewas, 8200);
 
     await asUser(
       ACTORS.admin,
@@ -218,11 +220,11 @@ describe('customer ordering', () => {
     );
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.total_pesewas, 7700, 'the customer still owes what they agreed');
+    assert.equal(view.total_pesewas, 8200, 'the customer still owes what they agreed');
     assert.equal(view.items[0].unit_price_pesewas, 3500);
 
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 10700, 'a new order uses the new price');
+    assert.equal(later.total_pesewas, 11500, 'a new order uses the new price');
   });
 
   test('an item disabled after submission does not break the placed order', async () => {
@@ -235,8 +237,8 @@ describe('customer ordering', () => {
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.items[0].name, 'Jollof Rice with Chicken');
-    // GH₵35 food + GH₵2 service + GH₵5 delivery.
-    assert.equal(view.total_pesewas, 4200);
+    // GH₵35 food + 10% (GH₵3.50) + GH₵5 delivery.
+    assert.equal(view.total_pesewas, 4350);
   });
 
   // =========================================================================

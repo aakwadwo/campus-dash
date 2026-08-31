@@ -10,7 +10,8 @@ most of the safety lives. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
 `docs/PARTNER.md` the Partner system, `docs/MONEY.md` allocation and settlement,
 `docs/SECURITY.md` the security model, `docs/NOTIFICATIONS.md` messaging,
 `docs/OPERATIONS.md` running the pilot, `docs/SETUP.md` local setup and
-`docs/TESTING.md` the suite. `docs/STATE-MACHINE.md` covers order state.
+`docs/TESTING.md` the suite and `docs/MANUAL-TESTING.md` the development
+accounts for a manual walkthrough. `docs/STATE-MACHINE.md` covers order state.
 `docs/PILOT-QUESTIONS.md` lists what is genuinely still undecided — do not code
 around those as if they were settled.
 

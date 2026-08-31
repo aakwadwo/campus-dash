@@ -35,7 +35,8 @@ describe('money, allocations and settlement', () => {
         { menu_item_id: MENU.water, quantity: 1 },
       ],
     });
-    assert.equal(order.total_pesewas, 4500);
+    // GH₵38 food + 10% (GH₵3.80) + GH₵5 delivery
+    assert.equal(order.total_pesewas, 4680);
 
     await vendorAccept(order.order_id);
     await payOrder(order.order_id);
@@ -46,11 +47,11 @@ describe('money, allocations and settlement', () => {
     assert.equal(byPayee.VENDOR.amount_pesewas, 3800, 'the vendor gets the food money');
     assert.equal(byPayee.VENDOR.payee_id, VENDORS.one);
     // Partner earnings are still inside the platform row: no Partner exists yet.
-    assert.equal(byPayee.PLATFORM.amount_pesewas, 700, 'service + delivery, pending a Partner');
+    assert.equal(byPayee.PLATFORM.amount_pesewas, 880, 'service + delivery, pending a Partner');
     assert.equal(byPayee.PLATFORM.payee_id, null);
     assert.equal(
       allocations.reduce((n, a) => n + a.amount_pesewas, 0),
-      4500
+      4680
     );
   });
 
@@ -71,10 +72,10 @@ describe('money, allocations and settlement', () => {
       ACTORS.partnerYaw,
       'named to the person who did the work'
     );
-    assert.equal(byPayee.PLATFORM.amount_pesewas, 200, 'platform keeps the GH₵2 service fee');
+    assert.equal(byPayee.PLATFORM.amount_pesewas, 350, 'platform keeps the 10% service fee');
 
     const total = allocations.reduce((n, a) => n + a.amount_pesewas, 0);
-    assert.equal(total, 4200, 'still sums exactly to what the customer paid');
+    assert.equal(total, 4350, 'still sums exactly to what the customer paid');
     assert.equal(total, (await getOrder(order.order_id)).total_pesewas);
   });
 
@@ -85,10 +86,10 @@ describe('money, allocations and settlement', () => {
 
     const allocations = await getAllocations(order.order_id);
     assert.ok(!allocations.some((a) => a.payee_type === 'PARTNER'));
-    assert.equal(allocations.find((a) => a.payee_type === 'PLATFORM').amount_pesewas, 200);
+    assert.equal(allocations.find((a) => a.payee_type === 'PLATFORM').amount_pesewas, 350);
     assert.equal(
       allocations.reduce((n, a) => n + a.amount_pesewas, 0),
-      3700
+      3850
     );
   });
 

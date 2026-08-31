@@ -68,3 +68,8 @@ if it is not, the test is lying.
 
 Transitions return `{ success, reason }` for state and contention failures and
 **raise** for authorisation failures. Assert the right one.
+
+## Testing it by hand
+
+For development accounts, OTP codes and a lifecycle checklist, see
+[`MANUAL-TESTING.md`](./MANUAL-TESTING.md).

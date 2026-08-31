@@ -19,10 +19,10 @@ export default function ConfigForm({ config }) {
       </p>
 
       <Field
-        label="Service fee (pesewas)"
-        name="service_fee_pesewas"
+        label="Service fee (basis points — 1000 = 10%)"
+        name="service_fee_bps"
         type="number"
-        placeholder={String(config?.service_fee_pesewas ?? '')}
+        placeholder={String(config?.service_fee_bps ?? '')}
       />
       <Field
         label="Delivery fee (pesewas)"

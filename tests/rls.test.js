@@ -79,8 +79,8 @@ describe('row level security and authorisation', () => {
         },
       ],
     });
-    // 2 x GH₵35.00 = GH₵70.00, + GH₵2 service + GH₵5 delivery = GH₵77.00
-    assert.equal(order.total_pesewas, 7700, 'the server priced it, not the client');
+    // 2 x GH₵35.00 = GH₵70.00, + 10% (GH₵7.00) + GH₵5 delivery = GH₵82.00
+    assert.equal(order.total_pesewas, 8200, 'the server priced it, not the client');
   });
 
   // --- 6 -------------------------------------------------------------------

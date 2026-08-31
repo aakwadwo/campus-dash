@@ -71,7 +71,7 @@ describe('vendor module', () => {
     let card = rows.find((r) => r.order_id === order.order_id);
     assert.equal(card.bucket, 'NEW', 'it lands in the group that needs an answer');
     assert.equal(card.item_count, 1);
-    assert.equal(card.total_pesewas, 7700);
+    assert.equal(card.total_pesewas, 8200);
     assert.ok(card.seconds_to_deadline > 0 && card.seconds_to_deadline <= 60);
 
     await vendorAccept(order.order_id);
@@ -477,7 +477,7 @@ describe('vendor module', () => {
     );
     assert.match(onLines.message, /permission denied/i);
 
-    assert.equal((await getOrder(order.order_id)).total_pesewas, 7700);
+    assert.equal((await getOrder(order.order_id)).total_pesewas, 8200);
   });
 
   test('repricing the MENU does not move an order already submitted', async () => {
@@ -495,7 +495,7 @@ describe('vendor module', () => {
     );
 
     const view = await detail(ACTORS.vendor1Staff, order.order_id);
-    assert.equal(view.total_pesewas, 7700);
+    assert.equal(view.total_pesewas, 8200);
     assert.equal(
       view.items[0].unit_price_pesewas,
       3500,

@@ -14,14 +14,19 @@ customer pays TOTAL
                        carved out of PLATFORM at the moment of delivery
 ```
 
-Worked example — GH₵35 jollof, GH₵3 water, delivered:
+Worked example — 2 × GH₵35 jollof, GH₵3 water, delivered:
 
-|                   |                       |
-| ----------------- | --------------------- |
-| Food              | GH₵73.00 → vendor     |
-| Service fee       | GH₵2.00 → Campus Dash |
-| Delivery fee      | GH₵5.00 → Partner     |
-| **Customer pays** | **GH₵80.00**          |
+|                     |                       |
+| ------------------- | --------------------- |
+| Food                | GH₵73.00 → vendor     |
+| Service fee (10%)   | GH₵7.30 → Campus Dash |
+| Delivery fee (flat) | GH₵5.00 → Partner     |
+| **Customer pays**   | **GH₵85.30**          |
+
+The service fee is a percentage of the food (`pricing_config.service_fee_bps`,
+1000 bps = 10%), rounded half-up in integer pesewas. The delivery fee is flat.
+Both are snapshotted onto the order at submission, so a later fee change never
+moves an order that was already quoted.
 
 ## Why the Partner allocation arrives late
 
