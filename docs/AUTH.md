@@ -1,7 +1,8 @@
 # Authentication
 
-Phone OTP, for everyone. One account per person; Customer and Partner are
-capabilities on that same account, never separate logins.
+Phone OTP for customers, vendors and Partners. Email and password for
+administrators. One account per person; Customer and Partner are capabilities on
+that same account, never separate logins.
 
 ## Who verifies what
 
@@ -49,6 +50,31 @@ A failure returns a deliberately vague 401; the reason stays in our logs.
 If delivery fails we return a non-2xx, which makes Supabase fail the sign-in
 rather than leaving someone waiting for a message that will never arrive.
 
+## Administrators sign in with a password
+
+Everyone else signs in by phone. Administrators do not, for a practical reason
+and a safety one: operational access must not depend on an SMS arriving, and the
+person who has to intervene when an order is stuck should not be locked out by a
+failure in the very channel they are trying to fix.
+
+`/login/admin` → `signInWithPassword`, then `my_capabilities()` is asked whether
+this account is an administrator. If it is not, the session is thrown away
+immediately. That check is a courtesy, not the boundary: `is_admin` is a column
+on `public.users` that no client statement can reach, and every `admin_*`
+function re-checks `is_admin()` in its own body. A password proves who someone
+is; the database decides what they may do.
+
+Failures return one message for every cause. Distinguishing "no such account"
+from "wrong password" would confirm which email addresses are administrators.
+
+There is no admin registration page and no self-service password reset. The
+first administrator is created out-of-band with `npm run admin:create`, which
+needs the service-role key and therefore a server — see
+[`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md). The account carries a phone number
+as well, because `public.users` is provisioned on phone confirmation and its
+`phone` column is unique and NOT NULL: the phone is the identity, the password
+is the credential.
+
 ## Local configuration
 
 The secret lives in **`.env`**, not `.env.local`. The Supabase CLI reads only
@@ -77,6 +103,42 @@ echo "v1,whsec_$(openssl rand -base64 32)"
 ```
 
 It must be base64 after the prefix — the verifier decodes it.
+
+## Hosted configuration
+
+A hosted Supabase project cannot reach `http://localhost:3000`, so the HTTPS
+hook has nothing to call during development. There the hook is a **Postgres
+function** instead — `supabase/dev/sms-hook.sql` — which Supabase Auth calls
+in-database and which parks the message where `/dev/inbox` can read it. No
+tunnel, no public URL, no SMS account.
+
+That file is development-only and deliberately not a migration and not part of
+`schema.sql`, so production never installs it. Its own defences: RLS with no
+policies and no client grants on the table, pruning to the newest 25 messages
+and fifteen minutes on every write, and `/dev/inbox` returning 404 in a
+production build or with any non-fake provider. See
+[`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md).
+
+In production the hook is the HTTPS route at the deployed origin —
+`https://<deployment>/api/auth/hooks/send-sms` — with the dashboard's generated
+secret in `SEND_SMS_HOOK_SECRETS`, and `SMS_PROVIDER=arkesel` so delivery goes
+to a real handset.
+
+**No SMS provider is configured on the hosted project.** The hook replaces it.
+Verified directly against gotrue v2.196.0: with phone enabled, the hook enabled
+and no provider at all, `/settings` reports `sms_provider: ""` and an OTP is
+delivered through the hook to Arkesel. The placeholder Twilio block in
+`config.toml` exists only because the Supabase CLI has no other way to turn
+local phone auth on.
+
+Supabase's contract shapes the route: a five-second total budget including its
+retries, `application/json` always, and 429/503 with a non-empty `retry-after`
+as the only retried statuses. So the provider call is bounded at 3.5s, a
+transient failure returns 503 and a permanent one returns 500. See
+[`SMS.md`](./SMS.md) for the exact dashboard settings.
+
+Phone sign-in is **off** on a new hosted project and must be enabled in the
+dashboard before any of this works.
 
 ## Account provisioning
 
@@ -121,11 +183,38 @@ tampered client changes nothing but its own display.
 
 Ordering is deliberately low-friction: a confirmed phone is enough. No ID
 upload, no selfie, no manual approval. Partner capability requires all of that
-and an admin decision, and arrives in Phase 8.
+plus an admin decision.
 
 Users hold no `UPDATE` grant on `public.users`, so even a name change goes
 through `update_my_profile()`. `is_admin` and `is_suspended` are therefore
 unreachable from a client: there is no statement that touches them.
+
+## Where a sign-in lands
+
+One form serves four kinds of person, so the destination is derived rather than
+chosen: `lib/auth/landing.js` reads `my_capabilities()` and returns
+
+|                   |                                                          |
+| ----------------- | -------------------------------------------------------- |
+| admin             | `/admin`                                                 |
+| vendor staff      | `/vendor`                                                |
+| approved Partner  | `/partner`                                               |
+| Partner applicant | `/partner/apply` — their own status, not the admin queue |
+| everyone else     | `/order`                                                 |
+| suspended         | `/suspended`, whatever else is true                      |
+
+Precedence, not preference: an admin who also staffs a stall lands on `/admin`
+because that is the job they signed in to do, and can still walk to `/vendor`.
+
+A guard that redirected somebody to sign in supplies a `next`, and that wins —
+they were already going somewhere specific. `next` is only ever honoured as a
+path on this application; an absolute or protocol-relative URL is discarded,
+because a sign-in that follows a caller-supplied URL is an open redirect, and a
+convincing one: the victim really did just authenticate.
+
+None of this is a security control. Every one of those routes re-checks on
+arrival, and the data underneath is filtered by RLS regardless — the derivation
+decides where somebody _useful_ lands, never what they may do.
 
 ## Guards
 
@@ -135,9 +224,15 @@ and `requireVendorStaff`. These stop a page forgetting to check — they are
 rendering nothing they are entitled to, because every query underneath still
 filters by `auth.uid()`.
 
-## Not built yet
+## Terms acceptance
 
-**Terms acceptance.** `terms_acceptances` — recording which version a user
-agreed to, and when — is not implemented. Registration is where it belongs, but
-it was outside the scope set for this phase and needs the actual terms text and
-a versioning decision first.
+`terms_acceptances` records which version of which document an account agreed
+to, and when. The documents themselves are reference data installed by migration
+and present in every environment, because a gate that silently opens — an empty
+`terms_documents` table, nothing to accept, everything appearing to work — is
+worse than no gate.
+
+The text is still a placeholder and is not legal advice. See
+[`PILOT-QUESTIONS.md`](./PILOT-QUESTIONS.md). Publishing real terms is an INSERT
+of version 2, never an edit of version 1: an acceptance points at the exact row
+the person agreed to.

@@ -18,7 +18,7 @@ export default function AvailabilityToggle({ available, hasActive }) {
     >
       <input type="hidden" name="available" value={available ? 'false' : 'true'} />
       <span
-        className={`size-2.5 rounded-full ${available ? 'bg-brand-600' : 'bg-black/20'}`}
+        className={`size-2.5 rounded-full ${available ? 'bg-brand-700' : 'bg-black/20'}`}
         aria-hidden
       />
       <span className="text-sm font-medium">{available ? 'Online' : 'Offline'}</span>

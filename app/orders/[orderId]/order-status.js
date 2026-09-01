@@ -64,7 +64,7 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
         <button
           type="submit"
           disabled={paying}
-          className="bg-brand-600 w-full rounded-lg py-4 text-base font-semibold text-white disabled:opacity-60"
+          className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
         >
           {paying ? 'Starting…' : `Pay ${formatPesewas(order.total_pesewas)}`}
         </button>
@@ -96,7 +96,7 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
   // is shown as soon as a Partner is assigned and nowhere else.
   if (order.delivery_code) {
     return (
-      <div className="bg-brand-600 rounded-lg px-4 py-4 text-white">
+      <div className="bg-brand-500 text-ink rounded-lg px-4 py-4">
         <p className="text-xs font-semibold tracking-wide uppercase opacity-90">
           Give this to the Partner
         </p>
@@ -127,7 +127,7 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
           <button
             type="submit"
             disabled={waitingAgain}
-            className="bg-brand-600 w-full rounded-lg py-3.5 text-base font-semibold text-white disabled:opacity-60"
+            className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
           >
             {waitingAgain ? 'Looking…' : 'Keep looking for a Partner'}
           </button>

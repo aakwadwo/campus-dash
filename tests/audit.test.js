@@ -126,6 +126,77 @@ describe('audit trail', () => {
     assert.match(del.message, /append-only/);
   });
 
+  test('the notification log accepts a delivery report and nothing else', async () => {
+    // notification_events is append-only, and it stays that way — it is the
+    // record of who was told what, and when. A provider delivery report is the
+    // one exception: new information about a row that already exists, arriving
+    // minutes later. The guard was narrowed to exactly that, so this pins down
+    // what "narrowed" is allowed to mean.
+    const id = await asService(async (c) => {
+      const { rows } = await c.query(
+        `insert into public.notification_events
+           (event, audience, channel, recipient, succeeded, provider, correlation_id)
+         values ('ORDER_ACCEPTED', 'CUSTOMER', 'SMS', '+233200000021', true, 'arkesel', $1)
+         returning id`,
+        [`audit-${Date.now()}`]
+      );
+      return rows[0].id;
+    });
+
+    // Permitted: the delivery report.
+    await asService((c) =>
+      c.query(
+        `update public.notification_events
+            set delivery_status = 'DELIVERED', delivery_updated_at = now(),
+                provider_message_id = 'sms_1'
+          where id = $1`,
+        [id]
+      )
+    );
+
+    // Forbidden: rewriting what was actually recorded about the send.
+    for (const [column, value] of [
+      ['recipient', "'+233209999999'"],
+      ['succeeded', 'false'],
+      ['event', "'ORDER_CANCELLED'"],
+      ['error', "'invented'"],
+    ]) {
+      const rejected = await asService((c) =>
+        c
+          .query(`update public.notification_events set ${column} = ${value} where id = $1`, [id])
+          .then(() => null)
+          .catch((e) => e)
+      );
+      assert.ok(rejected, `${column} must not be rewritable`);
+      assert.match(rejected.message, /append-only/);
+    }
+
+    // Forbidden: changing a provider id that was already recorded.
+    const rewritten = await asService((c) =>
+      c
+        .query(
+          `update public.notification_events set provider_message_id = 'sms_other' where id = $1`,
+          [id]
+        )
+        .then(() => null)
+        .catch((e) => e)
+    );
+    assert.ok(rewritten, 'provider_message_id must be write-once');
+    assert.match(rewritten.message, /append-only/);
+
+    // Forbidden: deletion, as before.
+    const deleted = await asService((c) =>
+      c
+        .query('delete from public.notification_events where id = $1', [id])
+        .then(() => null)
+        .catch((e) => e)
+    );
+    assert.ok(deleted);
+    assert.match(deleted.message, /append-only/);
+
+    await asService((c) => c.query('truncate table public.notification_events'));
+  });
+
   test('the order event log is append-only too', async () => {
     await submitOrder();
     const update = await expectRejection(

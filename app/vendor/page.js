@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getMyVendors } from '@/lib/vendor';
+import { myLanding } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,8 @@ export default async function VendorIndexPage() {
   const vendors = await getMyVendors();
 
   if (vendors.length === 1) redirect(`/vendor/${vendors[0].id}`);
-  if (vendors.length === 0) redirect('/account');
+  // Not vendor staff at all — send them to their own area, not a dead end.
+  if (vendors.length === 0) redirect(await myLanding());
 
   return (
     <main className="mx-auto max-w-md px-5 py-10">

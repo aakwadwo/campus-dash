@@ -107,7 +107,7 @@ function partnerDetail(status) {
     case 'SUSPENDED':
       return 'Partner access is suspended.';
     default:
-      return 'Not applied. Partner sign-up arrives in Phase 8.';
+      return 'Not applied. You can apply to deliver around campus.';
   }
 }
 
@@ -115,7 +115,7 @@ function ModeRow({ title, enabled, detail }) {
   return (
     <div className="flex items-start gap-3 rounded-lg bg-white px-4 py-3 ring-1 ring-black/5">
       <span
-        className={`mt-0.5 size-2.5 shrink-0 rounded-full ${enabled ? 'bg-brand-600' : 'bg-black/20'}`}
+        className={`mt-0.5 size-2.5 shrink-0 rounded-full ${enabled ? 'bg-brand-700' : 'bg-black/20'}`}
         aria-hidden
       />
       <div>

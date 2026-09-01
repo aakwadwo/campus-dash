@@ -12,8 +12,19 @@ import { signWebhook } from '../lib/auth/webhook-signature.js';
  */
 const APP = process.env.TEST_APP_URL || 'http://127.0.0.1:3000';
 const SUPABASE = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
-const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const ANON =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const HOOK_SECRET = process.env.SEND_SMS_HOOK_SECRET;
+
+/**
+ * Two tests below drive Supabase Auth and then read auth.users through the test
+ * pool, which always points at the LOCAL stack. Once .env.local names a hosted
+ * project those are two different databases, so the assertion would be looking
+ * for a user in the wrong place. Skip rather than fail: pointing the app at
+ * hosted Supabase is a supported configuration, not a broken one.
+ */
+const localStack = /(^https?:\/\/)?(127\.0\.0\.1|localhost)(:|\/|$)/.test(SUPABASE);
+const HOSTED = 'skipped: NEXT_PUBLIC_SUPABASE_URL is a hosted project, not the local stack';
 
 async function appIsRunning() {
   try {
@@ -83,7 +94,8 @@ describe(
     });
 
     test('requesting an OTP drives Supabase Auth through our hook', async (t) => {
-      if (!ANON) return t.skip('NEXT_PUBLIC_SUPABASE_ANON_KEY not in this process env');
+      if (!ANON) return t.skip('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY not in this process env');
+      if (!localStack) return t.skip(HOSTED);
       const phone = '+233209980003';
 
       const res = await fetch(`${SUPABASE}/auth/v1/otp`, {
@@ -107,7 +119,8 @@ describe(
     });
 
     test('an incorrect code does not produce a session', async (t) => {
-      if (!ANON) return t.skip('NEXT_PUBLIC_SUPABASE_ANON_KEY not in this process env');
+      if (!ANON) return t.skip('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY not in this process env');
+      if (!localStack) return t.skip(HOSTED);
       const res = await fetch(`${SUPABASE}/auth/v1/verify`, {
         method: 'POST',
         headers: { apikey: ANON, 'content-type': 'application/json' },

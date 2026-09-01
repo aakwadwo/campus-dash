@@ -2,18 +2,52 @@
 
 /*
  * Campus Dash design tokens.
- * Deliberately minimal for V1 — the vendor screen has to be readable at arm's
- * length on a cheap phone in a hot kitchen, so we favour large type and high
- * contrast over decoration.
+ *
+ * White, pastel yellow, soft charcoal. Three colours, deliberately, plus
+ * semantic red and amber for failure and warning — and nothing else. A screen
+ * where everything is highlighted highlights nothing.
+ *
+ * Kept minimal for a second reason: the vendor screen is read at arm's length
+ * on a cheap phone in a hot kitchen, so contrast and white space beat
+ * decoration every time.
+ *
+ * HOW THE YELLOW IS MEANT TO BE USED
+ * ----------------------------------
+ * brand-500 (#F7E7A1) is THE Campus Dash yellow and the only fill that should
+ * appear at any size: primary buttons, the occasional highlight panel. It is a
+ * pastel — about 91% lightness — which has two consequences that are not
+ * negotiable:
+ *
+ *   1. Text on it is ALWAYS `text-ink`. White text on this is illegible, and
+ *      so, nearly, is anything lighter than the charcoal.
+ *   2. It cannot carry small text or thin marks on a white page. That is what
+ *      brand-700 is for — the darkened ochre, used for links, positive status
+ *      text and status dots ON white. The two are not interchangeable, and
+ *      swapping them produces the one failure this palette must never have,
+ *      which is being unreadable outdoors.
+ *
+ * The accent is an accent. Most of any screen is white space, charcoal text and
+ * hairline rules; the yellow marks the one thing to press.
  */
 @theme {
-  --color-brand-50: oklch(0.97 0.02 150);
-  --color-brand-500: oklch(0.62 0.16 152);
-  --color-brand-600: oklch(0.54 0.15 152);
-  --color-brand-700: oklch(0.45 0.13 152);
+  /* Pastel yellow. 500 is the brand colour; everything else is derived. */
+  --color-brand-50: #fdfaee;
+  --color-brand-100: #fbf4d8;
+  --color-brand-200: #f9efc4;
+  --color-brand-300: #f8ebb4;
+  --color-brand-400: #f8e9aa;
+  --color-brand-500: #f7e7a1;
+  --color-brand-600: #ebd684;
+  --color-brand-700: #7a6417;
 
-  --color-ink: oklch(0.22 0.01 250);
-  --color-muted: oklch(0.55 0.01 250);
+  /* Soft charcoal, never #000. Pure black on white is harsh at body size and
+     makes the whole interface feel like a terminal rather than a marketplace. */
+  --color-ink: #242424;
+  --color-muted: #666666;
+
+  /* The page ground: white, warmed a shade so that white cards read as raised
+     rather than dissolving into it. */
+  --color-canvas: #faf9f6;
 }
 
 :root {
@@ -21,7 +55,7 @@
 }
 
 body {
-  background: oklch(0.99 0.003 250);
+  background: var(--color-canvas);
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
 }

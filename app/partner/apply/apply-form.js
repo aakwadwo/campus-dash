@@ -54,7 +54,7 @@ export default function ApplyForm() {
       <button
         type="submit"
         disabled={submitting || !studentIdPath || !facePath}
-        className="bg-brand-600 w-full rounded-lg py-4 text-base font-semibold text-white disabled:opacity-60"
+        className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
       >
         {submitting ? 'Submitting…' : 'Submit application'}
       </button>
@@ -209,7 +209,7 @@ function FaceCapture({ path, onUploaded }) {
               type="button"
               onClick={capture}
               disabled={busy}
-              className="bg-brand-600 mt-3 w-full rounded-lg py-3 text-sm font-semibold text-white disabled:opacity-60"
+              className="bg-brand-500 text-ink mt-3 w-full rounded-lg py-3 text-sm font-semibold disabled:opacity-60"
             >
               {busy ? 'Saving…' : 'Take photo'}
             </button>

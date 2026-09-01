@@ -1,7 +1,58 @@
 # Database Design
 
-Postgres 17 via Supabase. Migrations in `supabase/migrations/`, applied in order
-by `npm run db:reset`. Nothing is ever changed by hand.
+Postgres 17 via Supabase. Nothing is ever changed by hand.
+
+## Two files, two jobs
+
+**`supabase/migrations/`** is the history, and the place every schema change is
+written. Forty-odd files applied in order by `npm run db:reset`. It records how
+each rule came to exist — including the column a later phase dropped, the
+function a later phase replaced, and the grant a later phase took back.
+
+**`supabase/schema.sql`** is the canonical final state, installable from empty
+in one pass. It is what a new environment is bootstrapped from, the hosted
+project included: `npm run db:install`.
+
+It is **not** the migrations concatenated. Replaying the history would install
+the mistakes alongside the corrections. Instead it is generated from a database
+that has actually applied every migration in order, so every drop, replacement,
+altered policy and tightened grant is already resolved:
+
+```bash
+npm run db:reset      # apply every migration, in order
+npm run db:schema     # regenerate supabase/schema.sql from the result
+```
+
+Two things `pg_dump` cannot get right are written by hand into
+`supabase/schema/00-preamble.sql` and `99-epilogue.sql`:
+
+- **Default privileges must be revoked before anything is created.** `pg_dump`
+  renders the final ACL in positive form (`GRANT ALL ON FUNCTIONS TO postgres,
+service_role`), and replaying that onto a fresh Supabase project does not
+  reproduce our state — Supabase's own defaults name `anon` and `authenticated`
+  explicitly, and a GRANT does not remove them. So the revokes run first, and
+  no object ever exists in the permissive state, even momentarily.
+- **Objects outside `public`**: the `auth.users` provisioning triggers, the
+  private storage bucket, the `pg_cron` schedules, and the reference data the
+  product cannot start without.
+
+`schema.sql` ends with assertions that check its own work — RLS on every table,
+no client DML, deny-by-default privileges — so a partial install cannot report
+success.
+
+To prove the two agree, snapshot both and diff:
+
+```bash
+npm run db:snapshot > /tmp/from-migrations.json
+# ...install schema.sql into an empty database...
+npm run db:snapshot > /tmp/from-schema.json
+diff /tmp/from-migrations.json /tmp/from-schema.json
+```
+
+`scripts/schema-snapshot.mjs` covers tables, columns, enums, constraints,
+indexes, triggers, RLS, policies, functions, grants, default privileges,
+extensions, cron jobs, storage buckets and reference data. A difference is
+either a bug in the canonical schema or a decision — never something unnoticed.
 
 ## The one architectural decision everything else follows from
 
@@ -146,6 +197,7 @@ Both timeout sweeps run under `pg_cron`, inside the database:
 | ----------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `campus-dash-expire-stale-orders`   | every 30s    | `SUBMITTED` past its deadline → `EXPIRED`. No payment was ever taken.                                              |
 | `campus-dash-expire-partner-search` | every minute | `SEARCHING` past its deadline → `FAILED_NO_PARTNER`. **Delivery state only** — the order stays `READY` and `PAID`. |
+| `campus-dash-expire-stale-payments` | every 15 min | A collection the provider never confirmed → `FAILED`, so the customer can retry instead of watching a spinner.     |
 
 The vendor window is 60 seconds, so a 30-second sweep bounds the visible error
 at half a window. They run in the database rather than from an application cron:

@@ -2,7 +2,8 @@ import './globals.css';
 
 export const metadata = {
   title: 'Campus Dash',
-  description: 'Order from vendors around Academic City. Pick it up, or let a Partner bring it.',
+  description:
+    'Get what you need from trusted vendors around Academic City. Pick it up, or let a verified student Partner bring it.',
 };
 
 export const viewport = {

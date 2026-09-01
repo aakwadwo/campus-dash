@@ -33,7 +33,7 @@ export default function LoginForm({ next }) {
               required
               defaultValue={phone}
               placeholder="020 123 4567"
-              className="focus:border-brand-600 focus:ring-brand-500/20 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
             />
           </label>
           <SubmitButton pending={sendingCode} label="Send code" pendingLabel="Sending…" />
@@ -53,7 +53,7 @@ export default function LoginForm({ next }) {
               required
               autoFocus
               placeholder="123456"
-              className="focus:border-brand-600 focus:ring-brand-500/20 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-center text-2xl tracking-[0.4em] tabular-nums outline-none focus:ring-2"
+              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-center text-2xl tracking-[0.4em] tabular-nums outline-none focus:ring-2"
             />
           </label>
           <SubmitButton pending={verifying} label="Verify" pendingLabel="Checking…" />
@@ -69,7 +69,7 @@ function SubmitButton({ pending, label, pendingLabel }) {
     <button
       type="submit"
       disabled={pending}
-      className="bg-brand-600 w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+      className="bg-brand-500 text-ink w-full rounded-lg px-4 py-2.5 text-sm font-semibold disabled:opacity-60"
     >
       {pending ? pendingLabel : label}
     </button>

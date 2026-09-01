@@ -88,7 +88,7 @@ export function ReasonField({ placeholder = 'Why are you doing this?' }) {
 
 export function Button({ children, variant = 'primary', ...rest }) {
   const styles = {
-    primary: 'bg-brand-600 text-white',
+    primary: 'bg-brand-500 text-ink',
     secondary: 'bg-white text-ink ring-1 ring-black/15',
     danger: 'bg-white text-red-700 ring-1 ring-red-200',
   };

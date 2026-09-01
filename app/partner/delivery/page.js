@@ -52,7 +52,7 @@ export default async function PartnerDeliveryPage() {
             </a>
           </section>
 
-          <section className="bg-brand-600 mt-3 rounded-lg p-4 text-white">
+          <section className="bg-brand-500 text-ink mt-3 rounded-lg p-4">
             <h2 className="text-xs font-semibold tracking-wide uppercase opacity-90">
               Read this to the vendor
             </h2>

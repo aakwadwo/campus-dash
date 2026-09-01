@@ -177,8 +177,8 @@ export default function OrderActions({ order, vendorId }) {
 /** Sized for a thumb on a phone propped next to a hot plate. */
 function BigButton({ children, disabled, tone }) {
   const tones = {
-    accept: 'bg-brand-600 text-white',
-    ready: 'bg-blue-700 text-white',
+    accept: 'bg-brand-500 text-ink',
+    ready: 'bg-brand-500 text-ink',
     reject: 'bg-red-700 text-white',
   };
   return (

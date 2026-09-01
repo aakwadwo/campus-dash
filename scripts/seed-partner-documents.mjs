@@ -84,18 +84,15 @@ function png(width, height, [r, g, b], stripe) {
 // --- Upload -----------------------------------------------------------------
 
 async function upload(path, body) {
-  const response = await fetch(
-    `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${encodeURI(path)}`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${SERVICE_KEY}`,
-        'Content-Type': 'image/png',
-        'x-upsert': 'true',
-      },
-      body,
-    }
-  );
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      'Content-Type': 'image/png',
+      'x-upsert': 'true',
+    },
+    body,
+  });
   if (!response.ok) {
     throw new Error(`${path}: ${response.status} ${await response.text()}`);
   }

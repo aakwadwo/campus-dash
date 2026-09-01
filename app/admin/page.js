@@ -76,14 +76,6 @@ export default async function AdminOverview() {
           <Empty>No scheduled jobs registered.</Empty>
         )}
       </Panel>
-
-      <Panel title="What this module does not do yet">
-        <ul className="text-muted list-inside list-disc space-y-1 text-sm">
-          <li>The live order board and order overrides arrive with the vendor module.</li>
-          <li>Partner document uploads arrive in Phase 8; approval here reads whatever exists.</li>
-          <li>Settlement and payout screens arrive in Phase 11.</li>
-        </ul>
-      </Panel>
     </>
   );
 }
@@ -91,7 +83,7 @@ export default async function AdminOverview() {
 function Stat({ label, value, detail, highlight }) {
   return (
     <div
-      className={`rounded-lg bg-white px-5 py-4 ring-1 ${highlight ? 'ring-brand-500/40' : 'ring-black/5'}`}
+      className={`rounded-lg bg-white px-5 py-4 ring-1 ${highlight ? 'ring-brand-600/50' : 'ring-black/5'}`}
     >
       <p className="text-muted text-xs font-medium tracking-wide uppercase">{label}</p>
       <p className="mt-1 text-3xl font-semibold tabular-nums">{value}</p>

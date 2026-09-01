@@ -41,7 +41,7 @@ export default async function PartnerHome() {
         </ul>
         <Link
           href="/partner/apply"
-          className="bg-brand-600 mt-6 block rounded-lg py-4 text-center text-base font-semibold text-white"
+          className="bg-brand-500 text-ink mt-6 block rounded-lg py-4 text-center text-base font-semibold"
         >
           Apply to be a Partner
         </Link>
@@ -87,7 +87,7 @@ export default async function PartnerHome() {
       {active ? (
         <Link
           href="/partner/delivery"
-          className="bg-brand-600 mt-4 block rounded-lg px-4 py-4 text-white"
+          className="bg-brand-500 text-ink mt-4 block rounded-lg px-4 py-4"
         >
           <p className="text-sm opacity-90">You are carrying an order</p>
           <p className="mt-0.5 font-mono text-lg font-semibold">{active.order_number}</p>

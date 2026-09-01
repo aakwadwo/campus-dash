@@ -23,10 +23,10 @@ const GROUPS = [
   {
     key: 'PREPARING',
     title: 'Preparing',
-    tone: 'border-brand-500/30 bg-brand-50',
+    tone: 'border-brand-600/40 bg-brand-50',
     dot: 'bg-brand-600',
   },
-  { key: 'READY', title: 'Ready', tone: 'border-blue-300 bg-blue-50', dot: 'bg-blue-600' },
+  { key: 'READY', title: 'Ready', tone: 'border-brand-600 bg-brand-100', dot: 'bg-brand-700' },
   { key: 'CLOSED', title: 'Finished today', tone: 'border-black/10 bg-white', dot: 'bg-black/20' },
 ];
 
@@ -65,7 +65,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               className={`rounded-full px-4 py-2 text-sm font-semibold ${
                 vendor.is_accepting_orders
                   ? 'text-ink bg-white ring-1 ring-black/15'
-                  : 'bg-brand-600 text-white'
+                  : 'bg-brand-500 text-ink'
               }`}
             >
               {vendor.is_accepting_orders ? 'Close stall' : 'Open stall'}
@@ -145,7 +145,7 @@ function OrderCard({ order, vendorId, tone }) {
         )}
       </div>
       {order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
-        <p className="mt-1 text-sm font-medium text-blue-800">
+        <p className="text-brand-700 mt-1 text-sm font-medium">
           {order.partner_assigned ? 'Partner assigned — coming to collect' : 'Finding a Partner…'}
         </p>
       ) : null}

@@ -33,8 +33,8 @@ export default async function PartnersPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Partner applications</h1>
       <p className="text-muted mb-6 text-sm">
-        Approval is manual: compare the live face photograph against the student ID. Document
-        capture arrives in Phase 8 — applications made before then have no images to show.
+        Approval is manual: compare the live face photograph against the student ID. Images are held
+        in a private bucket and shown here through short-lived signed URLs.
       </p>
 
       <Panel title={`Waiting for review (${pending.length})`}>

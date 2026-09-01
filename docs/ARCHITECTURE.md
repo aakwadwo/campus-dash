@@ -11,7 +11,7 @@ Not Uber. No Google Maps, no GPS, no live tracking, no turn-by-turn navigation.
 | Layer        | Choice                                                         |
 | ------------ | -------------------------------------------------------------- |
 | Framework    | Next.js 16, App Router, **JavaScript** (no TypeScript)         |
-| UI           | React 19, Tailwind CSS 4                                       |
+| UI           | React 19, Tailwind CSS 4 — white, black, one yellow accent     |
 | Data         | Supabase — Postgres, Auth, private Storage, Row Level Security |
 | Server logic | Route Handlers + Server Actions                                |
 | Deploy       | Vercel (later)                                                 |
@@ -52,10 +52,16 @@ rest of the application talks to and nothing else:
 | Seam     | Interface                                                                                       | V1 implementation                                                  |
 | -------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Payments | `lib/payments/provider.js` — `initiateCollection`, `getStatus`, `handleWebhook`, `sendTransfer` | `FakePaymentProvider` — async, ~2s to settle, fake transaction ids |
-| SMS      | `lib/sms/provider.js` — `send(phone, message)`                                                  | `FakeSmsProvider` — prints to the server console                   |
+| SMS      | `lib/sms/provider.js` — `send(phone, message)`                                                  | `FakeSmsProvider` (dev) · `ArkeselSmsProvider` (production)        |
 
-Adding `HubtelPaymentProvider` or a Ghana SMS provider means one new file plus a
-case in the factory. No order, allocation or settlement code changes.
+Adding `HubtelPaymentProvider` means one new file plus a case in the factory. No
+order, allocation or settlement code changes. Arkesel arrived exactly that way —
+`lib/sms/arkesel.js` plus a case — and nothing outside `lib/sms` knows its name.
+
+SMS acceptance and SMS delivery are separate facts. Arkesel returning `ok` means
+it took the message; whether a handset received it comes back minutes later on a
+signed delivery webhook and lands on the same `notification_events` row. See
+`docs/SMS.md`.
 
 Notifications sit one level above SMS: business logic emits a domain event
 (`ORDER_ACCEPTED`, `PARTNER_ASSIGNED`, …) via `lib/notifications`, which renders
@@ -110,7 +116,11 @@ a second login — a user can be Customer and Partner and switch modes in the UI
   captured with the device camera. No gallery or file upload — the point is to
   let an admin compare the face to the ID. Approval is manual in V1.
 - Vendor: hand-recruited; registration is closed. Admin creates and approves.
-- Admin: elevated access through server-side mechanisms only.
+- Admin: email and password, at `/login/admin`. Not phone OTP — operational
+  access must not depend on an SMS arriving, least of all when messaging is the
+  thing that is broken. `is_admin` is a database column no client statement can
+  reach, and every `admin_*` function re-checks it in its own body. The first
+  administrator is created out-of-band with `npm run admin:create`.
 
 ## Privacy
 
@@ -146,12 +156,12 @@ app/
   api/…                     route handlers — all server authority lives here
 lib/
   config.js                 the ONLY place process.env is read
-  supabase/browser.js       anon key, RLS applies
+  supabase/browser.js       publishable key, RLS applies
   supabase/server.js        acts as the signed-in user, RLS applies
   supabase/admin.js         service role, BYPASSES RLS, server-only
   supabase/middleware.js    session refresh
   payments/                 PaymentProvider + FakePaymentProvider
-  sms/                      SmsProvider + FakeSmsProvider
+  sms/                      SmsProvider, Fake + Arkesel, delivery webhook
   notifications/            domain events → copy → channels
   auth/session.js           session + capabilities, derived from the database
   auth/webhook-signature.js Standard Webhooks HMAC for the Send SMS Hook
@@ -159,11 +169,26 @@ lib/
   orders/transitions.js     the ONLY way the app changes order state
   util/money.js             integer pesewas
   util/codes.js             pickup / delivery codes (CSPRNG)
-supabase/migrations/        all schema changes, in order
+supabase/migrations/        all schema changes, in order — the history
+supabase/schema.sql         canonical final state, installable from empty
+supabase/schema/            the hand-written head and tail of that file
 supabase/seed.sql           development-only actors, vendors, menus, locations
+supabase/dev/sms-hook.sql   DEVELOPMENT ONLY. Postgres Send SMS Hook, for when
+                            the app runs against a hosted project
+scripts/                    build-schema, install-schema, schema-snapshot,
+                            create-admin, and the local seeding helpers
 tests/                      database, RLS, concurrency and money tests
 docs/
 ```
+
+## Environments
+
+Local development runs against Supabase's Docker stack, applied from
+`supabase/migrations/` plus `supabase/seed.sql`. A hosted project is
+bootstrapped from `supabase/schema.sql` and has no seed at all — its campus
+tree, vendors and menus are created through `/admin`, because fictional
+development data does not belong in a real database. See
+[`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md) and [`DATABASE.md`](./DATABASE.md).
 
 ## Deliberately not built in V1
 

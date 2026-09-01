@@ -92,6 +92,10 @@ describe('schema invariants', () => {
       // Writes the SMS delivery log. Server contexts only — a client that could
       // write here could forge a record of a message nobody sent.
       'record_notification',
+      // Applies the provider's delivery report. A client that could call this
+      // could mark its own unsent messages delivered, which is precisely the
+      // record support relies on when someone says a code never arrived.
+      'record_sms_delivery_status',
     ];
     const callable = await asService(
       async (c) =>
@@ -225,6 +229,7 @@ describe('schema invariants', () => {
       'admin_resolve_dispute',
       'admin_review_partner',
       'admin_scheduled_job_status',
+      'admin_undelivered_notifications',
       'admin_settlement_payouts',
       'admin_settlement_runs',
       'admin_set_location_active',

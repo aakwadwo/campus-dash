@@ -103,7 +103,7 @@ function FilterChip({ active, href, label }) {
     <Link
       href={href}
       className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-        active ? 'bg-brand-600 text-white' : 'bg-white ring-1 ring-black/10'
+        active ? 'bg-brand-500 text-ink' : 'bg-white ring-1 ring-black/10'
       }`}
     >
       {label}

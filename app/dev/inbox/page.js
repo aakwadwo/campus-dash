@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { isDevInboxEnabled, recent } from '@/lib/sms/dev-inbox';
+import { recentFromDatabase } from '@/lib/sms/dev-inbox-db';
 
 /**
  * Development SMS inbox — every message the fake provider "sent", newest first.
@@ -8,13 +9,25 @@ import { isDevInboxEnabled, recent } from '@/lib/sms/dev-inbox';
  * needs an OTP. Reading them out of the server terminal while switching browser
  * profiles is where a walkthrough goes wrong, so they are readable here instead.
  *
+ * Two sources, merged newest-first, because an OTP arrives by a different route
+ * depending on which Supabase the app is pointed at:
+ *
+ *   - In-memory buffer — everything FakeSmsProvider sent from this process:
+ *     every order notification, plus phone OTPs when the Send SMS Hook is our
+ *     HTTPS route (the local stack, and production).
+ *   - public.dev_sms_outbox — phone OTPs from a HOSTED development project,
+ *     where Supabase Auth cannot reach localhost and the hook is a Postgres
+ *     function instead. Optional; absent unless supabase/dev/sms-hook.sql was
+ *     installed. Read with the service-role key, because the table has RLS on
+ *     and no policies.
+ *
  * THREE INDEPENDENT GATES, because this page displays one-time passcodes:
  *
  *   1. Not production. NODE_ENV is set by the build, not by a request.
  *   2. The provider must actually be the fake. With a real provider the
  *      messages are not merely hidden — nothing ever recorded them.
- *   3. Messages exist only in this process's memory, so a restart empties it
- *      and nothing is ever written to the database or a log.
+ *   3. Nothing is retained: the buffer is process memory, and the table prunes
+ *      itself to the last 25 messages and fifteen minutes on every write.
  *
  * A production build renders 404 here. There is no flag, header or cookie that
  * turns it on, because the only safe audience for this page is a developer who
@@ -31,15 +44,17 @@ function findCode(message) {
 export default async function DevInboxPage() {
   if (!isDevInboxEnabled()) notFound();
 
-  const messages = recent();
+  const messages = [...recent(), ...(await recentFromDatabase())]
+    .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt))
+    .slice(0, 25);
 
   return (
     <main className="mx-auto max-w-2xl p-4">
       <h1 className="text-xl font-semibold">Development SMS inbox</h1>
       <p className="text-muted mt-1 text-sm">
         The last {messages.length === 0 ? '25' : messages.length} messages the fake provider
-        handled, newest first. Held in memory only — restarting the dev server clears this. Returns
-        404 in a production build.
+        handled, newest first. Nothing is retained: the buffer is cleared by restarting the dev
+        server, and hosted OTPs are pruned after fifteen minutes. Returns 404 in a production build.
       </p>
 
       {messages.length === 0 ? (

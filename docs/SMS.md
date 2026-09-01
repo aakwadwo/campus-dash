@@ -1,0 +1,362 @@
+# SMS — Arkesel
+
+Campus Dash sends every SMS through one interface, `lib/sms/provider.js`.
+Everything Arkesel-specific lives in `lib/sms/arkesel.js` and
+`lib/sms/arkesel-webhook.js`; no order, payment or notification code knows the
+provider's name. Replacing Arkesel later is one new file plus a case in the
+factory.
+
+```
+application event → notify() → dedup → SmsProvider → Arkesel
+                                                        ↓
+                        notification_events ← delivery report webhook
+```
+
+## Choosing a provider
+
+`SMS_PROVIDER` picks the adapter:
+
+|           |                                                                                                             |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| `fake`    | Prints to the server console and `/dev/inbox`. No account, no cost. The default, and what development uses. |
+| `arkesel` | The real thing. **Every message spends credit.**                                                            |
+
+Phone OTP goes through whichever is configured, because Supabase Auth's Send
+SMS Hook hands the message to the same seam as every order notification. So
+switching to `arkesel` switches sign-in codes to real SMS at the same time.
+
+**Locally, `supabase/config.toml` still declares a placeholder Twilio block.**
+That is a Supabase CLI limitation and nothing more: the CLI derives
+`GOTRUE_EXTERNAL_PHONE_ENABLED` solely from an enabled `[auth.sms.<provider>]`
+block and offers no other way to set it (`[auth.sms] enabled = true` is not
+honoured — checked). Its credentials are non-functional and GoTrue never calls
+them. **It does not apply to the hosted project**, which needs no provider at
+all — see section 2a.
+
+---
+
+## 1. What to put in `.env.local`
+
+```bash
+SMS_PROVIDER=arkesel
+
+# From the Supabase dashboard → Authentication → Hooks → Send SMS Hook.
+# SERVER ONLY. Space-separate two values during a secret rotation.
+SEND_SMS_HOOK_SECRETS=v1,whsec_...
+
+# From the Arkesel dashboard → API keys. SERVER ONLY.
+ARKESEL_API_KEY=
+
+# The sender name recipients see. Must be registered with Arkesel; 11 characters
+# maximum. Not secret, but not hard-coded either.
+ARKESEL_SENDER_ID=CampusDash
+
+# From the Arkesel dashboard → webhook settings. SERVER ONLY.
+ARKESEL_WEBHOOK_SECRET=
+
+# Where this deployment is reachable. Used to build the delivery-report callback
+# URL. Without it, sending works and you simply never learn the outcome.
+PUBLIC_APP_URL=https://your-deployment.example
+```
+
+The API key is a bearer credential for an account with real money in it: anyone
+holding it can send SMS at your cost, to numbers they choose. It and the webhook
+secret are read only through `config.serverOnly()`, which throws if browser code
+ever reaches for one, and `tests/secrets.test.js` asserts that neither the names
+nor the values appear in a built client bundle.
+
+Arkesel's v1 API takes the key in the **query string** — their design, not a
+choice — which makes the request URL itself a secret. `lib/sms/arkesel.js`
+therefore never logs a URL, never puts one in an error message, and never
+returns one.
+
+## 2. What to configure in the Supabase dashboard
+
+Phone OTP reaches Arkesel through Supabase's **Send SMS Hook**, which posts to
+this application. Three settings, all under **Authentication**:
+
+### a. Enable the Phone provider — with NO SMS provider
+
+**Authentication → Sign In / Providers → Phone → enable.**
+
+**Do not configure Twilio, MessageBird, Vonage, TextLocal or Twilio Verify.**
+The hook replaces them, and any credentials entered there would be dead weight
+that never gets called.
+
+The dashboard form may still present an SMS-provider section. It is not needed:
+verified directly against gotrue v2.196.0, with
+`GOTRUE_EXTERNAL_PHONE_ENABLED=true`, `GOTRUE_HOOK_SEND_SMS_ENABLED=true` and no
+provider at all, `/settings` reports `sms_provider: ""` and a real OTP is
+delivered through the hook. The only flag that matters is the phone toggle.
+
+If the form refuses to save without provider credentials, set the flag directly
+instead — this needs a personal access token from
+supabase.com/dashboard/account/tokens:
+
+```bash
+curl -X PATCH "https://api.supabase.com/v1/projects/<project-ref>/config/auth" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"external_phone_enabled": true}'
+```
+
+Confirm either way:
+
+```bash
+curl -s https://<project-ref>.supabase.co/auth/v1/settings \
+  -H "apikey: $NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" | grep -o '"phone":[a-z]*'
+```
+
+### b. Point the Send SMS Hook at this application
+
+**Authentication → Hooks → Send SMS Hook → enable → HTTPS.**
+
+| Field  | Value                                                       |
+| ------ | ----------------------------------------------------------- |
+| URL    | `https://<your-deployment>/api/auth/hooks/send-sms`         |
+| Secret | generated by the dashboard, in the form `v1,whsec_<base64>` |
+
+Copy that secret into `SEND_SMS_HOOK_SECRETS` in the deployment's environment.
+**The application and the dashboard must hold the same value** — it is the only
+thing standing between this route and an open SMS-sending endpoint.
+
+Supabase names the setting in the plural because it supports rotation: during
+one, put both secrets in, space-separated, and either will be accepted.
+
+```bash
+SEND_SMS_HOOK_SECRETS="v1,whsec_<old> v1,whsec_<new>"
+```
+
+### c. Check the SMS template is not doing the work twice
+
+**Authentication → Templates → SMS.** Supabase's template is irrelevant once the
+hook is enabled — the message the customer receives is composed in
+`app/api/auth/hooks/send-sms/route.js`, and the hook receives only the raw OTP.
+
+### What Supabase requires of the endpoint
+
+The route already satisfies all of this; it is written down because it is easy
+to break.
+
+- **Standard Webhooks signatures.** `webhook-id`, `webhook-timestamp`,
+  `webhook-signature`; HMAC-SHA256 over `{id}.{timestamp}.{body}` keyed with the
+  base64-decoded secret, compared in constant time. Requests more than five
+  minutes old are refused, so a captured one cannot be replayed.
+- **A five-second total budget**, including Supabase's own retries. The provider
+  call is therefore bounded at 3.5s on this path, well short of the adapter's
+  ordinary 15s.
+- **`Content-Type: application/json`**, always. 200 with an empty body is success.
+- **Only 429 and 503 are retried**, up to three times with a two-second backoff,
+  and only with a non-empty `retry-after` header. So a transient failure
+  (network, timeout, Arkesel 5xx) returns **503 + `retry-after: 2`**, and a
+  permanent one (unregistered sender, unreachable number, rejected key) returns
+  **500** — asking again would spend the budget to receive the same answer.
+
+## 3. What to configure in the Arkesel dashboard
+
+1. **Register a sender ID.** Maximum 11 characters, e.g. `CampusDash`. An
+   unregistered sender is rejected with code 106.
+2. **Set the webhook secret**, and put the same value in `ARKESEL_WEBHOOK_SECRET`.
+3. **Set the delivery callback URL** to:
+
+   ```
+   https://<your-deployment>/api/sms/webhook/arkesel
+   ```
+
+   Campus Dash also passes a per-message `callback_url` on every send, carrying
+   its own `ref`. That reference is what matches a report back to a message —
+   see below — so per-message callbacks are the ones that matter.
+
+4. **Top up the balance.** Running out is the single most common cause of "SMS
+   stopped working", and it shows up as code 105.
+
+## 4. Send one real SMS
+
+```bash
+npm run sms:test -- 0201234567
+```
+
+This is the only thing in the repository that spends credit, which is why it is
+a script you run deliberately and never part of `npm test`. It goes through the
+real `ArkeselSmsProvider`, so success means the adapter, credentials and sender
+ID all genuinely work.
+
+Successful output:
+
+```
+Campus Dash — one real SMS through Arkesel
+  to:        +233201234567
+  sender:    CampusDash
+  ...
+  ACCEPTED by Arkesel.
+  Remaining balance: 6
+```
+
+Arkesel's own response for a successful send is:
+
+```json
+{ "code": "ok", "message": "Successfully Sent", "balance": 6, "main_balance": 0.165, "user": "..." }
+```
+
+**Accepted is not delivered.** A 200 means Arkesel took the message, not that a
+handset received it. The real outcome arrives later on the webhook, which is the
+whole reason the webhook exists.
+
+## 5. How a delivery report finds its message
+
+Arkesel's v1 send response carries no message id, so there is nothing to
+correlate on at send time. What it does support is a per-request `callback_url`.
+
+So `notify()` generates a UUID **before** sending, hands it to the adapter as
+`idempotencyKey`, and the adapter appends it to the callback URL as `ref`.
+Arkesel calls back with that `ref` plus its own `sms_id` and `status`. The
+reference is stored on the notification row as `correlation_id`, and the report
+updates that row.
+
+`provider_message_id` holds Arkesel's own `sms_id` — the thing to quote in a
+support ticket — and is **write-once**: a report fills it in when the send did
+not record one, and never changes one that was already recorded.
+
+Arkesel's statuses map to ours:
+
+| Arkesel             | Campus Dash |
+| ------------------- | ----------- |
+| `DELIVRD`           | `DELIVERED` |
+| `UNDELIV`, `FAILED` | `FAILED`    |
+| `REJECTD`           | `REJECTED`  |
+| `EXPIRED`           | `EXPIRED`   |
+| anything else       | `UNKNOWN`   |
+
+Anything unrecognised becomes `UNKNOWN`, never silently `DELIVERED`.
+
+## 6. Test the webhook
+
+Against a running server, without waiting for a real report:
+
+```bash
+# Accepted, and the notification picks up the status.
+npm run sms:webhook -- <correlation-ref> DELIVRD
+
+# The same report again — deduplicated on the webhook id, changes nothing.
+npm run sms:webhook -- <correlation-ref> DELIVRD --id=<same-id-as-before>
+
+# A valid signature over a MODIFIED payload. Must be refused.
+npm run sms:webhook -- <correlation-ref> DELIVRD --tamper
+
+# Nonsense signature. Must be refused.
+npm run sms:webhook -- <correlation-ref> DELIVRD --bad-signature
+```
+
+Expected:
+
+```
+genuine    → HTTP 200  {"ok":true,"matched":true,"status":"DELIVERED"}
+duplicate  → HTTP 200  {"ok":true,"duplicate":true}
+tampered   → HTTP 401  {"error":"invalid signature"}
+bad sig    → HTTP 401  {"error":"invalid signature"}
+```
+
+A correlation reference comes from the `notification_events` table:
+
+```sql
+select correlation_id, event, recipient, succeeded, delivery_status
+  from notification_events order by id desc limit 5;
+```
+
+`matched: false` is not a failure — it means no message in this database carries
+that reference, which is the right answer after a database reset, and it returns
+200 so the provider stops retrying over a message that will never exist.
+
+## 7. The Arkesel delivery signature — the one thing not confirmed
+
+Arkesel sends three headers:
+
+```
+X-Arkesel-Webhook-Timestamp
+X-Arkesel-Webhook-Signature
+X-Arkesel-Webhook-Id
+```
+
+**Their published documentation does not state which bytes the signature covers
+or how it is encoded**, and no public sample shows it. Rather than bury a guess
+in the verifier, the canonical form is named explicitly and configurable:
+
+```bash
+ARKESEL_WEBHOOK_SCHEME=timestamp.body:hex   # the default
+```
+
+| Value                   | HMAC-SHA256 over        | Encoding |
+| ----------------------- | ----------------------- | -------- |
+| `timestamp.body:hex`    | `<timestamp>.<payload>` | hex      |
+| `timestamp.body:base64` | `<timestamp>.<payload>` | base64   |
+| `body:hex`              | `<payload>`             | hex      |
+| `body:base64`           | `<payload>`             | base64   |
+
+`<payload>` is the raw request body for a POST, or the raw query string for a
+GET — whichever actually carried the data, exactly as received.
+
+The default is the near-universal convention (Stripe, Svix, GitHub). **Confirm
+it against one real webhook** the first time Arkesel calls you: if the default
+is wrong the request is rejected, and in development the server log names the
+scheme that _would_ have matched:
+
+```
+[sms-webhook] REJECTED: signature mismatch
+[sms-webhook] the signature matches scheme "body:base64".
+              Set ARKESEL_WEBHOOK_SCHEME=body:base64 — see docs/SMS.md.
+```
+
+Set that value and restart. The diagnostic is development-only, reports a scheme
+name and nothing else, and never affects whether a request is accepted.
+
+Exactly one scheme is ever accepted. Accepting whichever happens to match would
+be the accommodating choice and a hole: the body-only variants bind no
+timestamp, so allowing one as a fallback would silently discard replay
+protection for every request.
+
+## 8. What the delivery webhook guarantees
+
+- **Nothing is trusted before verification**, including the query string.
+- **Replay protection**: a report more than five minutes old, or from the
+  future, is refused.
+- **Deduplication** on `X-Arkesel-Webhook-Id`, through the same
+  `webhook_events` table the payment webhook uses. A report delivered five
+  times updates one row once. With no id header, a deterministic one is derived
+  from the report itself so genuine retries still collapse.
+- **Rejected reports are still recorded**, flagged `INVALID_SIGNATURE`, so a
+  stream of forgeries is visible rather than silently dropped.
+- **Idempotent processing**: a conditional UPDATE keyed on the correlation
+  reference.
+
+## 9. Troubleshooting
+
+| Symptom                                     | Cause                                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `Arkesel rejected the API key` (102)        | Wrong or revoked `ARKESEL_API_KEY`.                                                            |
+| `insufficient balance` (105)                | Top up. The `balance` in a successful response is the early warning.                           |
+| `rejected the sender ID` (106)              | `ARKESEL_SENDER_ID` is unregistered or over 11 characters.                                     |
+| `rejected the phone number` (103)           | Not a number Arkesel can reach. Campus Dash normalises to E.164 and strips the `+`.            |
+| `flagged the message content as spam` (111) | Reword the template.                                                                           |
+| `did not respond within 15000ms`            | Network or Arkesel outage. The send is recorded as failed and can be retried.                  |
+| Messages send, no delivery reports          | `PUBLIC_APP_URL` unset, unreachable from the internet, or the dashboard callback URL is wrong. |
+| Reports arrive as 401                       | Signature scheme mismatch — see section 7.                                                     |
+| Reports arrive `matched: false`             | The reference is not in this database. Normal after a reset.                                   |
+| No OTP during development                   | `SMS_PROVIDER` is still `fake` — check `/dev/inbox`, which is where fake messages go.          |
+
+## 10. Development stays free
+
+`/dev/inbox` shows what the fake provider "sent". It has three independent
+gates — not production, provider must be `fake`, and nothing is retained — and
+returns 404 otherwise. See `tests/dev-inbox.test.js`. Turning on
+`SMS_PROVIDER=arkesel` closes it, because with a real provider nothing is
+recorded to show.
+
+## 11. Replacing Arkesel later
+
+1. Add `lib/sms/<provider>.js` extending `SmsProvider`.
+2. Add a case to the factory in `lib/sms/index.js`.
+3. If it reports delivery, add a verifier alongside `arkesel-webhook.js` and a
+   branch in `lib/sms/webhook.js`.
+
+No order, payment, notification or authentication code changes. That is the
+whole point of the seam.

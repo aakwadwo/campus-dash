@@ -38,7 +38,7 @@ export const STAGE = {
   },
   READY: {
     label: 'Ready to collect',
-    tone: 'text-blue-700',
+    tone: 'text-brand-700',
     detail: 'Go to the vendor and pick it up.',
   },
 
@@ -46,17 +46,17 @@ export const STAGE = {
   // told where the Partner is — only what has happened so far.
   SEARCHING_PARTNER: {
     label: 'Finding a Partner',
-    tone: 'text-blue-700',
+    tone: 'text-brand-700',
     detail: 'Your food is cooked and waiting. We are looking for someone to bring it.',
   },
   PARTNER_ASSIGNED: {
     label: 'Partner on the way to the vendor',
-    tone: 'text-blue-700',
+    tone: 'text-brand-700',
     detail: 'They are collecting your order now.',
   },
   ON_THE_WAY: {
     label: 'On the way to you',
-    tone: 'text-blue-700',
+    tone: 'text-brand-700',
     detail: 'Have your delivery code ready — the Partner will ask for it.',
   },
   NO_PARTNER: {

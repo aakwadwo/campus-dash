@@ -5,16 +5,27 @@ import { createClient } from '@/lib/supabase/server';
 export const dynamic = 'force-dynamic';
 
 /**
- * Foundation check for Phase 1.
+ * Environment and connectivity check.
  *
- * Reports whether the environment is wired up and whether Supabase is actually
- * reachable. Never echoes a secret's value — only whether it is present.
+ * Reports whether the environment is wired up and whether Supabase actually
+ * answers — the first thing to look at after pointing the app at a new project.
+ * Never echoes a secret's value, only whether it is present.
  */
 export async function GET() {
+  const presence = config.presence();
+  // Only what this deployment actually needs counts towards "ready". Arkesel is
+  // required once it is the selected provider, and irrelevant before that.
   const env = {
-    supabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
-    supabaseAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
-    supabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    supabaseUrl: presence.supabaseUrl,
+    supabasePublishableKey: presence.supabasePublishableKey,
+    supabaseServiceRoleKey: presence.supabaseServiceRoleKey,
+    ...(config.smsProvider() === 'arkesel'
+      ? {
+          arkeselApiKey: presence.arkeselApiKey,
+          arkeselSenderId: presence.arkeselSenderId,
+          arkeselWebhookSecret: presence.arkeselWebhookSecret,
+        }
+      : {}),
   };
 
   let supabase = 'not_configured';
@@ -34,7 +45,9 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     ready,
-    phase: 'Phase 1 — foundation',
+    // The origin is safe to echo and is the fastest way to confirm which
+    // project this deployment is actually talking to.
+    project: config.isSupabaseConfigured() ? config.supabaseUrl() : null,
     env,
     supabase,
     adapters: { sms: config.smsProvider(), payment: config.paymentProvider() },

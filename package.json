@@ -2,7 +2,7 @@
   "name": "campus-dash",
   "version": "0.1.0",
   "private": true,
-  "description": "Campus Dash \u2014 campus-only ordering and delivery for Academic City University, Ghana",
+  "description": "Campus Dash — campus-only ordering and delivery for Academic City University, Ghana",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,10 +14,17 @@
     "db:reset": "supabase db reset",
     "db:diff": "supabase db diff",
     "db:status": "supabase status",
-    "test": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local \"tests/**/*.test.js\"",
-    "test:watch": "node --test --test-concurrency=1 --env-file-if-exists=.env --env-file-if-exists=.env.local --watch \"tests/**/*.test.js\"",
+    "test": "node --test --test-concurrency=1 --import ./tests/helpers/alias.mjs --conditions=react-server --env-file-if-exists=.env --env-file-if-exists=.env.local \"tests/**/*.test.js\"",
+    "test:watch": "node --test --test-concurrency=1 --import ./tests/helpers/alias.mjs --conditions=react-server --env-file-if-exists=.env --env-file-if-exists=.env.local --watch \"tests/**/*.test.js\"",
     "seed:orders": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-orders.mjs",
-    "seed:documents": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-partner-documents.mjs"
+    "seed:documents": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-partner-documents.mjs",
+    "db:schema": "node scripts/build-schema.mjs",
+    "db:snapshot": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/schema-snapshot.mjs",
+    "db:install": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/install-schema.mjs",
+    "admin:create": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/create-admin.mjs",
+    "verify:hosted": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/verify-hosted.mjs",
+    "sms:test": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/send-test-sms.mjs",
+    "sms:webhook": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/replay-sms-webhook.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

@@ -47,7 +47,7 @@ export default function DeliveryActions({ delivery }) {
             <button
               type="submit"
               disabled={completing}
-              className="bg-brand-600 mt-3 w-full rounded-lg py-4 text-base font-semibold text-white disabled:opacity-60"
+              className="bg-brand-500 text-ink mt-3 w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
             >
               {completing ? 'Confirming…' : 'Complete delivery'}
             </button>

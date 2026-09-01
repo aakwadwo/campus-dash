@@ -9,6 +9,13 @@ node --test --env-file-if-exists=.env --env-file-if-exists=.env.local tests/part
 Needs the local Supabase stack up (`npm run db:start`). A few tests also need
 `npm run dev`; they skip themselves with a clear message when it is not there.
 
+The suite always talks to the **local** database on `127.0.0.1:54322`, whatever
+`.env.local` says. Pointing the application at a hosted project therefore does
+not move the tests — keep the local stack running for them. The two `auth-e2e`
+tests that drive Supabase Auth and then read `auth.users` skip themselves when
+`NEXT_PUBLIC_SUPABASE_URL` is not the local stack, because otherwise they would
+be looking in a different database.
+
 ## How the tests connect
 
 Two identities, and the difference is the point:
@@ -27,18 +34,41 @@ renamed.
 
 ## The suites
 
-| Suite                                    | Covers                                                          |
-| ---------------------------------------- | --------------------------------------------------------------- |
-| `schema`                                 | The invariants everything else rests on                         |
-| `rls`                                    | Who can read what, attempted directly                           |
-| `transitions`                            | Every legal move, and the illegal ones                          |
-| `concurrency`                            | Races and idempotency                                           |
-| `money`, `payment-webhook`, `settlement` | Allocation, dedup, payouts, reconciliation                      |
-| `vendor`, `customer`, `partner`          | Each actor, including what they must not do                     |
-| `auth`, `terms`, `notifications`         | Identity, versioned acceptance, message wiring                  |
-| `hardening`                              | Stuck payments, dedup, config, metrics, provider reconciliation |
-| `e2e`                                    | One complete order, plus nine failure variants                  |
-| `scheduler`                              | The sweeps, including one that waits for real cron              |
+| Suite                                    | Covers                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `schema`                                 | The invariants everything else rests on                                       |
+| `rls`                                    | Who can read what, attempted directly                                         |
+| `transitions`                            | Every legal move, and the illegal ones                                        |
+| `concurrency`                            | Races and idempotency                                                         |
+| `money`, `payment-webhook`, `settlement` | Allocation, dedup, payouts, reconciliation                                    |
+| `vendor`, `customer`, `partner`          | Each actor, including what they must not do                                   |
+| `auth`, `terms`, `notifications`         | Identity, versioned acceptance, message wiring                                |
+| `hardening`                              | Stuck payments, dedup, config, metrics, provider reconciliation               |
+| `dev-sms-hook`                           | The hosted-development Postgres Send SMS Hook, installed and dropped in-suite |
+| `sms-arkesel`                            | The Arkesel adapter, against a mocked fetch. Never spends credit              |
+| `sms-webhook-signature`                  | Signature, replay window, tampering, status mapping                           |
+| `notifications-delivery`                 | notify() at runtime: dedup, retry, delivery reports                           |
+| `secrets`                                | Credentials that must never reach a browser                                   |
+| `e2e`                                    | One complete order, plus nine failure variants                                |
+| `scheduler`                              | The sweeps, including one that waits for real cron                            |
+
+## Why the runner has a loader
+
+`npm test` runs with `--import ./tests/helpers/alias.mjs --conditions=react-server`.
+Next.js resolves `@/lib/...` and extensionless imports; plain Node does not, and
+`server-only` throws outside a React Server Component. That gap had a cost: the
+notification service could not be imported by a test at all, so its runtime was
+never executed, and two ReferenceErrors sat in it — a call to a helper that did
+not exist and a variable read out of scope. Every order-scoped notification threw
+and the caller swallowed it. Templates were covered; the code that sends was not.
+
+The loader closes that. `tests/helpers/local-supabase.js` additionally pins the
+service-role client at the local stack, so a suite can never write to a hosted
+project because `.env.local` happens to name one.
+
+**No test spends SMS credit.** The Arkesel adapter is tested against a mocked
+fetch. `npm run sms:test` is the only thing that sends a real message, and it is
+run by hand.
 
 ## What the tests are for
 

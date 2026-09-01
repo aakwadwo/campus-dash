@@ -214,44 +214,13 @@ update public.pricing_config
 
 
 -- ---------------------------------------------------------------------------
--- Terms documents — PLACEHOLDER TEXT
+-- Terms acceptances — development convenience
 -- ---------------------------------------------------------------------------
--- These are NOT legal terms. They exist so the acceptance mechanism can be
--- exercised end to end. Real text must come from a lawyer familiar with
--- Ghanaian consumer and contractor law before anyone relies on it — see
--- docs/PILOT-QUESTIONS.md.
-insert into public.terms_documents (audience, version, title, body, published_at) values
-  ('CUSTOMER', 1, 'Campus Dash customer terms (PLACEHOLDER)',
-   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
-   'You order from independent vendors around Academic City. Campus Dash takes '
-   'payment, passes the food amount to the vendor, and arranges delivery by a '
-   'verified student Partner when you ask for one.\n\n'
-   'You are not charged until a vendor accepts your order. Prices are set by '
-   'vendors. Campus Dash charges a service fee, and a delivery fee when a '
-   'Partner brings your order.\n\n'
-   'You will be given a delivery code. Give it only to the Partner who brings '
-   'your order.', now()),
+-- The terms DOCUMENTS themselves are reference data and live in a migration
+-- (20260908000001), because every environment needs them. Only the acceptances
+-- are development-only: they exist so a local walkthrough does not start behind
+-- a consent wall. New sign-ups still get the real prompt.
 
-  ('VENDOR', 1, 'Campus Dash vendor terms (PLACEHOLDER)',
-   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
-   'You accept or reject orders within the response window shown in the app. '
-   'Prices are yours; Campus Dash does not change them. You mark food READY '
-   'only when it is actually ready.\n\n'
-   'Campus Dash settles the food amount to you daily. Campus Dash does not hold '
-   'your money as a balance.\n\n'
-   'You verify a Partner''s pickup code before handing over any order.', now()),
-
-  ('PARTNER', 1, 'Campus Dash Partner terms (PLACEHOLDER)',
-   E'PLACEHOLDER TEXT — NOT LEGAL ADVICE.\n\n'
-   'You are an independent student Partner, not an employee of Campus Dash.\n\n'
-   'You carry one delivery at a time. You collect orders using the pickup code '
-   'shown in your app and complete them using the code the customer gives you.\n\n'
-   'Customer contact details are shown only while you are carrying their order, '
-   'and must not be recorded, shared or used for anything else.\n\n'
-   'Campus Dash pays Partner earnings weekly.', now());
-
--- Seeded actors have already accepted the current terms, so development does not
--- start behind a wall. New sign-ups get the real prompt.
 insert into public.terms_acceptances (user_id, terms_id, audience, version)
 select u.id, t.id, t.audience, t.version
   from public.users u

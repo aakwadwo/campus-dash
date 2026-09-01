@@ -65,7 +65,7 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               <button
                 type="submit"
                 disabled={accepting}
-                className="bg-brand-600 w-full rounded-lg py-3.5 text-base font-semibold text-white disabled:opacity-60"
+                className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
               >
                 {accepting ? 'Accepting…' : 'Accept this delivery'}
               </button>

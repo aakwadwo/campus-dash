@@ -74,3 +74,26 @@ and message bodies.
 A dropped SMS must not undo a state transition that already happened. The order
 is real whether or not the message arrived. Failures are logged and swallowed,
 and surface on the admin screen rather than as an exception the customer sees.
+
+## Delivery reports
+
+A send being accepted and a message arriving are different facts, and the
+notification log now records both. `succeeded` says the provider took it;
+`delivery_status` says what happened afterwards, and stays null until the
+provider reports.
+
+The correlation is ours. Arkesel's v1 send response carries no message id, so
+`notify()` generates a UUID before sending, hands it to the adapter, and the
+adapter puts it in the per-message callback URL. Arkesel gives it back on the
+report, which is matched to the row by `correlation_id`.
+
+`notification_events` remains append-only. The guard was narrowed, not removed:
+DELETE is still forbidden, and UPDATE is permitted only when the sole columns
+that changed are the three a delivery report fills in — with
+`provider_message_id` write-once. Everything that records who was told what, and
+when, is still immutable. `tests/audit.test.js` pins down exactly that.
+
+`admin_undelivered_notifications()` answers the question the reports make
+answerable: what did not arrive.
+
+Full setup, the signature scheme and troubleshooting: [`SMS.md`](./SMS.md).

@@ -36,6 +36,12 @@ its return shape silently reverted to the default.
 **If you add a table or function, the allowlist test will fail until you decide
 who may reach it.** That is the point.
 
+`supabase/schema.sql` closes the trap from the other end: the
+`ALTER DEFAULT PRIVILEGES … REVOKE` statements run **before the first CREATE**,
+so on a fresh project no object ever exists in the permissive state, even
+momentarily. The file then asserts that at the end of the install and refuses to
+report success otherwise.
+
 ## Invariants, asserted by tests
 
 - RLS enabled on every table in `public`
@@ -95,6 +101,34 @@ configurable two minutes. Deleting the object invalidates outstanding URLs
 immediately — they resolve to a 404.
 
 The applicant never receives a storage path.
+
+## Credentials
+
+- `NEXT_PUBLIC_SUPABASE_URL` and the publishable key are the only values that
+  reach the browser. Every query the publishable key makes is subject to RLS,
+  and clients hold SELECT only.
+- `SUPABASE_SERVICE_ROLE_KEY` bypasses RLS entirely. It is read only through
+  `config.supabaseServiceRoleKey()`, which throws if touched in browser code,
+  and `lib/supabase/admin.js` is marked `server-only` so importing it into a
+  client component fails the build.
+- `SUPABASE_DB_URL` contains the database password and is used only by the
+  maintenance scripts. The application never reads it.
+- `ARKESEL_API_KEY` is a bearer credential for an account with real money in it.
+  Arkesel's v1 API takes it in the query string, which makes the request URL
+  itself a secret — so `lib/sms/arkesel.js` never logs a URL, never puts one in
+  an error message and never returns one.
+- `ARKESEL_WEBHOOK_SECRET` is what stops anyone who finds the callback URL
+  writing into the notification log.
+- `tests/secrets.test.js` asserts all of this mechanically: no `NEXT_PUBLIC_`
+  name, every read through `serverOnly()`, `process.env` touched in one module,
+  no client component importing the adapter, and neither the names nor the
+  values present in a built client bundle.
+- No credential is committed. `.env` and `.env.local` are gitignored,
+  `.env.example` carries names and never values, and `/api/health` reports
+  whether each variable is present without echoing any of them.
+- Administrator passwords are never a command-line argument, never echoed, and
+  never stored anywhere in this repository — `scripts/create-admin.mjs` reads
+  one from a hidden prompt and hands it straight to Supabase Auth.
 
 ## Money
 

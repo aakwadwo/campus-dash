@@ -3,6 +3,11 @@
 Clone to a working system in about five minutes, most of which is Docker
 pulling Supabase images the first time.
 
+For a **hosted** Supabase project — real persistence, no Docker, an admin
+account you create yourself — see [`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md).
+The application code is the same either way; only environment variables and the
+project's own Auth settings differ.
+
 ## What you need
 
 |        |                                           |
@@ -26,12 +31,19 @@ echo 'SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN=unused-hook-handles-delivery' >> .env
 npm run db:start        # first run pulls images; several minutes
 ```
 
-`db:start` prints an `ANON_KEY` and `SERVICE_ROLE_KEY`. Put them in `.env.local`:
+`db:start` prints a `PUBLISHABLE_KEY` and a `SERVICE_ROLE_KEY`. Put them in
+`.env.local`:
 
 ```bash
 cp .env.example .env.local
-# then paste the two keys in
+# then paste the two keys in as
+#   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+#   SUPABASE_SERVICE_ROLE_KEY
 ```
+
+`NEXT_PUBLIC_SUPABASE_URL` is the project ORIGIN — `http://127.0.0.1:54321`
+locally — not the REST endpoint. The client libraries append `/rest/v1`,
+`/auth/v1` and `/storage/v1` themselves.
 
 ```bash
 npm run dev             # http://127.0.0.1:3000
@@ -46,21 +58,27 @@ belongs in `.env.local`. Both are gitignored.
 
 ## Signing in
 
-There are no passwords — everyone signs in by phone. The fake SMS provider
-prints the OTP to the `npm run dev` console, so watch that terminal.
+Customers, vendors and Partners sign in by phone; there are no passwords for
+them. The fake SMS provider prints the OTP to the `npm run dev` console and to
+http://localhost:3000/dev/inbox.
 
 Seeded accounts (all fictional, all `+2332000000xx`):
 
-| Phone        | Who                                |
-| ------------ | ---------------------------------- |
-| `0200000001` | Admin                              |
-| `0200000011` | Vendor staff — Test Kitchen One    |
-| `0200000012` | Vendor staff — Test Grill Two      |
-| `0200000021` | Customer                           |
-| `0200000031` | Approved Partner                   |
-| `0200000033` | Partner applicant, awaiting review |
+| Phone        | Who                                                  |
+| ------------ | ---------------------------------------------------- |
+| `0200000001` | Admin (also reachable at `/login/admin` — see below) |
+| `0200000011` | Vendor staff — Test Kitchen One                      |
+| `0200000012` | Vendor staff — Test Grill Two                        |
+| `0200000021` | Customer                                             |
+| `0200000031` | Approved Partner                                     |
+| `0200000033` | Partner applicant, awaiting review                   |
 
 Type the local part (`0200000001`); it is normalised to E.164.
+
+Administrators can also sign in with an email and password at `/login/admin`,
+which is how a real deployment works — operational access should not depend on
+an SMS arriving. The local seed has no password on the admin account; create one
+with `npm run admin:create` if you want to exercise that path.
 
 ## Placing test orders
 
@@ -81,6 +99,10 @@ npm run lint
 npm run build
 npm run db:reset     # re-apply every migration + seed. Destroys local data.
 npm run db:status    # URLs and keys
+npm run db:schema    # regenerate supabase/schema.sql from the migrations
+npm run db:snapshot  # print the full schema state, for comparison
+npm run admin:create # create or promote an administrator
+npm run verify:hosted # check a project over HTTPS, with the API keys only
 ```
 
 Supabase Studio is at http://127.0.0.1:54323.
@@ -103,8 +125,9 @@ taken by another project's stack.
 **"Database error finding user" on sign-in** — the local stack drifted from the
 migrations. `npm run db:reset`.
 
-**No OTP appears** — check the `npm run dev` terminal, not the browser. Confirm
-`SMS_PROVIDER=fake` and that `.env` has `SEND_SMS_HOOK_SECRET`.
+**No OTP appears** — check the `npm run dev` terminal or
+http://localhost:3000/dev/inbox, not the browser you are signing in from.
+Confirm `SMS_PROVIDER=fake` and that `.env` has `SEND_SMS_HOOK_SECRET`.
 
 **Session dies after `db:reset`** — expected. The reset wipes `auth.sessions`;
 sign in again.

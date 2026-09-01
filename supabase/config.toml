@@ -281,15 +281,20 @@ uri = "http://host.docker.internal:3000/api/auth/hooks/send-sms"
 # anyone who found the URL could drive.
 secrets = "env(SEND_SMS_HOOK_SECRET)"
 
-# Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
-# GoTrue gates phone auth behind GOTRUE_EXTERNAL_PHONE_ENABLED, and the CLI only
-# sets that when an SMS PROVIDER block is enabled — having the Send SMS Hook is
-# not enough on its own. So a provider is declared here purely to turn phone
-# login on. The credentials are deliberately non-functional: when the hook is
-# enabled GoTrue delivers through the hook and never calls the provider.
+# A PLACEHOLDER PROVIDER, AND ONLY BECAUSE OF THE CLI.
 #
-# Verified locally: with these placeholders in place, OTPs arrive via our
-# FakeSmsProvider and nothing reaches Twilio.
+# GoTrue gates phone auth behind GOTRUE_EXTERNAL_PHONE_ENABLED. The Supabase CLI
+# derives that flag solely from whether an [auth.sms.<provider>] block is
+# enabled, and offers no other way to set it — `[auth.sms] enabled = true` is
+# not honoured (checked). So a block has to exist here to turn phone login on
+# locally, and its credentials are deliberately non-functional.
+#
+# THIS IS A CLI LIMITATION, NOT A GOTRUE ONE, and it does NOT apply to the
+# hosted project. Verified directly against gotrue v2.196.0: launched with
+# GOTRUE_EXTERNAL_PHONE_ENABLED=true, GOTRUE_HOOK_SEND_SMS_ENABLED=true and NO
+# provider configured at all, it reports sms_provider="" and delivers a real
+# OTP through the Send SMS Hook. Do not configure an SMS provider on the hosted
+# project — see docs/SMS.md.
 [auth.sms.twilio]
 enabled = true
 account_sid = "unused-hook-handles-delivery"

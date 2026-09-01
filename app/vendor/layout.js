@@ -10,5 +10,5 @@ export const metadata = { title: 'Vendor · Campus Dash' };
  */
 export default async function VendorLayout({ children }) {
   await requireVendorStaff();
-  return <div className="min-h-dvh bg-[oklch(0.97_0.004_250)]">{children}</div>;
+  return <div className="bg-canvas min-h-dvh">{children}</div>;
 }

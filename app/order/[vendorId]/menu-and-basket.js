@@ -127,7 +127,7 @@ export default function MenuAndBasket({ vendor, menu, locations }) {
               type="button"
               disabled={!canOrder}
               onClick={() => setStep('review')}
-              className="bg-brand-600 ml-auto rounded-lg px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold disabled:opacity-60"
             >
               Review order
             </button>
@@ -232,7 +232,7 @@ function Review({
               type="button"
               onClick={() => setFulfilment(value)}
               className={`flex-1 rounded-lg py-3 text-sm font-semibold ${
-                fulfilment === value ? 'bg-brand-600 text-white' : 'ring-1 ring-black/15'
+                fulfilment === value ? 'bg-brand-500 text-ink' : 'ring-1 ring-black/15'
               }`}
             >
               {label}
@@ -314,7 +314,7 @@ function Review({
         <button
           type="submit"
           disabled={submitting || !quote || quoting}
-          className="bg-brand-600 flex-1 rounded-lg py-3 text-base font-semibold text-white disabled:opacity-60"
+          className="bg-brand-500 text-ink flex-1 rounded-lg py-3 text-base font-semibold disabled:opacity-60"
         >
           {submitting ? 'Sending…' : 'Send order to vendor'}
         </button>
