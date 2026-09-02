@@ -74,6 +74,14 @@ function Application({ application }) {
         {application.student_id_number ? (
           <span className="text-muted text-sm">ID {application.student_id_number}</span>
         ) : null}
+        {/* Declared by the applicant, never verified — which is exactly why the
+            reviewer needs to see them next to the photographs. */}
+        {application.class_year ? (
+          <span className="text-muted text-sm">{application.class_year}</span>
+        ) : null}
+        {application.email ? (
+          <span className="text-muted text-sm">{application.email}</span>
+        ) : null}
       </header>
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2">

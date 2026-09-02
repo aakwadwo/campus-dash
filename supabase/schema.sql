@@ -916,11 +916,11 @@ $$;
 ALTER FUNCTION "public"."admin_list_actions"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status" "public"."partner_application_status" DEFAULT NULL::"public"."partner_application_status") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "student_id_number" "text", "status" "public"."partner_application_status", "student_id_image_path" "text", "face_image_path" "text", "is_available" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "documents_purge_after" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status" "public"."partner_application_status" DEFAULT NULL::"public"."partner_application_status") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "student_id_number" "text", "class_year" "text", "email" "text", "status" "public"."partner_application_status", "student_id_image_path" "text", "face_image_path" "text", "is_available" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "documents_purge_after" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select p.user_id, u.full_name, u.phone, u.student_id_number, p.status,
+  select p.user_id, u.full_name, u.phone, u.student_id_number, u.class_year, u.email, p.status,
          p.student_id_image_path, p.face_image_path, p.is_available,
          p.applied_at, p.reviewed_at, r.full_name, p.review_notes,
          p.documents_purge_after
@@ -930,7 +930,6 @@ CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status"
    where public.is_admin()
      and (p_status is null or p.status = p_status)
    order by
-     -- Applications waiting on a human come first; nothing else matters as much.
      case when p.status = 'PENDING_REVIEW' then 0 else 1 end,
      p.applied_at asc;
 $$;
@@ -3629,10 +3628,10 @@ $$;
 ALTER FUNCTION "public"."partner_active_delivery"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") RETURNS "public"."partner_profiles"
+CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") RETURNS "public"."partner_profiles"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
-    AS $$
+    AS $_$
 declare
   v_user    uuid := auth.uid();
   v_profile public.partner_profiles%rowtype;
@@ -3647,6 +3646,16 @@ begin
 
   if nullif(btrim(coalesce(p_student_id_number, '')), '') is null then
     raise exception 'a student ID number is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_class_year, '')), '') is null then
+    raise exception 'a class year is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_email, '')), '') is null then
+    raise exception 'an email address is required' using errcode = 'check_violation';
+  end if;
+  if btrim(p_email) !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'that email address does not look like an address'
+      using errcode = 'check_violation';
   end if;
   if nullif(btrim(coalesce(p_student_id_image_path, '')), '') is null
      or nullif(btrim(coalesce(p_face_image_path, '')), '') is null then
@@ -3666,10 +3675,12 @@ begin
       using errcode = 'insufficient_privilege';
   end if;
 
-  -- The declared student ID goes on the user, where the approved-uniqueness
-  -- index lives.
+  -- The declared fields go on the user, where the approved-uniqueness index
+  -- for the student ID lives.
   update public.users
-     set student_id_number = btrim(p_student_id_number)
+     set student_id_number = btrim(p_student_id_number),
+         class_year        = btrim(p_class_year),
+         email             = btrim(p_email)
    where id = v_user;
 
   insert into public.partner_profiles (
@@ -3694,10 +3705,10 @@ begin
 
   return v_profile;
 end;
-$$;
+$_$;
 
 
-ALTER FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
@@ -4384,11 +4395,21 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "student_verified_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "class_year" "text",
+    "email" "text",
+    CONSTRAINT "users_class_year_shape" CHECK ((("class_year" IS NULL) OR ("btrim"("class_year") <> ''::"text"))),
+    CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
     CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
 );
 
 
 ALTER TABLE "public"."users" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."users"."class_year" IS 'Applicant-declared cohort, e.g. "Class of 2029". Declared, never verified.';
+
+
+COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
 
 
 CREATE OR REPLACE FUNCTION "public"."update_my_profile"("p_full_name" "text") RETURNS "public"."users"
@@ -6169,9 +6190,9 @@ GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") FROM PUBLIC;

@@ -1,14 +1,22 @@
-import { requireVendorStaff } from '@/lib/auth/session';
+import { requireUser } from '@/lib/auth/session';
 
 export const metadata = { title: 'Vendor · Campus Dash' };
 
 /**
- * requireVendorStaff() runs on every vendor page through this layout. It is a
- * convenience, not the boundary: the board and every action re-check
- * is_vendor_staff() in the database, so bypassing this reaches screens that
- * return nothing.
+ * Guards the SESSION here, and membership one level down.
+ *
+ * This layout used to call requireVendorStaff(), which bounced anyone with no
+ * stall straight to landingFor() — for an administrator, /admin. That read as
+ * "/vendor shows the admin dashboard" and cost an afternoon of looking for a
+ * routing bug that did not exist.
+ *
+ * Membership is checked where it can be explained: the index lists the stalls
+ * you staff and says so when there are none, and every child route re-checks in
+ * the database. /vendor/<someone else's id> still 404s, because getMyVendors()
+ * and vendor_order_detail() both re-derive is_vendor_staff() server-side. This
+ * layout was never the boundary — RLS and the SECURITY DEFINER functions are.
  */
 export default async function VendorLayout({ children }) {
-  await requireVendorStaff();
+  await requireUser('/vendor');
   return <div className="bg-canvas min-h-dvh">{children}</div>;
 }

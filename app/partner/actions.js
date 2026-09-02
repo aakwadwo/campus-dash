@@ -44,6 +44,8 @@ export async function applyAction(_prev, formData) {
   try {
     await partner.apply({
       studentIdNumber: String(formData.get('student_id_number') ?? '').trim(),
+      classYear: String(formData.get('class_year') ?? '').trim(),
+      email: String(formData.get('email') ?? '').trim(),
       studentIdImagePath: String(formData.get('student_id_image_path') ?? '').trim(),
       faceImagePath: String(formData.get('face_image_path') ?? '').trim(),
     });
@@ -51,7 +53,14 @@ export async function applyAction(_prev, formData) {
     return fail(error);
   }
   revalidatePath('/partner', 'layout');
-  return { ok: true, message: 'Application submitted. An admin will review it.' };
+  // `submitted` is what switches the page from a form to a confirmation. A
+  // message alone left the filled-in form on screen, which reads as "nothing
+  // happened" and invites a second submission.
+  return {
+    ok: true,
+    submitted: true,
+    message: "Application submitted. We'll review it and let you know when a decision is made.",
+  };
 }
 
 export async function setAvailabilityAction(formData) {

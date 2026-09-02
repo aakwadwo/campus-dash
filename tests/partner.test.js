@@ -68,8 +68,10 @@ describe('partner system', () => {
     const before = await application(ACTORS.customerAma);
     assert.equal(before, null, 'no application until they make one');
 
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3)', [
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
       'TEST-STU-9001',
+      'Class of 2029',
+      'ama@example.com',
       'ama/student-id.jpg',
       'ama/face.jpg',
     ]);
@@ -87,22 +89,40 @@ describe('partner system', () => {
     assert.equal(caps.can_order, true, 'and they are still a customer');
   });
 
-  test('an application without both photographs is refused', async () => {
+  test('an application missing any required field is refused', async () => {
     for (const params of [
-      ['TEST-STU-9002', '', 'face.jpg'],
-      ['TEST-STU-9002', 'id.jpg', ''],
-      ['', 'id.jpg', 'face.jpg'],
+      ['TEST-STU-9002', 'Class of 2029', 'ama@example.com', '', 'face.jpg'],
+      ['TEST-STU-9002', 'Class of 2029', 'ama@example.com', 'id.jpg', ''],
+      ['', 'Class of 2029', 'ama@example.com', 'id.jpg', 'face.jpg'],
+      // Declared identity is as required as the photographs: a reviewer uses
+      // the cohort to sanity-check the ID, and the address is the only channel
+      // that still works when SMS is the thing that has failed.
+      ['TEST-STU-9002', '', 'ama@example.com', 'id.jpg', 'face.jpg'],
+      ['TEST-STU-9002', 'Class of 2029', '', 'id.jpg', 'face.jpg'],
     ]) {
       const error = await expectRejection(
-        asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3)', params)
+        asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', params)
       );
       assert.match(error.message, /required/);
     }
+
+    const malformed = await expectRejection(
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
+        'TEST-STU-9002',
+        'Class of 2029',
+        'not-an-address',
+        'id.jpg',
+        'face.jpg',
+      ])
+    );
+    assert.match(malformed.message, /does not look like an address/);
   });
 
   test('the applicant never receives a document path', async () => {
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3)', [
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
       'TEST-STU-9003',
+      'Class of 2029',
+      'ama@example.com',
       'secret/student-id.jpg',
       'secret/face.jpg',
     ]);
@@ -114,8 +134,10 @@ describe('partner system', () => {
 
   test('an approved Partner cannot re-apply; a suspended one is told to contact support', async () => {
     const approved = await expectRejection(
-      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1, $2, $3)', [
+      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1, $2, $3, $4, $5)', [
         'TEST-STU-0031',
+        'Class of 2028',
+        'yaw@example.com',
         'id.jpg',
         'face.jpg',
       ])
@@ -133,8 +155,10 @@ describe('partner system', () => {
       { commit: true }
     );
     const suspended = await expectRejection(
-      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1, $2, $3)', [
+      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1, $2, $3, $4, $5)', [
         'TEST-STU-0032',
+        'Class of 2028',
+        'adjoa@example.com',
         'id.jpg',
         'face.jpg',
       ])
@@ -155,8 +179,10 @@ describe('partner system', () => {
       { commit: true }
     );
 
-    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1, $2, $3)', [
+    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1, $2, $3, $4, $5)', [
       'TEST-STU-0033',
+      'Class of 2027',
+      'kofi@example.com',
       'kofi/id2.jpg',
       'kofi/face2.jpg',
     ]);
@@ -169,8 +195,10 @@ describe('partner system', () => {
 
   test('two approved Partners cannot share a student ID number', async () => {
     const error = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3)', [
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
         'TEST-STU-0031',
+        'Class of 2029',
+        'ama@example.com',
         'id.jpg',
         'face.jpg',
       ])
@@ -183,8 +211,10 @@ describe('partner system', () => {
       c.query('update public.users set is_suspended = true where id = $1', [ACTORS.customerAma])
     );
     const error = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3)', [
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
         'TEST-STU-9004',
+        'Class of 2029',
+        'ama@example.com',
         'id.jpg',
         'face.jpg',
       ])
