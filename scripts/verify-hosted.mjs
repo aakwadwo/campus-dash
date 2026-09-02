@@ -45,6 +45,23 @@ function headers(key) {
   return { apikey: key, Authorization: `Bearer ${key}`, 'content-type': 'application/json' };
 }
 
+/**
+ * Credentials WITHOUT a content-type.
+ *
+ * Storage runs on Fastify, which rejects a request that declares
+ * `content-type: application/json` and then sends no body:
+ *
+ *   {"statusCode":"400","error":"FastifyError",
+ *    "message":"Body cannot be empty when content-type is set to 'application/json'"}
+ *
+ * Every bodyless GET and DELETE below must therefore use this rather than
+ * headers(). The cleanup DELETE used headers(), so it failed on every single
+ * run — silently, because nobody looked at the response.
+ */
+function auth(key) {
+  return { apikey: key, Authorization: `Bearer ${key}` };
+}
+
 async function req(path, { key = CLIENT_KEY, method = 'GET', body } = {}) {
   const res = await fetch(`${URL_}${path}`, {
     method,
@@ -217,53 +234,82 @@ console.log('\nStorage');
   //
   // The mime type matters: uploading text/plain is rejected for being the wrong
   // type, which would have made this pass for entirely the wrong reason.
-  const probe = 'verify-hosted-probe.jpg';
+  //
+  // The name is unique per run and the upload upserts. Both matter: Storage's
+  // POST is create-only, so a fixed name plus one failed cleanup wedges this
+  // check permanently. That is exactly what happened, and the symptom was a
+  // baffling HTTP 400 carrying a "statusCode":"409" body.
+  const probe = `verify-hosted-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const objectUrl = `${URL_}/storage/v1/object/partner-documents/${probe}`;
+
   const upload = (key) =>
-    fetch(`${URL_}/storage/v1/object/partner-documents/${probe}`, {
+    fetch(objectUrl, {
       method: 'POST',
-      headers: { apikey: key, Authorization: `Bearer ${key}`, 'content-type': 'image/jpeg' },
+      headers: { ...auth(key), 'content-type': 'image/jpeg', 'x-upsert': 'true' },
       body: 'probe',
     });
 
+  // Asserting on the BODY as well as the status, here and below. A non-200 on
+  // its own is not evidence of a security control — a malformed request is also
+  // a non-200, and that is precisely how this section came to contain a check
+  // that passed for the wrong reason.
   const clientUpload = await upload(CLIENT_KEY);
+  const clientUploadBody = await clientUpload.text();
   record(
-    clientUpload.status !== 200,
+    clientUpload.status !== 200 && /row-level security|Unauthorized/i.test(clientUploadBody),
     'a client cannot upload into the private bucket',
-    (await clientUpload.text()).slice(0, 80)
+    clientUploadBody.slice(0, 80)
   );
 
   const seeded = await upload(SERVICE_KEY);
-  if (seeded.status === 200) {
-    const sign = await fetch(`${URL_}/storage/v1/object/sign/partner-documents/${probe}`, {
-      method: 'POST',
-      headers: headers(CLIENT_KEY),
-      body: JSON.stringify({ expiresIn: 60 }),
-    });
-    record(
-      sign.status !== 200,
-      'a client cannot mint a signed URL for a document that DOES exist',
-      `HTTP ${sign.status}`
-    );
-
-    const download = await fetch(`${URL_}/storage/v1/object/partner-documents/${probe}`, {
-      headers: headers(CLIENT_KEY),
-    });
-    record(
-      download.status !== 200,
-      'a client cannot download it directly',
-      `HTTP ${download.status}`
-    );
-
-    await fetch(`${URL_}/storage/v1/object/partner-documents/${probe}`, {
-      method: 'DELETE',
-      headers: headers(SERVICE_KEY),
-    });
-  } else {
+  if (seeded.status !== 200) {
     record(
       false,
       'could not place a probe object to test document privacy',
-      `HTTP ${seeded.status}`
+      `HTTP ${seeded.status} ${(await seeded.text()).slice(0, 120)}`
     );
+  } else {
+    try {
+      // A signed URL is the only way an admin ever sees one of these, and it is
+      // minted server-side. A client must not be able to mint its own.
+      const sign = await fetch(`${URL_}/storage/v1/object/sign/partner-documents/${probe}`, {
+        method: 'POST',
+        headers: headers(CLIENT_KEY),
+        body: JSON.stringify({ expiresIn: 60 }),
+      });
+      const signBody = await sign.text();
+      record(
+        sign.status !== 200 && /not_found|NoSuchKey|Unauthorized/i.test(signBody),
+        'a client cannot mint a signed URL for a document that DOES exist',
+        signBody.slice(0, 80)
+      );
+
+      // Storage answers a client with "NoSuchKey" rather than a 403: RLS hides
+      // the row, so the object does not exist as far as the caller is concerned.
+      // That is the right behaviour — a 403 would confirm the file is there.
+      const download = await fetch(objectUrl, { headers: auth(CLIENT_KEY) });
+      const downloadBody = await download.text();
+      record(
+        download.status !== 200 && /not_found|NoSuchKey|Unauthorized/i.test(downloadBody),
+        'a client cannot download it directly',
+        downloadBody.slice(0, 80)
+      );
+
+      // And the server genuinely can, which is what makes the two refusals
+      // above evidence about permission rather than about a missing file.
+      const serviceRead = await fetch(objectUrl, { headers: auth(SERVICE_KEY) });
+      record(
+        serviceRead.status === 200,
+        'the server CAN read it, so those refusals are about permission',
+        `HTTP ${serviceRead.status}`
+      );
+    } finally {
+      // Runs whatever happened above. This used to sit on the happy path only,
+      // and it used to send a JSON content-type with no body, so it failed
+      // silently and orphaned the probe object on every run.
+      const cleanup = await fetch(objectUrl, { method: 'DELETE', headers: auth(SERVICE_KEY) });
+      record(cleanup.status === 200, 'the probe object was cleaned up', `HTTP ${cleanup.status}`);
+    }
   }
 }
 
