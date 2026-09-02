@@ -9,6 +9,7 @@ import * as admin from '@/lib/admin';
 import { purgePartnerDocuments } from '@/lib/admin/documents';
 import { runSettlement, retryFailedPayouts, periodFor } from '@/lib/settlement';
 import { pesewasFromCedisInput } from '@/lib/util/money';
+import { normaliseGhanaPhone } from '@/lib/sms';
 
 /**
  * Server actions for the admin module.
@@ -103,11 +104,21 @@ export async function setVendorStatusAction(_prev, formData) {
 }
 
 export async function addVendorUserAction(_prev, formData) {
+  // public.users.phone is E.164, and admin_add_vendor_user matches it exactly.
+  // Without this, an administrator typing the number the way it is written on a
+  // stall's sign — 020 123 4567 — is told "no Campus Dash account for that
+  // number" about an account that is right there. Sign-in already normalises
+  // through the same function, so this is the same number either way.
+  const phone = normaliseGhanaPhone(str(formData, 'phone'));
+  if (!phone) {
+    return { ok: false, message: 'Enter a valid Ghanaian phone number, e.g. 020 123 4567.' };
+  }
+
   return run(
     () =>
       admin.addVendorUser({
         vendorId: str(formData, 'vendor_id'),
-        phone: str(formData, 'phone'),
+        phone,
         reason: str(formData, 'reason'),
       }),
     'Staff member added.',
