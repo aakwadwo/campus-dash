@@ -9,4 +9,9 @@
 import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
+// The TEMPORARY OTP tracer (lib/observability/otp-trace.js) is on by default,
+// because the whole point of it is production. Silence it under the test runner
+// so its lines do not bury a real assertion failure. Remove with the tracer.
+process.env.OTP_TRACE ??= 'off';
+
 register('./alias-hooks.mjs', pathToFileURL(import.meta.filename));

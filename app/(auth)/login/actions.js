@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { landingFor, safeNext } from '@/lib/auth/landing';
 import { config } from '@/lib/config';
+// TEMPORARY — see lib/observability/otp-trace.js. Remove with the diagnosis.
+import { otpTrace } from '@/lib/observability/otp-trace';
 
 /**
  * Phone OTP sign-in.
@@ -20,8 +22,14 @@ export async function requestOtp(_prevState, formData) {
     return { step: 'phone', error: 'Enter a valid Ghanaian phone number, e.g. 020 123 4567.' };
   }
 
+  const trace = otpTrace('action', phone);
+  trace('requestOtp.start');
+
   const supabase = await createClient();
+  trace('client.ready');
+
   const { error } = await supabase.auth.signInWithOtp({ phone });
+  trace('signInWithOtp.done', { ok: !error, status: error?.status ?? 200, code: error?.code });
 
   if (error) {
     console.error(
@@ -60,6 +68,7 @@ export async function requestOtp(_prevState, formData) {
     };
   }
 
+  trace('requestOtp.return', { step: 'code' });
   return { step: 'code', phone, notice: `We sent a 6-digit code to ${phone}.` };
 }
 
@@ -73,8 +82,15 @@ export async function verifyOtp(_prevState, formData) {
     return { step: 'code', phone, error: 'Enter the code from the SMS.' };
   }
 
+  // Same tag as the request leg, so the two lines pair up in the log and the
+  // gap between them is the ANSWER to "was it expiry?" — how long the customer
+  // actually took, measured rather than assumed.
+  const trace = otpTrace('action', phone);
+  trace('verifyOtp.start', { tokenLen: token.length });
+
   const supabase = await createClient();
   const { error } = await supabase.auth.verifyOtp({ phone, token, type: 'sms' });
+  trace('verifyOtp.done', { ok: !error, status: error?.status ?? 200, code: error?.code });
 
   if (error) {
     console.error('[auth] verifyOtp failed:', error.message);
