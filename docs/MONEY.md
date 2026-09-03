@@ -19,14 +19,25 @@ Worked example — 2 × GH₵35 jollof, GH₵3 water, delivered:
 |                     |                       |
 | ------------------- | --------------------- |
 | Food                | GH₵73.00 → vendor     |
-| Service fee (10%)   | GH₵7.30 → Campus Dash |
+| Service fee (5%)    | GH₵3.65 → Campus Dash |
 | Delivery fee (flat) | GH₵5.00 → Partner     |
-| **Customer pays**   | **GH₵85.30**          |
+| **Customer pays**   | **GH₵81.65**          |
 
 The service fee is a percentage of the food (`pricing_config.service_fee_bps`,
-1000 bps = 10%), rounded half-up in integer pesewas. The delivery fee is flat.
+500 bps = 5%), rounded half-up in integer pesewas. The delivery fee is flat.
 Both are snapshotted onto the order at submission, so a later fee change never
 moves an order that was already quoted.
+
+**The fee is charged ON TOP of the food, never taken out of it.** The vendor is
+entitled to the whole subtotal and the Partner to the whole delivery fee, and
+neither expression mentions the rate — so changing it moves Campus Dash's own
+revenue and nothing else. Provider transaction fees are likewise a platform
+expense and are never deducted from an allocation.
+
+At 5% the rounding rule earns its keep in a way it did not at 10%: a subtotal
+that is an odd multiple of ten pesewas lands exactly on half a pesewa, and
+half-up sends it to the customer rather than quietly to Campus Dash. See
+`tests/service-fee.test.js`.
 
 ## Why the Partner allocation arrives late
 

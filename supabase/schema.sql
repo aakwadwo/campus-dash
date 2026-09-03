@@ -2030,7 +2030,7 @@ CREATE TABLE IF NOT EXISTS "public"."pricing_config" (
     "vendor_poll_seconds" integer DEFAULT 8 NOT NULL,
     "partner_poll_seconds" integer DEFAULT 10 NOT NULL,
     "customer_poll_seconds" integer DEFAULT 6 NOT NULL,
-    "service_fee_bps" integer DEFAULT 1000 NOT NULL,
+    "service_fee_bps" integer DEFAULT 500 NOT NULL,
     CONSTRAINT "pricing_config_approved_document_retention_days_check" CHECK (("approved_document_retention_days" > 0)),
     CONSTRAINT "pricing_config_customer_absent_wait_seconds_check" CHECK (("customer_absent_wait_seconds" > 0)),
     CONSTRAINT "pricing_config_customer_poll_seconds_check" CHECK ((("customer_poll_seconds" >= 2) AND ("customer_poll_seconds" <= 120))),
@@ -2056,7 +2056,7 @@ ALTER TABLE "public"."pricing_config" OWNER TO "postgres";
 COMMENT ON TABLE "public"."pricing_config" IS 'Platform configuration. Legacy name — holds timeouts and operational limits as well as fees. One row, id = true.';
 
 
-COMMENT ON COLUMN "public"."pricing_config"."service_fee_bps" IS 'Campus Dash service fee, in basis points of the food subtotal. 1000 = 10%.';
+COMMENT ON COLUMN "public"."pricing_config"."service_fee_bps" IS 'Campus Dash service fee, in basis points of the food subtotal. 500 = 5%.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer DEFAULT NULL::integer, "p_delivery_fee_pesewas" bigint DEFAULT NULL::bigint, "p_partner_share_of_delivery_bps" integer DEFAULT NULL::integer, "p_vendor_response_seconds" integer DEFAULT NULL::integer, "p_partner_search_seconds" integer DEFAULT NULL::integer, "p_customer_absent_wait_seconds" integer DEFAULT NULL::integer, "p_payment_pending_timeout_seconds" integer DEFAULT NULL::integer, "p_min_payout_pesewas" bigint DEFAULT NULL::bigint, "p_notification_retry_limit" integer DEFAULT NULL::integer, "p_vendor_poll_seconds" integer DEFAULT NULL::integer, "p_partner_poll_seconds" integer DEFAULT NULL::integer, "p_customer_poll_seconds" integer DEFAULT NULL::integer) RETURNS "public"."pricing_config"

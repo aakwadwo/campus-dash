@@ -84,8 +84,8 @@ values and ignore these. To feel the real 60-second vendor window, set it at
 
 ## The full lifecycle
 
-Prices: **10% Campus Dash fee** on the food, **GH₵5** flat delivery.
-A Jollof (GH₵35) delivered costs GH₵35.00 + GH₵3.50 + GH₵5.00 = **GH₵43.50**.
+Prices: **5% Campus Dash fee** on the food, **GH₵5** flat delivery.
+A Jollof (GH₵35) delivered costs GH₵35.00 + GH₵1.75 + GH₵5.00 = **GH₵41.75**.
 
 1. **Customer** `/order` → Test Kitchen One → add items → Delivery → pick a room
    (Room 101/102/204/205) → place the order. Check the fee reads GH₵3.50 on a

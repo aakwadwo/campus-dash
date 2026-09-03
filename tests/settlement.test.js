@@ -102,11 +102,11 @@ describe('settlement and reconciliation', () => {
 
     assert.equal(money.vendor_allocation, 3500, 'the food money');
     assert.equal(money.partner_allocation, 500, 'the delivery fee');
-    assert.equal(money.platform_allocation, 350, 'the service fee');
-    assert.equal(money.allocated_pesewas, 4350);
-    assert.equal(money.total_pesewas, 4350);
+    assert.equal(money.platform_allocation, 175, 'the service fee');
+    assert.equal(money.allocated_pesewas, 4175);
+    assert.equal(money.total_pesewas, 4175);
     assert.equal(money.balances, true);
-    assert.equal(money.paid_pesewas, 4350);
+    assert.equal(money.paid_pesewas, 4175);
   });
 
   test('a pickup order allocates nothing to a Partner', async () => {
@@ -345,7 +345,7 @@ describe('settlement and reconciliation', () => {
         ])
       )
     );
-    assert.match(error.message, /sum to 3500 but order total is 4350/);
+    assert.match(error.message, /sum to 3500 but order total is 4175/);
   });
 
   test('reconciliation still catches an imbalance if one ever appeared', async () => {
@@ -368,7 +368,7 @@ describe('settlement and reconciliation', () => {
     const issue = issues.find((i) => i.order_id === order.order_id);
     assert.ok(issue, 'the discrepancy is reported');
     assert.equal(issue.issue, 'ALLOCATION_MISMATCH');
-    assert.match(issue.detail, /allocations sum to 3500 but the order total is 4350/);
+    assert.match(issue.detail, /allocations sum to 3500 but the order total is 4175/);
   });
 
   test('reconciliation catches a delivered order with no Partner allocation', async () => {

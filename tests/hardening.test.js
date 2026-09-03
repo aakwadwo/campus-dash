@@ -34,7 +34,7 @@ describe('pilot hardening', () => {
     await asService((c) =>
       c.query(`
         update public.pricing_config
-           set payment_pending_timeout_seconds = 900, min_payout_pesewas = 0,
+           set service_fee_bps = 500, payment_pending_timeout_seconds = 900, min_payout_pesewas = 0,
                notification_retry_limit = 2, document_signed_url_seconds = 120,
                approved_document_retention_days = 90, rejected_document_retention_days = 30,
                vendor_poll_seconds = 8, partner_poll_seconds = 10, customer_poll_seconds = 6
@@ -334,7 +334,7 @@ describe('pilot hardening', () => {
       async (c) => (await c.query('select * from public.platform_config()')).rows
     );
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].service_fee_bps, 1000, 'fees are not secret');
+    assert.equal(rows[0].service_fee_bps, 500, 'fees are not secret');
     assert.equal(rows[0].vendor_response_seconds, 60);
   });
 
@@ -343,7 +343,7 @@ describe('pilot hardening', () => {
       ACTORS.admin,
       (c) =>
         c.query('select public.admin_update_config($1, $2, $3)', [
-          'students said 10% was too low',
+          'students said 5% was too low',
           1500,
           700,
         ]),
@@ -361,24 +361,24 @@ describe('pilot hardening', () => {
     );
     assert.equal(audit.length, 1);
     assert.match(audit[0].reason, /too low/);
-    assert.equal(audit[0].before_state.service_fee_bps, 1000);
+    assert.equal(audit[0].before_state.service_fee_bps, 500);
     assert.equal(audit[0].after_state.service_fee_bps, 1500);
   });
 
   test('a changed fee applies to the NEXT order and never to a placed one', async () => {
     const before = await submitOrder();
-    // GH₵35 food + 10% (GH₵3.50) + GH₵5 delivery
-    assert.equal(before.total_pesewas, 4350);
+    // GH₵35 food + 5% (GH₵1.75) + GH₵5 delivery
+    assert.equal(before.total_pesewas, 4175);
 
     await asUser(
       ACTORS.admin,
-      (c) => c.query('select public.admin_update_config($1, $2)', ['fee review', 500]),
+      (c) => c.query('select public.admin_update_config($1, $2)', ['fee review', 1000]),
       { commit: true }
     );
 
-    assert.equal((await getOrder(before.order_id)).total_pesewas, 4350, 'the snapshot holds');
+    assert.equal((await getOrder(before.order_id)).total_pesewas, 4175, 'the snapshot holds');
     const after = await submitOrder();
-    assert.equal(after.total_pesewas, 4175, 'GH₵35 + 5% (GH₵1.75) + GH₵5 delivery');
+    assert.equal(after.total_pesewas, 4350, 'GH₵35 + 10% (GH₵3.50) + GH₵5 delivery');
   });
 
   test('a changed timeout takes effect immediately', async () => {
@@ -416,7 +416,7 @@ describe('pilot hardening', () => {
       )
     );
     assert.match(direct.message, /permission denied/i);
-    assert.equal((await config()).service_fee_bps, 1000);
+    assert.equal((await config()).service_fee_bps, 500);
   });
 
   test('nonsense configuration is refused by the database', async () => {
@@ -476,8 +476,8 @@ describe('pilot hardening', () => {
     assert.equal(by.orders_completed, 1);
     assert.equal(by.deliveries_requested, 2);
     assert.equal(by.partners_approved, 3);
-    assert.equal(by.collected_pesewas, 4350);
-    assert.equal(by.unsettled_pesewas, 4350, 'nothing paid out yet');
+    assert.equal(by.collected_pesewas, 4175);
+    assert.equal(by.unsettled_pesewas, 4175, 'nothing paid out yet');
     assert.equal(by.reconciliation_issues, 0);
     assert.ok('median_vendor_response_seconds' in by);
     assert.ok('median_partner_match_seconds' in by);

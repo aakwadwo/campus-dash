@@ -69,11 +69,11 @@ describe('customer ordering', () => {
       LOCATIONS.room204,
     ]);
 
-    // 2 × GH₵35 + GH₵3 = GH₵73 food, + 10% (GH₵7.30) + GH₵5 delivery = GH₵85.30
+    // 2 × GH₵35 + GH₵3 = GH₵73 food, + 5% (GH₵3.65) + GH₵5 delivery = GH₵81.65
     assert.equal(result.subtotal_pesewas, 7300);
-    assert.equal(result.service_fee_pesewas, 730);
+    assert.equal(result.service_fee_pesewas, 365);
     assert.equal(result.delivery_fee_pesewas, 500);
-    assert.equal(result.total_pesewas, 8530);
+    assert.equal(result.total_pesewas, 8165);
     assert.equal(result.lines[0].unit_price_pesewas, 3500, 'the menu price, not the sent one');
   });
 
@@ -85,9 +85,9 @@ describe('customer ordering', () => {
       null,
     ]);
     assert.equal(result.delivery_fee_pesewas, 0);
-    // GH₵35 food + 10% = GH₵38.50
-    assert.equal(result.service_fee_pesewas, 350);
-    assert.equal(result.total_pesewas, 3850);
+    // GH₵35 food + 5% = GH₵36.75
+    assert.equal(result.service_fee_pesewas, 175);
+    assert.equal(result.total_pesewas, 3675);
   });
 
   test('the quote and the submitted order always agree', async () => {
@@ -206,7 +206,7 @@ describe('customer ordering', () => {
   // =========================================================================
   test('a price change after submission never touches the placed order', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(order.total_pesewas, 8200);
+    assert.equal(order.total_pesewas, 7850);
 
     await asUser(
       ACTORS.admin,
@@ -220,11 +220,11 @@ describe('customer ordering', () => {
     );
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.total_pesewas, 8200, 'the customer still owes what they agreed');
+    assert.equal(view.total_pesewas, 7850, 'the customer still owes what they agreed');
     assert.equal(view.items[0].unit_price_pesewas, 3500);
 
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 11500, 'a new order uses the new price');
+    assert.equal(later.total_pesewas, 11000, 'a new order uses the new price');
   });
 
   test('an item disabled after submission does not break the placed order', async () => {
@@ -237,8 +237,8 @@ describe('customer ordering', () => {
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.items[0].name, 'Jollof Rice with Chicken');
-    // GH₵35 food + 10% (GH₵3.50) + GH₵5 delivery.
-    assert.equal(view.total_pesewas, 4350);
+    // GH₵35 food + 5% (GH₵1.75) + GH₵5 delivery.
+    assert.equal(view.total_pesewas, 4175);
   });
 
   // =========================================================================

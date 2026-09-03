@@ -321,7 +321,7 @@ describe('state transitions', () => {
   test('a price change after submission does not alter the existing order', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
     // 2 x GH₵35 + 10% (GH₵7) + GH₵5 = GH₵82
-    assert.equal(order.total_pesewas, 8200);
+    assert.equal(order.total_pesewas, 7850);
 
     // The vendor raises the price from GH₵35.00 to GH₵50.00.
     await asService((c) =>
@@ -330,7 +330,7 @@ describe('state transitions', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, 7000, 'the snapshot holds');
-    assert.equal(stored.total_pesewas, 8200);
+    assert.equal(stored.total_pesewas, 7850);
 
     const items = await asService(
       async (c) =>
@@ -342,7 +342,7 @@ describe('state transitions', () => {
 
     // A NEW order picks up the new price.
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 11500, 'the new order uses the new price');
+    assert.equal(later.total_pesewas, 11000, 'the new order uses the new price');
   });
 
   test('an unavailable menu item cannot be ordered', async () => {
@@ -375,7 +375,7 @@ describe('state transitions', () => {
   // --- pickup is first-class ----------------------------------------------
   test('a pickup order needs no Partner and keeps delivery_status NONE throughout', async () => {
     const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    assert.equal(order.total_pesewas, 3850, 'no delivery fee on a pickup order');
+    assert.equal(order.total_pesewas, 3675, 'no delivery fee on a pickup order');
 
     await vendorAccept(order.order_id);
     await payOrder(order.order_id);

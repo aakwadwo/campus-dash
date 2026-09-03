@@ -166,8 +166,8 @@ console.log('\nReference data');
   const cfg = await req('/rest/v1/rpc/platform_config', { method: 'POST', body: {} });
   const row = Array.isArray(cfg.json) ? cfg.json[0] : cfg.json;
   record(
-    row?.service_fee_bps === 1000,
-    'service fee is 10% (1000 bps)',
+    row?.service_fee_bps === 500,
+    'service fee is 5% (500 bps)',
     `got ${row?.service_fee_bps}`
   );
   record(

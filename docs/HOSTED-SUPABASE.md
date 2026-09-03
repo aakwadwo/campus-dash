@@ -116,7 +116,7 @@ npm run verify:hosted
 
 This needs no database password. It talks to the project over HTTPS with the two
 API keys and checks what actually matters: that every table and core function
-exists, that the reference data is right (10% service fee, GH₵5 delivery, terms
+exists, that the reference data is right (5% service fee, GH₵5 delivery, terms
 published for all three audiences), and — the part worth having — that a request
 sent **with the publishable key, exactly as a browser would send it** is refused
 where it must be. It does not read a grant and believe it; it issues the INSERT,
