@@ -52,8 +52,41 @@ somebody twice:
 3. `payouts_run_payee_unique` refuses a duplicate payout;
 4. the transfer carries the payout's own idempotency key.
 
-Transfers go through `PaymentProvider.sendTransfer()`. The fake provider settles
-asynchronously, like a real one.
+Transfers go through `PaymentProvider.sendTransfer()`.
+
+**A transfer the provider accepted is not a payout that arrived.** Acceptance
+puts the payout at `PROCESSING`; only the provider's transfer event makes it
+`PAID`. A failed transfer marks it `FAILED` and **releases the allocation
+claim**, so the money is swept into the next run rather than stranded behind a
+dead payout row. A `REVERSED` transfer does the same, from `PAID`. Retry is
+manual — see `docs/PAYMENTS.md`.
+
+### The minimum payout
+
+`pricing_config.min_payout_pesewas` is the point below which a transfer costs
+more in fees than it moves. A payee under it is **deferred**, and deferral is
+applied inside `create_settlement_run`, before a payout row exists:
+
+- no payout is created — there is nothing to send, so nothing pretends to be on
+  its way;
+- the claim on their allocations is released in the same transaction, so they
+  are `ELIGIBLE` and unclaimed again the moment the run returns;
+- `admin_pending_settlement` therefore still shows the money as owed, and it
+  keeps accumulating until some later run finds enough of it to clear the bar;
+- the run records `deferred_payee_count` and `deferred_pesewas`, so "moved
+  nothing, correctly" is distinguishable from "found nothing".
+
+That deferral only works because **a run sweeps forward**. The claim is bounded
+above by `period_end` — a run for a past period must not take money that came in
+afterwards — but has no lower bound. Anything older is either already claimed by
+the run that took it or was deliberately put back (deferred, failed, reversed),
+and putting it back is meaningless if no later run can reach it. `retry_payout`
+reclaims over the same window, and refuses unless it takes back exactly what its
+payout was worth.
+
+`PLATFORM` is not a payee. Its allocations carry no `payee_id`, so a `PLATFORM`
+run could only move the platform's own ledger rows to `SETTLING` and strand
+them; `create_settlement_run` refuses it outright.
 
 **Campus Dash does not run a vendor wallet.** A vendor sees earned / awaiting /
 settled and their past settlements — never a stored balance implying we are
@@ -74,11 +107,20 @@ On a healthy system it returns nothing.
 
 ## Payment is provider-agnostic
 
-The provider is still **fake**, and the architecture question is still open:
-split settlement at source, or collect centrally and transfer later. Both
-produce identical `payments`, `allocations`, `settlement_runs` and `payouts`
-rows. Only which adapter fills in `provider_transaction_id` and
-`provider_transfer_id` changes.
+The provider is **Paystack** (`docs/PAYMENTS.md`), reached only through
+`lib/payments`. `PAYMENT_PROVIDER=fake` still runs the whole flow with no
+account and no credit.
+
+The shape was chosen so the answer would not matter, and it did not: collect
+centrally and transfer later produces exactly the `payments`, `allocations`,
+`settlement_runs` and `payouts` rows a split-at-source provider would. Only
+which adapter fills in `provider_transaction_id` and `provider_transfer_id`
+changes. **No splits and no subaccounts are used** — Campus Dash's own
+allocations are the source of truth for what a vendor and a Partner are owed.
+
+Paystack's transaction fee is absorbed by Campus Dash. It does not reduce the
+vendor's food entitlement or the Partner's delivery entitlement: allocations are
+computed from the order, not from what net amount happened to land.
 
 ## Only a provider can say "paid"
 

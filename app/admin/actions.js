@@ -8,7 +8,7 @@ import { revalidatePath } from 'next/cache';
 import * as admin from '@/lib/admin';
 import { purgePartnerDocuments } from '@/lib/admin/documents';
 import { runSettlement, retryFailedPayouts, periodFor } from '@/lib/settlement';
-import { pesewasFromCedisInput } from '@/lib/util/money';
+import { pesewasFromCedisInput, formatPesewas } from '@/lib/util/money';
 import { normaliseGhanaPhone } from '@/lib/sms';
 
 /**
@@ -356,7 +356,10 @@ export async function resolveDisputeAction(_prev, formData) {
 /**
  * Runs a settlement batch. Safe to press twice: the run for a period is
  * returned rather than recreated, its allocations are already claimed, and its
- * payouts are already PAID.
+ * payouts are already on their way.
+ *
+ * "Sent" here means the provider accepted the transfer. It is PAID only once
+ * the transfer event arrives — see hard rule 11.
  */
 export async function runSettlementAction(_prev, formData) {
   const payeeType = str(formData, 'payee_type');
@@ -364,25 +367,60 @@ export async function runSettlementAction(_prev, formData) {
     const { periodStart, periodEnd } = periodFor(payeeType);
     const result = await runSettlement({ payeeType, periodStart, periodEnd });
     revalidatePath('/admin/settlements', 'layout');
+    // Deferred money is not a failure and not an absence: it is owed, it is
+    // still in the pool, and a later run will move it. Saying so is the whole
+    // point of the threshold being visible.
+    const deferred = result.deferredPayees
+      ? ` ${formatPesewas(result.deferredPesewas)} held for ${result.deferredPayees} ` +
+        `${result.deferredPayees === 1 ? 'payee' : 'payees'} under the minimum — still owed, ` +
+        `and swept into a later run.`
+      : '';
+
     return {
       ok: result.failed === 0,
       message:
         result.attempted === 0
-          ? 'Nothing was owed for that period.'
-          : `${result.paid} of ${result.attempted} payouts sent.` +
-            (result.failed ? ` ${result.failed} failed — you can retry them.` : ''),
+          ? deferred
+            ? 'Nothing was moved.' + deferred
+            : 'Nothing was owed for that period.'
+          : `${result.accepted} of ${result.attempted} payouts sent to the provider.` +
+            (result.failed ? ` ${result.failed} failed — you can retry them.` : '') +
+            deferred,
     };
   } catch (error) {
     return fail(error);
   }
 }
 
+/**
+ * Sets where a vendor's or Partner's settlement money goes.
+ *
+ * The account number is validated and normalised in the database, and the
+ * change is audited there in the same transaction. Changing the number clears
+ * the provider's recipient code, so the next transfer cannot go to the old one.
+ */
+export async function setPayoutDestinationAction(_prev, formData) {
+  return run(
+    () =>
+      admin.setPayoutDestination({
+        payeeType: str(formData, 'payee_type'),
+        payeeId: str(formData, 'payee_id'),
+        momoNetwork: str(formData, 'momo_network'),
+        accountNumber: str(formData, 'account_number'),
+        accountName: str(formData, 'account_name'),
+        reason: str(formData, 'reason'),
+      }),
+    'Payout destination saved.',
+    ['/admin/settlements']
+  );
+}
+
 export async function retryPayoutsAction(_prev, formData) {
   try {
     const results = await retryFailedPayouts(str(formData, 'run_id'));
     revalidatePath('/admin/settlements', 'layout');
-    const paid = results.filter((r) => r.ok).length;
-    return { ok: true, message: `${paid} of ${results.length} retried payouts succeeded.` };
+    const sent = results.filter((r) => r.ok).length;
+    return { ok: true, message: `${sent} of ${results.length} retried payouts were accepted.` };
   } catch (error) {
     return fail(error);
   }

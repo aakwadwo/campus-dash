@@ -118,6 +118,7 @@ export async function resetTransactionalState() {
       truncate table
         public.order_events, public.order_secrets, public.order_items,
         public.allocations, public.payouts, public.settlement_runs,
+        public.payout_destinations,
         public.payments, public.orders,
         public.webhook_events, public.idempotency_keys,
         public.notification_events
@@ -292,6 +293,9 @@ export async function resetTransactionalState() {
        where l.id = v.id::uuid
     `);
     await c.query(`update public.users set is_suspended = false`);
+    // Email is set by the payment tests and by partner applications. Clearing
+    // it keeps "this account has no address yet" a reachable starting state.
+    await c.query(`update public.users set email = null`);
     // Restore seeded display names: tests rename accounts and commit.
     await c.query(`
       update public.users u set full_name = v.name

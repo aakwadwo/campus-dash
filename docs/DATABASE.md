@@ -92,26 +92,27 @@ the user, and lets authorisation errors propagate.
 
 ## Tables
 
-| Table              | Purpose                                                                                                                                                                      |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`            | Profile per `auth.users` row. One account per person; unique phone. `is_admin` is a column here, never a client-supplied claim.                                              |
-| `partner_profiles` | Exists only once someone applies. Holds private Storage paths for the student ID and live face photograph, review decision, availability, and a document retention deadline. |
-| `vendors`          | Hand-recruited, admin-created. `status` plus a vendor-controlled `is_accepting_orders` switch.                                                                               |
-| `vendor_users`     | Vendor staff. Real stalls have more than one person on the counter, and this keeps vendor RLS honest without a shared login.                                                 |
-| `locations`        | Self-referencing campus tree: Campus → Block → Floor → Room. `is_deliverable` marks actual destinations. No GPS anywhere.                                                    |
-| `menu_items`       | Vendor catalogue. Disabled rather than deleted, so historical orders keep a valid foreign key.                                                                               |
-| `pricing_config`   | Single row. Service fee, flat delivery fee, the Partner's share in basis points, and the two timeout windows. Snapshotted onto each order.                                   |
-| `orders`           | The three independent state dimensions, the destination, and every server-calculated amount.                                                                                 |
-| `order_items`      | **Price snapshot.** `name_snapshot` and `unit_price_pesewas` are copied at submit time.                                                                                      |
-| `order_secrets`    | Pickup and delivery codes. **No policy and no grant for anyone.**                                                                                                            |
-| `order_events`     | Append-only log of every attempted transition, accepted and rejected.                                                                                                        |
-| `payments`         | One row per collection attempt. Keyed by idempotency key.                                                                                                                    |
-| `allocations`      | The internal ledger: who each part of a paid order belongs to.                                                                                                               |
-| `settlement_runs`  | Vendors daily, Partners weekly.                                                                                                                                              |
-| `payouts`          | Money actually leaving the platform.                                                                                                                                         |
-| `webhook_events`   | Provider events, deduplicated on `(provider, event_id)`.                                                                                                                     |
-| `idempotency_keys` | General request-replay protection, with a request hash so a key reused with different parameters is rejected rather than replayed.                                           |
-| `admin_actions`    | Append-only audit of every manual override.                                                                                                                                  |
+| Table                 | Purpose                                                                                                                                                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`               | Profile per `auth.users` row. One account per person; unique phone. `email` is real and supplied by the person — the hosted checkout needs one, and none is ever synthesised. `is_admin` is a column here, never a client-supplied claim. |
+| `partner_profiles`    | Exists only once someone applies. Holds private Storage paths for the student ID and live face photograph, review decision, availability, and a document retention deadline.                                                              |
+| `vendors`             | Hand-recruited, admin-created. `status` plus a vendor-controlled `is_accepting_orders` switch.                                                                                                                                            |
+| `vendor_users`        | Vendor staff. Real stalls have more than one person on the counter, and this keeps vendor RLS honest without a shared login.                                                                                                              |
+| `locations`           | Self-referencing campus tree: Campus → Block → Floor → Room. `is_deliverable` marks actual destinations. No GPS anywhere.                                                                                                                 |
+| `menu_items`          | Vendor catalogue. Disabled rather than deleted, so historical orders keep a valid foreign key.                                                                                                                                            |
+| `pricing_config`      | Single row. Service fee, flat delivery fee, the Partner's share in basis points, and the two timeout windows. Snapshotted onto each order.                                                                                                |
+| `orders`              | The three independent state dimensions, the destination, and every server-calculated amount.                                                                                                                                              |
+| `order_items`         | **Price snapshot.** `name_snapshot` and `unit_price_pesewas` are copied at submit time.                                                                                                                                                   |
+| `order_secrets`       | Pickup and delivery codes. **No policy and no grant for anyone.**                                                                                                                                                                         |
+| `order_events`        | Append-only log of every attempted transition, accepted and rejected.                                                                                                                                                                     |
+| `payments`            | One row per collection attempt. Keyed by idempotency key.                                                                                                                                                                                 |
+| `allocations`         | The internal ledger: who each part of a paid order belongs to.                                                                                                                                                                            |
+| `settlement_runs`     | Vendors daily, Partners weekly.                                                                                                                                                                                                           |
+| `payouts`             | Money actually leaving the platform. `PROCESSING` means the provider accepted a transfer; only its transfer event makes one `PAID`.                                                                                                       |
+| `payout_destinations` | Mobile money account per vendor and Partner, plus the provider's recipient code. **No policy and no grant for anyone** — an account number is what lets somebody redirect a settlement, and `vendors` is anon-readable.                   |
+| `webhook_events`      | Provider events, deduplicated on `(provider, event_id)`.                                                                                                                                                                                  |
+| `idempotency_keys`    | General request-replay protection, with a request hash so a key reused with different parameters is rejected rather than replayed.                                                                                                        |
+| `admin_actions`       | Append-only audit of every manual override.                                                                                                                                                                                               |
 
 ## The constraints that carry the money
 
@@ -161,7 +162,14 @@ Nothing in the schema assumes how money physically moves. Whether the provider
 splits at source (Option A) or we collect centrally and transfer later
 (Option B), the same `payments`, `allocations`, `settlement_runs` and `payouts`
 rows are written. Only which adapter fills in `provider_transaction_id` and
-`provider_transfer_id` changes. See `docs/PILOT-QUESTIONS.md`.
+`provider_transfer_id` changes.
+
+That held. Paystack is Option B, and adding it changed no table that already
+existed — see `docs/PAYMENTS.md`. What it did add is the honest payout
+lifecycle: `mark_payout_processing()` for a transfer the provider accepted,
+`fail_payout()`, which **releases the allocation claim** so the money falls into
+the next run, and `retry_payout()`, which re-claims and refuses if a later run
+already swept it. Nothing retries automatically.
 
 ## Codes and the handoff
 

@@ -9,6 +9,7 @@ most of the safety lives. `docs/HOSTED-SUPABASE.md` covers running against a
 real hosted project. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
 `docs/VENDOR.md` the vendor module, `docs/CUSTOMER.md` customer ordering,
 `docs/PARTNER.md` the Partner system, `docs/MONEY.md` allocation and settlement,
+`docs/PAYMENTS.md` the Paystack integration,
 `docs/SECURITY.md` the security model, `docs/NOTIFICATIONS.md` messaging and
 `docs/SMS.md` the Arkesel integration,
 `docs/OPERATIONS.md` running the pilot, `docs/SETUP.md` local setup and
@@ -50,10 +51,16 @@ around those as if they were settled.
    the log, so rejections must not raise. See `docs/DATABASE.md`.
 10. **External providers sit behind interfaces.** Payments and SMS are reached
     only through `lib/payments` and `lib/sms`. No provider-specific logic
-    anywhere else. Arkesel lives entirely in `lib/sms/arkesel*.js`.
+    anywhere else. Arkesel lives entirely in `lib/sms/arkesel*.js`, Paystack
+    entirely in `lib/payments/paystack.js`.
 11. **Provider acceptance is not delivery.** A 200 from Arkesel means the
     message was taken, not that it arrived. The outcome comes back later on the
-    delivery webhook and lands on the same `notification_events` row.
+    delivery webhook and lands on the same `notification_events` row. The same
+    rule governs money out: a transfer Paystack accepted is a PROCESSING payout,
+    and only `transfer.success` makes it PAID.
+12. **A browser returning from a hosted checkout proves nothing.** Payment moves
+    on a signature-verified webhook or a server-to-server verify — never because
+    someone arrived at a URL.
 
 ## Not in V1
 
@@ -79,6 +86,7 @@ npm run admin:create # create or promote an administrator (email + password)
 npm run verify:hosted # check a project over HTTPS, with the API keys only
 npm run sms:test      # send ONE real SMS through Arkesel. Spends credit.
 npm run sms:webhook   # replay a signed delivery report at a running server
+npm run paystack:test # open ONE real Paystack TEST checkout. Refuses live keys.
 ```
 
 Tests run against the local database and share it, so they run serially. They
@@ -93,7 +101,9 @@ vars — they live in `pricing_config`, editable at `/admin/pilot`, so the pilot
 can retune without a deploy. `SMS_PROVIDER=fake` prints SMS and phone OTPs to
 the server console and to `/dev/inbox`; `SMS_PROVIDER=arkesel` sends real
 messages and spends real credit. `PAYMENT_PROVIDER=fake` simulates a ~2s
-asynchronous collection.
+asynchronous collection; `PAYMENT_PROVIDER=paystack` uses Paystack hosted
+redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
+`PAYSTACK_TRANSFERS_ENABLED=true`.
 
 ## Conventions
 

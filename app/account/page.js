@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth/session';
 import { outstandingTerms } from '@/lib/terms';
 import { signOut } from '@/app/(auth)/login/actions';
 import { setPartnerAvailability } from './actions';
+import EmailForm from './email-form';
 
 export const metadata = { title: 'Account · Campus Dash' };
 export const dynamic = 'force-dynamic';
@@ -33,6 +34,16 @@ export default async function AccountPage() {
           accept.
         </Link>
       ) : null}
+
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold tracking-wide uppercase">Email</h2>
+        <p className="text-muted mt-1 text-sm">
+          {me.email
+            ? me.email
+            : 'Not set. The payment page needs an email address, so you will be asked for one before you can pay.'}
+        </p>
+        <EmailForm email={me.email ?? null} />
+      </section>
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold tracking-wide uppercase">Modes</h2>

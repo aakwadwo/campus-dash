@@ -72,8 +72,9 @@ system gets played.
 **11. Partner payout timing?** Weekly is assumed.
 
 **12. Is the delivery fee refunded when a customer collects instead?**
-Currently **no** — `customer_collect_instead()` does not refund, because a
-partial refund depends on what the provider supports. The screen says so and
+Currently **no** — `customer_collect_instead()` does not refund. Paystack does
+support partial refunds, so this is now a business decision rather than a
+technical unknown; nothing has been built either way. The screen says so and
 points at support.
 
 ---
@@ -81,14 +82,23 @@ points at support.
 ## Providers
 
 **13. Hubtel or Paystack?**
-Open. Nothing depends on the answer: both a split-settlement provider and a
-collect-then-transfer provider produce identical `payments`, `allocations`,
-`settlement_runs` and `payouts` rows.
+**ANSWERED — Paystack.** Hosted redirect checkout, GHS, one transaction per
+order, no splits and no subaccounts. See `docs/PAYMENTS.md`. Nothing outside
+`lib/payments/paystack.js` changed shape, which was the point.
 
 **14. Does the chosen provider support the collection/transfer model we need?**
-Specifically: MoMo collection, programmatic transfers to vendor and Partner
-numbers, partial refunds, webhook signing, and idempotency keys on both
-directions.
+Mostly answered, and the gaps are known:
+
+- MoMo collection — yes, through hosted checkout.
+- Webhook signing — yes, HMAC-SHA512, keyed by the secret key itself.
+- Idempotency — the `reference` is the anchor in both directions. There is no
+  idempotency-key header; our payment and payout ids serve as the references.
+- Programmatic transfers — supported, but **not yet exercised**. They need a
+  funded balance and transfers approved on the account, so
+  `PAYSTACK_TRANSFERS_ENABLED` is false and no real transfer has been sent.
+- **Partial refunds — still open.** Paystack has a refund API, but nothing here
+  calls it: see question 12 and `admin_mark_refunded`, which still records
+  intent only.
 
 **15. Which Ghana SMS provider?**
 Open. Delivery already goes through `SmsProvider`; a real provider is one file.

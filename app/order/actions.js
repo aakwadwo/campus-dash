@@ -9,6 +9,7 @@ import { revalidatePath } from 'next/cache';
 import { submitOrder } from '@/lib/orders/transitions';
 import { quoteOrder } from '@/lib/customer';
 import { startPayment, refreshPaymentState } from '@/lib/orders/payments';
+import { setMyEmail } from '@/lib/customer';
 import { notifyOrderEvent } from '@/lib/orders/notify';
 import { NOTIFICATION_EVENT } from '@/lib/notifications';
 
@@ -87,16 +88,55 @@ export async function submitOrderAction(_prev, formData) {
   redirect(`/orders/${order.order_id}`);
 }
 
+/**
+ * Starts a payment and hands back where to send the customer.
+ *
+ * The redirect URL is RETURNED rather than followed here: the provider's
+ * checkout is on another origin, and a full browser navigation from the client
+ * is what actually gets someone there. Dropping it would leave a payment
+ * created and never presented.
+ */
 export async function payOrderAction(_prev, formData) {
   const orderId = String(formData.get('order_id') ?? '');
   try {
     const result = await startPayment(orderId);
-    if (!result.ok) return { ok: false, message: result.reason };
+    if (!result.ok) {
+      return { ok: false, needsEmail: Boolean(result.needsEmail), message: result.reason };
+    }
+    revalidatePath(`/orders/${orderId}`);
+    return {
+      ok: true,
+      redirectUrl: result.redirectUrl ?? null,
+      message: result.redirectUrl ? 'Taking you to the payment page…' : 'Payment started.',
+    };
   } catch (error) {
     return fail(error);
   }
-  revalidatePath(`/orders/${orderId}`);
-  return { ok: true, message: 'Payment started.' };
+}
+
+/**
+ * Stores a REAL email address against the account.
+ *
+ * Paystack will not open a checkout without one. It is asked for, never
+ * invented: a synthesised address would send the customer's receipt nowhere and
+ * put a fiction in our own records. Nothing else about the account changes —
+ * this is not a verification step, and it is not the Partner application.
+ */
+export async function saveEmailAction(_prev, formData) {
+  const email = String(formData.get('email') ?? '').trim();
+  const orderId = String(formData.get('order_id') ?? '');
+
+  if (!email) return { ok: false, message: 'Enter your email address.' };
+
+  try {
+    await setMyEmail(email);
+  } catch (error) {
+    return fail(error);
+  }
+
+  if (orderId) revalidatePath(`/orders/${orderId}`);
+  revalidatePath('/account');
+  return { ok: true, message: 'Saved.' };
 }
 
 /** Polled by the payment screen while a charge is in flight. */

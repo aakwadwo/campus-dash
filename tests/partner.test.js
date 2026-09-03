@@ -776,6 +776,169 @@ describe('partner system', () => {
     assert.equal(rows[0].user_id, ACTORS.partnerYaw);
   });
 
+  // =========================================================================
+  // Conflict of interest
+  // =========================================================================
+  // A Partner is approved by hand, and the handoff is proved by two codes: the
+  // vendor releases the food against the pickup code, the customer releases the
+  // delivery against the delivery code. A Partner who is ALSO the customer, or
+  // also the person behind the counter, holds both halves — so a delivery could
+  // be recorded, and earned, with nothing having moved. These are the two cases
+  // where that is true.
+
+  /** Makes a Partner staff of a vendor. resetTransactionalState() removes it. */
+  const employ = (userId, vendorId) =>
+    asService((c) =>
+      c.query('insert into public.vendor_users (vendor_id, user_id) values ($1, $2)', [
+        vendorId,
+        userId,
+      ])
+    );
+
+  const acceptEvents = (orderId) =>
+    asService(
+      async (c) =>
+        (
+          await c.query(
+            "select accepted, reason from public.order_events where order_id = $1 and event = 'PARTNER_ACCEPT' order by created_at",
+            [orderId]
+          )
+        ).rows
+    );
+
+  test('a Partner is not offered an order they placed themselves', async () => {
+    const own = await orderReadyForDispatch({ customer: ACTORS.partnerYaw });
+
+    const mine = await offers(ACTORS.partnerYaw);
+    assert.equal(
+      mine.some((o) => o.order_id === own.order_id),
+      false,
+      'your own order is never an offer'
+    );
+
+    // And it is a real offer for everybody else, so the order itself is fine.
+    const theirs = await offers(ACTORS.partnerAdjoa);
+    assert.equal(
+      theirs.some((o) => o.order_id === own.order_id),
+      true
+    );
+  });
+
+  test('a Partner cannot claim an order they placed, even knowing the id', async () => {
+    const own = await orderReadyForDispatch({ customer: ACTORS.partnerYaw });
+
+    const error = await expectRejection(
+      asUser(ACTORS.partnerYaw, (c) =>
+        c.query('select * from public.partner_accept_delivery($1)', [own.order_id])
+      )
+    );
+    assert.match(error.message, /order you placed yourself/i);
+
+    // Refused, and nothing was assigned or logged as an acceptance.
+    assert.equal((await getOrder(own.order_id)).partner_id, null);
+    assert.equal((await getOrder(own.order_id)).delivery_status, 'SEARCHING');
+    assert.deepEqual(await acceptEvents(own.order_id), []);
+  });
+
+  test('a Partner is not offered an order from a vendor they work for', async () => {
+    await employ(ACTORS.partnerYaw, VENDORS.one);
+    const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+
+    const mine = await offers(ACTORS.partnerYaw);
+    assert.equal(
+      mine.some((o) => o.order_id === order.order_id),
+      false,
+      'not from your own counter'
+    );
+    const theirs = await offers(ACTORS.partnerAdjoa);
+    assert.equal(
+      theirs.some((o) => o.order_id === order.order_id),
+      true
+    );
+  });
+
+  test('a Partner cannot claim an order from a vendor they work for', async () => {
+    await employ(ACTORS.partnerYaw, VENDORS.one);
+    const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+
+    const error = await expectRejection(
+      asUser(ACTORS.partnerYaw, (c) =>
+        c.query('select * from public.partner_accept_delivery($1)', [order.order_id])
+      )
+    );
+    assert.match(error.message, /vendor you work for/i);
+
+    assert.equal((await getOrder(order.order_id)).partner_id, null);
+    assert.equal((await getOrder(order.order_id)).delivery_status, 'SEARCHING');
+    assert.deepEqual(await acceptEvents(order.order_id), []);
+  });
+
+  test('an unrelated approved Partner still sees and claims the offer', async () => {
+    // The negative control. Without it these rules could pass by refusing
+    // everybody.
+    const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+
+    const seen = await offers(ACTORS.partnerYaw);
+    assert.equal(
+      seen.some((o) => o.order_id === order.order_id),
+      true
+    );
+
+    const claim = await accept(ACTORS.partnerYaw, order.order_id);
+    assert.equal(claim.success, true);
+    assert.match(claim.pickup_code, /^\d{4}$/);
+    assert.equal((await getOrder(order.order_id)).partner_id, ACTORS.partnerYaw);
+  });
+
+  test('working for one vendor does not bar you from delivering for another', async () => {
+    // The rule is per vendor, not "vendor staff may never deliver".
+    await employ(ACTORS.partnerYaw, VENDORS.two);
+    const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+
+    const seen = await offers(ACTORS.partnerYaw);
+    assert.equal(
+      seen.some((o) => o.order_id === order.order_id),
+      true
+    );
+
+    const claim = await accept(ACTORS.partnerYaw, order.order_id);
+    assert.equal(claim.success, true);
+    assert.equal((await getOrder(order.order_id)).partner_id, ACTORS.partnerYaw);
+  });
+
+  test('not being an approved Partner is still the FIRST thing you are told', async () => {
+    // Check order is load-bearing. Someone who is not a Partner at all must
+    // hear that, not hear about a conflict they could never have had.
+    await employ(ACTORS.applicantKofi, VENDORS.one);
+    const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+
+    const error = await expectRejection(
+      asUser(ACTORS.applicantKofi, (c) =>
+        c.query('select * from public.partner_accept_delivery($1)', [order.order_id])
+      )
+    );
+    assert.match(error.message, /not approved/, 'approval is checked before conflicts');
+    assert.equal((await getOrder(order.order_id)).partner_id, null);
+  });
+
+  test('an ordinary lost race is still logged as a rejection, not raised', async () => {
+    // The conflict rules raise, which rolls their transaction back and leaves
+    // no log — that is what hard rule 9 means by an authorisation failure. The
+    // routine path must keep behaving the other way round.
+    const order = await orderReadyForDispatch();
+    const won = await accept(ACTORS.partnerYaw, order.order_id);
+    assert.equal(won.success, true);
+
+    const lost = await accept(ACTORS.partnerAdjoa, order.order_id);
+    assert.equal(lost.success, false);
+
+    const events = await acceptEvents(order.order_id);
+    assert.equal(events.filter((e) => e.accepted).length, 1);
+    const rejected = events.filter((e) => !e.accepted);
+    assert.equal(rejected.length, 1);
+    assert.match(rejected[0].reason, /already taken or partner ineligible/);
+  });
+
   test('a vendor cannot assign or impersonate a Partner', async () => {
     const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
     const claim = await expectRejection(

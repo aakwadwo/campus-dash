@@ -46,6 +46,10 @@ renamed.
 | `hardening`                              | Stuck payments, dedup, config, metrics, provider reconciliation               |
 | `dev-sms-hook`                           | The hosted-development Postgres Send SMS Hook, installed and dropped in-suite |
 | `sms-arkesel`                            | The Arkesel adapter, against a mocked fetch. Never spends credit              |
+| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack   |
+| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                   |
+| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack   |
+| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                   |
 | `sms-webhook-signature`                  | Signature, replay window, tampering, status mapping                           |
 | `notifications-delivery`                 | notify() at runtime: dedup, retry, delivery reports                           |
 | `secrets`                                | Credentials that must never reach a browser                                   |

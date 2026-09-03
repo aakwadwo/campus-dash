@@ -129,5 +129,10 @@ migrations. `npm run db:reset`.
 http://localhost:3000/dev/inbox, not the browser you are signing in from.
 Confirm `SMS_PROVIDER=fake` and that `.env` has `SEND_SMS_HOOK_SECRET`.
 
+`PAYMENT_PROVIDER=fake` likewise needs no account and spends nothing. Set it to
+`paystack`, with `PAYSTACK_SECRET_KEY` and `PUBLIC_APP_URL`, to run real hosted
+checkout — see `docs/PAYMENTS.md`. Test keys move no money; `npm run
+paystack:test` proves the credential works without touching the database.
+
 **Session dies after `db:reset`** — expected. The reset wipes `auth.sessions`;
 sign in again.

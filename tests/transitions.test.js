@@ -201,10 +201,10 @@ describe('state transitions', () => {
   // NOTE: the customer-facing fallback for FAILED_NO_PARTNER — "collect it
   // yourself and get the delivery fee back" versus "keep waiting" versus
   // "cancel" — is deliberately NOT implemented. Converting a paid delivery
-  // order to pickup means refunding part of a captured payment, and the refund
-  // mechanics depend on the unresolved Hubtel/Paystack question. See
-  // docs/PILOT-QUESTIONS.md. The schema supports every option; the business rule
-  // is not ours to invent.
+  // order to pickup means refunding part of a captured payment. Paystack does
+  // support partial refunds, so this is now a business decision rather than a
+  // technical unknown, and it is still open — see docs/PILOT-QUESTIONS.md. The
+  // schema supports every option; the business rule is not ours to invent.
 
   // --- 9 -------------------------------------------------------------------
   test('a pickup code is dead the moment the Partner cancels', async () => {

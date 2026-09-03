@@ -1,15 +1,22 @@
-import { pendingSettlement, settlementRuns, settlementPayouts } from '@/lib/admin';
+import {
+  pendingSettlement,
+  settlementRuns,
+  settlementPayouts,
+  payoutDestinations,
+} from '@/lib/admin';
 import { formatPesewas } from '@/lib/util/money';
 import { Panel, Badge, Empty } from '../ui';
 import SettlementControls from './settlement-controls';
+import PayoutDestinations from './payout-destinations';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AdminSettlementsPage() {
-  const [vendorPending, partnerPending, runs] = await Promise.all([
+  const [vendorPending, partnerPending, runs, destinations] = await Promise.all([
     pendingSettlement('VENDOR'),
     pendingSettlement('PARTNER'),
     settlementRuns(20),
+    payoutDestinations(),
   ]);
 
   const latestRun = runs?.[0];
@@ -25,7 +32,12 @@ export default async function AdminSettlementsPage() {
 
       <SettlementControls />
 
-      <Panel title="Owed to vendors" description="Eligible allocations not yet claimed by a run.">
+      <PayoutDestinations destinations={destinations} />
+
+      <Panel
+        title="Owed to vendors"
+        description="Eligible allocations not yet claimed by a run — including anything a run held back for being under the minimum payout."
+      >
         <PendingTable rows={vendorPending} />
       </Panel>
 
@@ -54,7 +66,14 @@ export default async function AdminSettlementsPage() {
                       {new Date(run.period_start).toLocaleDateString()} →{' '}
                       {new Date(run.period_end).toLocaleDateString()}
                     </td>
-                    <td className="py-2 tabular-nums">{formatPesewas(run.total_pesewas)}</td>
+                    <td className="py-2 tabular-nums">
+                      {formatPesewas(run.total_pesewas)}
+                      {run.deferred_pesewas > 0 ? (
+                        <span className="text-muted ml-1 text-xs">
+                          (+{formatPesewas(run.deferred_pesewas)} held)
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="py-2 tabular-nums">
                       {run.paid_count}/{run.payout_count}
                       {run.failed_count > 0 ? (

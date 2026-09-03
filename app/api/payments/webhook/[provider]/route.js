@@ -12,11 +12,17 @@ export const dynamic = 'force-dynamic';
  * This route is public by necessity — a provider cannot sign in. The signature
  * IS the authentication, which is why processPaymentWebhook verifies before it
  * does anything else.
+ *
+ * The `[provider]` segment is passed through and CHECKED. It names which
+ * adapter the caller believes it is talking to, and a deployment configured for
+ * a different one must refuse rather than hand the payload to whichever adapter
+ * happens to be selected — see providerGuard() in lib/payments/webhook.js.
  */
-export async function POST(request) {
+export async function POST(request, { params }) {
+  const { provider } = await params;
   const rawBody = await request.text();
   const headers = Object.fromEntries(request.headers.entries());
 
-  const { status, body } = await processPaymentWebhook({ rawBody, headers });
+  const { status, body } = await processPaymentWebhook({ provider, rawBody, headers });
   return NextResponse.json(body, { status });
 }

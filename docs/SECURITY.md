@@ -119,10 +119,18 @@ The applicant never receives a storage path.
   an error message and never returns one.
 - `ARKESEL_WEBHOOK_SECRET` is what stops anyone who finds the callback URL
   writing into the notification log.
+- `PAYSTACK_SECRET_KEY` is the most dangerous credential in the deployment. It
+  charges cards, it sends transfers, and Paystack signs webhooks with it — so
+  anyone holding it can forge an event that marks an order paid. There is no
+  separate webhook secret to compromise instead.
+- `PAYSTACK_PUBLIC_KEY` is server-only too. It is not a secret, but hosted
+  redirect checkout means the browser never talks to Paystack, so no Paystack
+  credential has any reason to exist client-side. A `NEXT_PUBLIC_` copy would
+  only invite an inline flow that skips the server.
 - `tests/secrets.test.js` asserts all of this mechanically: no `NEXT_PUBLIC_`
   name, every read through `serverOnly()`, `process.env` touched in one module,
-  no client component importing the adapter, and neither the names nor the
-  values present in a built client bundle.
+  no client component importing an adapter or the admin client, and neither the
+  names nor the values present in a built client bundle.
 - No credential is committed. `.env` and `.env.local` are gitignored,
   `.env.example` carries names and never values, and `/api/health` reports
   whether each variable is present without echoing any of them.
@@ -132,6 +140,12 @@ The applicant never receives a storage path.
 
 ## Money
 
+- A browser returning from the provider's hosted checkout proves nothing. The
+  return handler asks the provider server-to-server what happened; the verified
+  answer moves the payment, never the arrival.
+- Payout account numbers live in `payout_destinations`, a server-only table with
+  no grants for any client role. They are deliberately not on `vendors`, where
+  an anonymous visitor can read every column of an active vendor.
 - Only a **signature-verified, deduplicated** provider event can move a payment
   to PAID. `confirm_payment` is not granted to any client role.
 - Webhook signatures are HMAC-verified before the body is parsed, with a

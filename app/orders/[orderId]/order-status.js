@@ -7,6 +7,7 @@ import {
   refreshOrderAction,
   keepWaitingAction,
   collectInsteadAction,
+  saveEmailAction,
 } from '@/app/order/actions';
 import { formatPesewas } from '@/lib/util/money';
 
@@ -17,9 +18,10 @@ import { formatPesewas } from '@/lib/util/money';
  * The customer can start a payment. They cannot mark one paid — that only ever
  * happens when a verified provider event reaches the server.
  */
-export default function OrderStatus({ order, pollMs = 6000 }) {
+export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
   const router = useRouter();
   const [payState, pay, paying] = useActionState(payOrderAction, {});
+  const [emailState, saveEmail, savingEmail] = useActionState(saveEmailAction, {});
 
   const [waitState, keepWaiting, waitingAgain] = useActionState(keepWaitingAction, {});
   const [collectState, collectInstead, collecting] = useActionState(collectInsteadAction, {});
@@ -49,6 +51,22 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
     return () => clearInterval(timer);
   }, [waiting, processing, cooking, order.order_id, router]);
 
+  /**
+   * The provider's checkout is on another origin, so getting there is a full
+   * browser navigation rather than a client-side route change. Done in an
+   * effect so React has committed the pending state first — the button stays
+   * disabled while the page is on its way out.
+   */
+  useEffect(() => {
+    if (payState.ok && payState.redirectUrl) {
+      window.location.href = payState.redirectUrl;
+    }
+  }, [payState]);
+
+  const leaving = Boolean(payState.ok && payState.redirectUrl);
+  // A save this render has not yet been reflected in the server-rendered prop.
+  const haveEmail = Boolean(email) || Boolean(emailState.ok);
+
   if (waiting) {
     return (
       <div className="rounded-lg bg-amber-50 px-4 py-4">
@@ -58,15 +76,54 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
   }
 
   if (order.stage === 'PAYMENT_REQUIRED' || order.stage === 'PAYMENT_FAILED') {
+    // The provider needs an address and we have none. Ask for it here rather
+    // than sending someone to a checkout that would turn them away.
+    if (!haveEmail) {
+      return (
+        <form action={saveEmail} className="space-y-3">
+          <input type="hidden" name="order_id" value={order.order_id} />
+          <label className="block">
+            <span className="text-sm font-medium">Email address</span>
+            <input
+              name="email"
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              required
+              defaultValue={email ?? ''}
+              placeholder="you@example.com"
+              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+            />
+          </label>
+          <p className="text-muted text-xs">
+            The payment page needs it, and your receipt goes there. We do not send anything else to
+            it.
+          </p>
+          <button
+            type="submit"
+            disabled={savingEmail}
+            className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
+          >
+            {savingEmail ? 'Saving…' : 'Save and continue'}
+          </button>
+          {emailState.message && !emailState.ok ? (
+            <p role="alert" className="text-sm text-red-700">
+              {emailState.message}
+            </p>
+          ) : null}
+        </form>
+      );
+    }
+
     return (
       <form action={pay}>
         <input type="hidden" name="order_id" value={order.order_id} />
         <button
           type="submit"
-          disabled={paying}
+          disabled={paying || leaving}
           className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
         >
-          {paying ? 'Starting…' : `Pay ${formatPesewas(order.total_pesewas)}`}
+          {paying || leaving ? 'Starting…' : `Pay ${formatPesewas(order.total_pesewas)}`}
         </button>
         {payState.message && !payState.ok ? (
           <p role="alert" className="mt-2 text-sm text-red-700">
@@ -74,7 +131,7 @@ export default function OrderStatus({ order, pollMs = 6000 }) {
           </p>
         ) : null}
         <p className="text-muted mt-2 text-center text-xs">
-          Paying with the development provider. No real money moves.
+          You will be taken to the payment page to finish.
         </p>
       </form>
     );

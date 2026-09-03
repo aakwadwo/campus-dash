@@ -11,6 +11,12 @@ import { join } from 'node:path';
  * webhook secret is what stops anyone who finds the callback URL writing into
  * the notification log. Neither has any reason to exist client-side, and the
  * cheapest moment to catch one leaking is here.
+ *
+ * The Paystack secret key is worse than either. It charges cards, it sends
+ * transfers, and it is the key their webhooks are SIGNED with — so anyone
+ * holding it can forge an event that marks an order paid. We use hosted
+ * redirect checkout precisely so that no Paystack credential needs to exist in
+ * the browser at all, public key included.
  */
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -38,6 +44,11 @@ describe('server-only credentials', () => {
     'ARKESEL_WEBHOOK_SECRET',
     'SUPABASE_SERVICE_ROLE_KEY',
     'SEND_SMS_HOOK_SECRET',
+    'PAYSTACK_SECRET_KEY',
+    // Not a secret, but it has no business in the bundle either: hosted
+    // redirect checkout never talks to Paystack from the browser, and a
+    // NEXT_PUBLIC_ copy would only invite an inline flow that skips the server.
+    'PAYSTACK_PUBLIC_KEY',
   ];
 
   test('none of them is ever read under a NEXT_PUBLIC_ name', () => {
@@ -51,7 +62,13 @@ describe('server-only credentials', () => {
 
   test('each is reached only through the server-only accessor', () => {
     const config = readFileSync(join(ROOT, 'lib', 'config.js'), 'utf8');
-    for (const name of ['ARKESEL_API_KEY', 'ARKESEL_WEBHOOK_SECRET', 'SUPABASE_SERVICE_ROLE_KEY']) {
+    for (const name of [
+      'ARKESEL_API_KEY',
+      'ARKESEL_WEBHOOK_SECRET',
+      'SUPABASE_SERVICE_ROLE_KEY',
+      'PAYSTACK_SECRET_KEY',
+      'PAYSTACK_PUBLIC_KEY',
+    ]) {
       assert.match(
         config,
         new RegExp(`serverOnly\\('${name}'`),
@@ -60,7 +77,7 @@ describe('server-only credentials', () => {
     }
   });
 
-  test('the Arkesel environment is READ in exactly one module', () => {
+  test('the provider environment is READ in exactly one module', () => {
     // The whole guarantee rests on there being one auditable place. A direct
     // process.env read anywhere else bypasses serverOnly() entirely.
     //
@@ -75,7 +92,9 @@ describe('server-only credentials', () => {
         else if (entry.endsWith('.js')) {
           const source = readFileSync(full, 'utf8');
           if (
-            /process\.env\.(ARKESEL_|SUPABASE_SERVICE_ROLE_KEY|SEND_SMS_HOOK_SECRET)/.test(source)
+            /process\.env\.(ARKESEL_|PAYSTACK_|SUPABASE_SERVICE_ROLE_KEY|SEND_SMS_HOOK_SECRET)/.test(
+              source
+            )
           ) {
             offenders.push(full.replace(ROOT, ''));
           }
@@ -91,8 +110,8 @@ describe('server-only credentials', () => {
     );
   });
 
-  test('no client component imports the SMS adapter or the webhook verifier', () => {
-    // Both hold or handle secrets. A `'use client'` file importing either would
+  test('no client component imports a provider adapter or the webhook verifier', () => {
+    // These hold or handle secrets. A `'use client'` file importing one would
     // pull it into the browser bundle.
     const clientFiles = [];
     const walk = (dir) => {
@@ -109,7 +128,16 @@ describe('server-only credentials', () => {
     walk(join(ROOT, 'app'));
 
     for (const [file, source] of clientFiles) {
-      for (const forbidden of ['lib/sms', '@/lib/sms', 'arkesel', 'supabase/admin']) {
+      for (const forbidden of [
+        'lib/sms',
+        '@/lib/sms',
+        'arkesel',
+        'lib/payments',
+        '@/lib/payments',
+        'paystack',
+        'lib/settlement',
+        'supabase/admin',
+      ]) {
         assert.doesNotMatch(
           source,
           new RegExp(`from\\s+['"][^'"]*${forbidden}`),
@@ -148,7 +176,13 @@ describe('server-only credentials', () => {
 
   test('.env.example carries names and never values', () => {
     const example = readFileSync(join(ROOT, '.env.example'), 'utf8');
-    for (const name of ['ARKESEL_API_KEY', 'ARKESEL_SENDER_ID', 'ARKESEL_WEBHOOK_SECRET']) {
+    for (const name of [
+      'ARKESEL_API_KEY',
+      'ARKESEL_SENDER_ID',
+      'ARKESEL_WEBHOOK_SECRET',
+      'PAYSTACK_SECRET_KEY',
+      'PAYSTACK_PUBLIC_KEY',
+    ]) {
       assert.match(example, new RegExp(`^#?\\s*${name}=`, 'm'), `${name} should be documented`);
     }
     // Every assignment must be empty or an obvious placeholder.

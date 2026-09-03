@@ -2,7 +2,7 @@
   "name": "campus-dash",
   "version": "0.1.0",
   "private": true,
-  "description": "Campus Dash — campus-only ordering and delivery for Academic City University, Ghana",
+  "description": "Campus Dash \u2014 campus-only ordering and delivery for Academic City University, Ghana",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -24,7 +24,8 @@
     "admin:create": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/create-admin.mjs",
     "verify:hosted": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/verify-hosted.mjs",
     "sms:test": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/send-test-sms.mjs",
-    "sms:webhook": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/replay-sms-webhook.mjs"
+    "sms:webhook": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/replay-sms-webhook.mjs",
+    "paystack:test": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/paystack-test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

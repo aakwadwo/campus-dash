@@ -51,11 +51,15 @@ describe('schema invariants', () => {
           from information_schema.role_table_grants
          where table_schema = 'public'
            and grantee in ('anon', 'authenticated')
-           and table_name in ('order_secrets', 'webhook_events', 'idempotency_keys', 'admin_actions')
+           and table_name in ('order_secrets', 'webhook_events', 'idempotency_keys', 'admin_actions', 'payout_destinations')
       `)
         ).rows
     );
-    assert.deepEqual(readable, [], 'pickup codes and provider payloads are server-only');
+    assert.deepEqual(
+      readable,
+      [],
+      'pickup codes, provider payloads and payout account numbers are server-only'
+    );
   });
 
   test('money-moving functions are not callable by any client role', async () => {
@@ -67,6 +71,20 @@ describe('schema invariants', () => {
       'settle_partner_earnings',
       'create_settlement_run',
       'mark_payout_paid',
+      // The payout lifecycle. A client that could call any of these could mark
+      // its own payout PAID, or release somebody else's allocation claim.
+      'mark_payout_processing',
+      'fail_payout',
+      'retry_payout',
+      // Unwinds a completed transfer and puts the liability back. A client that
+      // could call this could un-settle somebody else's money.
+      'reverse_payout',
+      'payout_for_transfer',
+      // Where the money goes. Reading it is as sensitive as writing it.
+      'payout_destination_for',
+      'attach_payout_recipient',
+      // payments.raw holds whole provider payloads, checkout URL included.
+      'payment_checkout_url',
       'record_webhook_event',
       'mark_webhook_processed',
       'expire_stale_orders',
@@ -219,6 +237,7 @@ describe('schema invariants', () => {
       'admin_mark_refunded',
       'admin_partner_documents_due_for_purge',
       'admin_payments',
+      'admin_payout_destinations',
       'admin_pilot_metrics',
       'admin_provider_transaction_ids',
       'admin_pending_settlement',
@@ -230,6 +249,7 @@ describe('schema invariants', () => {
       'admin_review_partner',
       'admin_scheduled_job_status',
       'admin_undelivered_notifications',
+      'admin_set_payout_destination',
       'admin_settlement_payouts',
       'admin_settlement_runs',
       'admin_set_location_active',
@@ -253,6 +273,7 @@ describe('schema invariants', () => {
       'my_capabilities',
       'my_outstanding_terms',
       'my_partner_application',
+      'my_payout_destination',
       'partner_accept_delivery',
       'partner_active_delivery',
       'partner_apply',
@@ -263,7 +284,9 @@ describe('schema invariants', () => {
       'partner_earnings_summary',
       'partner_report_customer_absent',
       'partner_set_availability',
+      'partner_set_payout_destination',
       'quote_order',
+      'set_my_email',
       'submit_order',
       'update_my_profile',
       'vendor_accept_order',

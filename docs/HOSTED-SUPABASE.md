@@ -6,7 +6,7 @@ Auth, and a database you can hand to somebody else.
 
 Everything below is the **development** configuration of a hosted project:
 still the fake payment adapter, still the fake SMS adapter. Nothing here
-connects Hubtel, Paystack or Arkesel.
+connects Paystack or Arkesel.
 
 ## What changes, and what does not
 

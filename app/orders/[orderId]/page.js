@@ -11,7 +11,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function CustomerOrderPage({ params }) {
   const { orderId } = await params;
-  await requireUser(`/orders/${orderId}`);
+  // The capabilities come back from the database on this request; `email` is
+  // read from them so the pay button can ask for one when the provider needs it.
+  const me = await requireUser(`/orders/${orderId}`);
 
   // Returns nothing unless the order belongs to the signed-in customer, so
   // another customer's id lands on a 404 rather than a message confirming it
@@ -37,7 +39,7 @@ export default async function CustomerOrderPage({ params }) {
         <p className="text-muted mt-2 font-mono text-xs">{order.order_number}</p>
       </header>
 
-      <OrderStatus order={order} pollMs={intervals.customerMs} />
+      <OrderStatus order={order} email={me.email ?? null} pollMs={intervals.customerMs} />
 
       <section className="mt-4 rounded-lg bg-white p-4 ring-1 ring-black/5">
         <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Your order</h2>

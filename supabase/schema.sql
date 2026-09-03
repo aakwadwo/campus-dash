@@ -219,7 +219,8 @@ CREATE TYPE "public"."payout_status" AS ENUM (
     'PROCESSING',
     'PAID',
     'FAILED',
-    'CANCELLED'
+    'CANCELLED',
+    'REVERSED'
 );
 
 
@@ -1185,6 +1186,25 @@ $$;
 ALTER FUNCTION "public"."admin_payments"("p_limit" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_payout_destinations"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "momo_network" "text", "account_number" "text", "account_name" "text", "provider" "text", "provider_recipient_code" "text", "provider_synced_at" timestamp with time zone, "updated_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select d.payee_type, d.payee_id,
+         coalesce(v.name, u.full_name, u.phone),
+         d.momo_network, d.account_number, d.account_name,
+         d.provider, d.provider_recipient_code, d.provider_synced_at, d.updated_at
+    from public.payout_destinations d
+    left join public.vendors v on d.payee_type = 'VENDOR'  and v.id = d.payee_id
+    left join public.users   u on d.payee_type = 'PARTNER' and u.id = d.payee_id
+   where public.is_admin()
+   order by d.payee_type, coalesce(v.name, u.full_name, u.phone);
+$$;
+
+
+ALTER FUNCTION "public"."admin_payout_destinations"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") RETURNS TABLE("payee_id" "uuid", "payee_name" "text", "order_count" bigint, "owed_pesewas" bigint, "oldest_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -1802,6 +1822,102 @@ $$;
 ALTER FUNCTION "public"."admin_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean, "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."payout_destinations" (
+    "payee_type" "public"."payee_type" NOT NULL,
+    "payee_id" "uuid" NOT NULL,
+    "momo_network" "text" NOT NULL,
+    "account_number" "text" NOT NULL,
+    "account_name" "text" NOT NULL,
+    "provider" "text",
+    "provider_recipient_code" "text",
+    "provider_synced_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "payout_destinations_account_name_check" CHECK (("btrim"("account_name") <> ''::"text")),
+    CONSTRAINT "payout_destinations_account_number_check" CHECK (("account_number" ~ '^0[0-9]{9}$'::"text")),
+    CONSTRAINT "payout_destinations_code_needs_provider" CHECK ((("provider_recipient_code" IS NULL) OR ("provider" IS NOT NULL))),
+    CONSTRAINT "payout_destinations_momo_network_check" CHECK (("momo_network" = ANY (ARRAY['MTN'::"text", 'VODAFONE'::"text", 'AIRTELTIGO'::"text"]))),
+    CONSTRAINT "payout_destinations_not_platform" CHECK (("payee_type" <> 'PLATFORM'::"public"."payee_type"))
+);
+
+
+ALTER TABLE "public"."payout_destinations" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."payout_destinations" IS 'Where settlement money goes. Server-only: no client role holds any grant.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_before public.payout_destinations%rowtype;
+  v_after  public.payout_destinations%rowtype;
+  v_number text := regexp_replace(coalesce(p_account_number, ''), '[^0-9+]', '', 'g');
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- Accept the E.164 form people paste out of a phone book and store the local
+  -- one Paystack wants. Rejecting +233… here would just move the conversion
+  -- into whoever is typing.
+  if left(v_number, 4) = '+233' then
+    v_number := '0' || substring(v_number from 5);
+  elsif left(v_number, 3) = '233' then
+    v_number := '0' || substring(v_number from 4);
+  end if;
+
+  if v_number !~ '^0[0-9]{9}$' then
+    raise exception 'a Ghanaian mobile money number is required, e.g. 0551234567'
+      using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_account_name, '')), '') is null then
+    raise exception 'the name on the mobile money account is required'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_before from public.payout_destinations
+   where payee_type = p_payee_type and payee_id = p_payee_id;
+
+  insert into public.payout_destinations (
+    payee_type, payee_id, momo_network, account_number, account_name
+  )
+  values (p_payee_type, p_payee_id, p_momo_network, v_number, btrim(p_account_name))
+  on conflict (payee_type, payee_id) do update
+     set momo_network   = excluded.momo_network,
+         account_number = excluded.account_number,
+         account_name   = excluded.account_name,
+         -- A changed destination invalidates the provider's recipient. Keeping
+         -- it would send the next transfer to the OLD number.
+         provider                = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider end,
+         provider_recipient_code = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider_recipient_code end,
+         provider_synced_at      = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider_synced_at end
+  returning * into v_after;
+
+  perform public.log_admin_action(
+    'PAYOUT_DESTINATION_SET', lower(p_payee_type::text), p_payee_id, p_reason,
+    to_jsonb(v_before), to_jsonb(v_after)
+  );
+
+  return v_after;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") RETURNS "public"."vendors"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -1857,11 +1973,12 @@ $$;
 ALTER FUNCTION "public"."admin_settlement_payouts"("p_run_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_settlement_runs"("p_limit" integer DEFAULT 50) RETURNS TABLE("run_id" "uuid", "payee_type" "public"."payee_type", "period_start" timestamp with time zone, "period_end" timestamp with time zone, "status" "public"."settlement_run_status", "total_pesewas" bigint, "payout_count" bigint, "paid_count" bigint, "failed_count" bigint, "created_at" timestamp with time zone, "completed_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_settlement_runs"("p_limit" integer DEFAULT 50) RETURNS TABLE("run_id" "uuid", "payee_type" "public"."payee_type", "period_start" timestamp with time zone, "period_end" timestamp with time zone, "status" "public"."settlement_run_status", "total_pesewas" bigint, "deferred_pesewas" bigint, "deferred_payees" integer, "payout_count" bigint, "paid_count" bigint, "failed_count" bigint, "created_at" timestamp with time zone, "completed_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select r.id, r.payee_type, r.period_start, r.period_end, r.status, r.total_pesewas,
+         r.deferred_pesewas, r.deferred_payee_count,
          (select count(*) from public.payouts p where p.settlement_run_id = r.id),
          (select count(*) from public.payouts p where p.settlement_run_id = r.id and p.status = 'PAID'),
          (select count(*) from public.payouts p where p.settlement_run_id = r.id and p.status = 'FAILED'),
@@ -2163,7 +2280,7 @@ CREATE TABLE IF NOT EXISTS "public"."payments" (
 ALTER TABLE "public"."payments" OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text") RETURNS "public"."payments"
+CREATE OR REPLACE FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb" DEFAULT NULL::"jsonb") RETURNS "public"."payments"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -2182,11 +2299,18 @@ begin
       raise exception 'payment % is already attached to transaction %',
         p_payment_id, v_payment.provider_transaction_id using errcode = 'check_violation';
     end if;
-    return v_payment;  -- idempotent replay
+
+    -- Same transaction, possibly a fresher checkout URL. Merge, never detach.
+    update public.payments
+       set raw = public.payments.raw || coalesce(p_raw, '{}'::jsonb)
+     where id = p_payment_id
+    returning * into v_payment;
+    return v_payment;
   end if;
 
   update public.payments
-     set provider_transaction_id = p_provider_transaction_id
+     set provider_transaction_id = p_provider_transaction_id,
+         raw = public.payments.raw || coalesce(p_raw, '{}'::jsonb)
    where id = p_payment_id
   returning * into v_payment;
 
@@ -2195,7 +2319,40 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_row public.payout_destinations%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  if nullif(btrim(coalesce(p_recipient_code, '')), '') is null then
+    raise exception 'a recipient code is required' using errcode = 'check_violation';
+  end if;
+
+  update public.payout_destinations
+     set provider = p_provider,
+         provider_recipient_code = p_recipient_code,
+         provider_synced_at = now()
+   where payee_type = p_payee_type and payee_id = p_payee_id
+  returning * into v_row;
+
+  if not found then
+    raise exception 'no payout destination for % %', p_payee_type, p_payee_id
+      using errcode = 'no_data_found';
+  end if;
+
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."check_allocations_balance"() RETURNS "trigger"
@@ -2402,6 +2559,10 @@ CREATE TABLE IF NOT EXISTS "public"."settlement_runs" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "completed_at" timestamp with time zone,
+    "deferred_payee_count" integer DEFAULT 0 NOT NULL,
+    "deferred_pesewas" bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT "settlement_runs_deferred_payee_count_check" CHECK (("deferred_payee_count" >= 0)),
+    CONSTRAINT "settlement_runs_deferred_pesewas_check" CHECK (("deferred_pesewas" >= 0)),
     CONSTRAINT "settlement_runs_period_ordered" CHECK (("period_end" > "period_start")),
     CONSTRAINT "settlement_runs_total_pesewas_check" CHECK (("total_pesewas" >= 0))
 );
@@ -2410,15 +2571,29 @@ CREATE TABLE IF NOT EXISTS "public"."settlement_runs" (
 ALTER TABLE "public"."settlement_runs" OWNER TO "postgres";
 
 
+COMMENT ON COLUMN "public"."settlement_runs"."deferred_pesewas" IS 'Owed to payees under min_payout_pesewas at run time. NOT claimed by this run — released back to the pool for a later one.';
+
+
 CREATE OR REPLACE FUNCTION "public"."create_settlement_run"("p_payee_type" "public"."payee_type", "p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) RETURNS "public"."settlement_runs"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
-  v_run   public.settlement_runs%rowtype;
-  v_total bigint;
+  v_run      public.settlement_runs%rowtype;
+  v_total    bigint;
+  v_minimum  bigint;
+  v_deferred record;
 begin
   perform public.assert_service_or_admin();
+
+  -- PLATFORM is Campus Dash's own revenue, and its allocations carry no
+  -- payee_id, so a PLATFORM run could never produce a payout — it would only
+  -- move the platform's own ledger rows to SETTLING and strand them there. It
+  -- is refused rather than silently doing that.
+  if p_payee_type = 'PLATFORM' then
+    raise exception 'PLATFORM revenue is not settled by a payout run'
+      using errcode = 'check_violation';
+  end if;
 
   -- Re-running a period returns the existing run rather than creating a second
   -- one that would pay everybody twice.
@@ -2429,11 +2604,23 @@ begin
     return v_run;
   end if;
 
+  select coalesce(min_payout_pesewas, 0) into v_minimum
+    from public.pricing_config where id;
+
+  -- A payout is only ever created for a positive amount, so the effective floor
+  -- is at least one pesewa. Without this a payee summing to exactly zero would
+  -- be claimed and then left behind by the `having sum > 0` filter below —
+  -- the same stranding, at a different amount.
+  v_minimum := greatest(coalesce(v_minimum, 0), 1);
+
   insert into public.settlement_runs (payee_type, period_start, period_end, status, created_by)
   values (p_payee_type, p_period_start, p_period_end, 'PROCESSING', auth.uid())
   returning * into v_run;
 
-  -- Claim the eligible allocations for this run.
+  -- Claim everything eligible up to the end of the period. No lower bound: see
+  -- the header. Anything older than this period is either already claimed by
+  -- the run that took it, or was deliberately released back — deferred, failed
+  -- or reversed — and is exactly what should be swept up now.
   update public.allocations a
      set settlement_run_id = v_run.id, status = 'SETTLING'
     from public.orders o
@@ -2441,10 +2628,34 @@ begin
      and a.payee_type = p_payee_type
      and a.status = 'ELIGIBLE'
      and a.settlement_run_id is null
-     and o.created_at >= p_period_start
-     and o.created_at <  p_period_end;
+     and o.created_at < p_period_end;
 
-  -- One payout per payee, summing their allocations. The unique index on
+  -- Below the threshold a transfer costs more in fees than it moves. The claim
+  -- is released in the same transaction that took it, so the money is never
+  -- attached to a payout that will not be sent, and shows up as owed again the
+  -- moment this function returns.
+  select count(*)::integer as payees, coalesce(sum(owed), 0)::bigint as pesewas
+    into v_deferred
+    from (
+      select a.payee_id, sum(a.amount_pesewas) as owed
+        from public.allocations a
+       where a.settlement_run_id = v_run.id and a.payee_id is not null
+       group by a.payee_id
+      having sum(a.amount_pesewas) < v_minimum
+    ) under_threshold;
+
+  update public.allocations a
+     set settlement_run_id = null, status = 'ELIGIBLE', settled_at = null
+   where a.settlement_run_id = v_run.id
+     and a.payee_id in (
+       select a2.payee_id
+         from public.allocations a2
+        where a2.settlement_run_id = v_run.id and a2.payee_id is not null
+        group by a2.payee_id
+       having sum(a2.amount_pesewas) < v_minimum
+     );
+
+  -- One payout per payee, summing what is left claimed. The unique index on
   -- (settlement_run_id, payee_type, payee_id) makes a duplicate impossible.
   insert into public.payouts (settlement_run_id, payee_type, payee_id, amount_pesewas, idempotency_key)
   select v_run.id, a.payee_type, a.payee_id, sum(a.amount_pesewas),
@@ -2452,12 +2663,16 @@ begin
     from public.allocations a
    where a.settlement_run_id = v_run.id and a.payee_id is not null
    group by a.payee_type, a.payee_id
-  having sum(a.amount_pesewas) > 0;
+  having sum(a.amount_pesewas) >= v_minimum;
 
   select coalesce(sum(amount_pesewas), 0) into v_total
     from public.payouts where settlement_run_id = v_run.id;
 
-  update public.settlement_runs set total_pesewas = v_total where id = v_run.id
+  update public.settlement_runs
+     set total_pesewas = v_total,
+         deferred_payee_count = v_deferred.payees,
+         deferred_pesewas = v_deferred.pesewas
+   where id = v_run.id
   returning * into v_run;
 
   return v_run;
@@ -2864,6 +3079,81 @@ $$;
 ALTER FUNCTION "public"."fail_payment"("p_payment_id" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."payouts" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "settlement_run_id" "uuid" NOT NULL,
+    "payee_type" "public"."payee_type" NOT NULL,
+    "payee_id" "uuid" NOT NULL,
+    "amount_pesewas" bigint NOT NULL,
+    "currency" "text" DEFAULT 'GHS'::"text" NOT NULL,
+    "status" "public"."payout_status" DEFAULT 'PENDING'::"public"."payout_status" NOT NULL,
+    "provider" "text",
+    "provider_transfer_id" "text",
+    "idempotency_key" "text" NOT NULL,
+    "failure_reason" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "paid_at" timestamp with time zone,
+    "transfer_attempt" integer DEFAULT 0 NOT NULL,
+    CONSTRAINT "payouts_amount_pesewas_check" CHECK (("amount_pesewas" > 0)),
+    CONSTRAINT "payouts_currency_check" CHECK (("currency" = 'GHS'::"text"))
+);
+
+
+ALTER TABLE "public"."payouts" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."payouts"."transfer_attempt" IS 'Number of transfer attempts made. Drives the provider reference so a retry is never a duplicate; our payout id and idempotency_key are unchanged by it.';
+
+
+CREATE OR REPLACE FUNCTION "public"."fail_payout"("p_payout_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."payouts"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payout public.payouts%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  select * into v_payout from public.payouts where id = p_payout_id;
+  if not found then
+    raise exception 'payout not found' using errcode = 'no_data_found';
+  end if;
+
+  -- Money already out of the door is not un-sent by a late failure event.
+  if v_payout.status = 'PAID' then
+    return v_payout;
+  end if;
+  -- Already terminal: idempotent replay, and a failure after a reversal has
+  -- nothing left to unwind.
+  if v_payout.status in ('FAILED', 'REVERSED') then
+    return v_payout;
+  end if;
+
+  update public.payouts
+     set status = 'FAILED', failure_reason = p_reason
+   where id = p_payout_id and status in ('PENDING', 'PROCESSING')
+  returning * into v_payout;
+
+  if not found then
+    raise exception 'payout was not failable' using errcode = 'check_violation';
+  end if;
+
+  update public.allocations
+     set status = 'ELIGIBLE', settlement_run_id = null, settled_at = null
+   where settlement_run_id = v_payout.settlement_run_id
+     and payee_type = v_payout.payee_type
+     and payee_id   = v_payout.payee_id
+     and status = 'SETTLING';
+
+  return v_payout;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."fail_payout"("p_payout_id" "uuid", "p_reason" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."forbid_mutation"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -2931,6 +3221,18 @@ CREATE OR REPLACE FUNCTION "public"."get_delivery_offers"() RETURNS TABLE("order
       select 1 from public.orders a
        where a.partner_id = auth.uid()
          and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
+    )
+    -- CONFLICT OF INTEREST 1: never your own order.
+    and o.customer_id <> auth.uid()
+    -- CONFLICT OF INTEREST 2: never a vendor you work for.
+    --
+    -- Read straight from vendor_users rather than through my_vendor_ids(),
+    -- which also filters out suspended users. That extra condition is harmless
+    -- here but it would fold a second rule into this one, and this predicate
+    -- should say exactly what the policy says and nothing else.
+    and not exists (
+      select 1 from public.vendor_users vu
+       where vu.vendor_id = o.vendor_id and vu.user_id = auth.uid()
     )
   order by o.ready_at asc;
 $$;
@@ -3275,30 +3577,7 @@ $$;
 ALTER FUNCTION "public"."mark_payment_failed_internal"("p_payment_id" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."payouts" (
-    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "settlement_run_id" "uuid" NOT NULL,
-    "payee_type" "public"."payee_type" NOT NULL,
-    "payee_id" "uuid" NOT NULL,
-    "amount_pesewas" bigint NOT NULL,
-    "currency" "text" DEFAULT 'GHS'::"text" NOT NULL,
-    "status" "public"."payout_status" DEFAULT 'PENDING'::"public"."payout_status" NOT NULL,
-    "provider" "text",
-    "provider_transfer_id" "text",
-    "idempotency_key" "text" NOT NULL,
-    "failure_reason" "text",
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "paid_at" timestamp with time zone,
-    CONSTRAINT "payouts_amount_pesewas_check" CHECK (("amount_pesewas" > 0)),
-    CONSTRAINT "payouts_currency_check" CHECK (("currency" = 'GHS'::"text"))
-);
-
-
-ALTER TABLE "public"."payouts" OWNER TO "postgres";
-
-
-CREATE OR REPLACE FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") RETURNS "public"."payouts"
+CREATE OR REPLACE FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text", "p_amount_pesewas" bigint DEFAULT NULL::bigint) RETURNS "public"."payouts"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -3308,8 +3587,20 @@ begin
   perform public.assert_service_or_admin();
 
   select * into v_payout from public.payouts where id = p_payout_id;
+  if not found then
+    raise exception 'payout not found' using errcode = 'no_data_found';
+  end if;
+
   if v_payout.status = 'PAID' then
     return v_payout;  -- idempotent replay
+  end if;
+
+  -- The provider must have moved exactly what was owed. A mismatch is a
+  -- reconciliation incident, not something to paper over — the same rule
+  -- confirm_payment applies to money coming in.
+  if p_amount_pesewas is not null and p_amount_pesewas <> v_payout.amount_pesewas then
+    raise exception 'payout amount mismatch: provider reported % but payout is %',
+      p_amount_pesewas, v_payout.amount_pesewas using errcode = 'check_violation';
   end if;
 
   update public.payouts
@@ -3333,7 +3624,45 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text", "p_amount_pesewas" bigint) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."mark_payout_processing"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") RETURNS "public"."payouts"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payout public.payouts%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  select * into v_payout from public.payouts where id = p_payout_id;
+  if not found then
+    raise exception 'payout not found' using errcode = 'no_data_found';
+  end if;
+
+  -- A webhook can beat the HTTP response that started the transfer. Winning
+  -- that race must not drag a PAID payout backwards.
+  if v_payout.status in ('PAID', 'PROCESSING') then
+    return v_payout;
+  end if;
+
+  update public.payouts
+     set status = 'PROCESSING', provider = p_provider,
+         provider_transfer_id = p_provider_transfer_id
+   where id = p_payout_id and status = 'PENDING'
+  returning * into v_payout;
+
+  if not found then
+    raise exception 'payout was not PENDING' using errcode = 'check_violation';
+  end if;
+
+  return v_payout;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."mark_payout_processing"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "p_status" "public"."webhook_event_status", "p_error" "text" DEFAULT NULL::"text") RETURNS "void"
@@ -3361,12 +3690,10 @@ CREATE OR REPLACE FUNCTION "public"."my_capabilities"() RETURNS "jsonb"
         'user_id',          u.id,
         'phone',            u.phone,
         'full_name',        u.full_name,
+        'email',            u.email,
         'is_suspended',     u.is_suspended,
         'is_admin',         u.is_admin,
-        -- Everyone with an account can order. That is the low-friction path:
-        -- phone OTP only, no ID upload, no selfie, no manual approval.
         'can_order',        not u.is_suspended,
-        -- Partner capability on the SAME account.
         'partner_status',   coalesce(p.status::text, 'NOT_APPLIED'),
         'is_partner',       coalesce(p.status = 'APPROVED', false) and not u.is_suspended,
         'partner_available', coalesce(p.is_available, false),
@@ -3434,6 +3761,20 @@ $$;
 
 
 ALTER FUNCTION "public"."my_partner_application"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."my_payout_destination"() RETURNS TABLE("momo_network" "text", "account_number" "text", "account_name" "text", "is_ready" boolean)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select d.momo_network, d.account_number, d.account_name,
+         d.provider_recipient_code is not null
+    from public.payout_destinations d
+   where d.payee_type = 'PARTNER' and d.payee_id = auth.uid();
+$$;
+
+
+ALTER FUNCTION "public"."my_payout_destination"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."my_vendor_ids"() RETURNS SETOF "uuid"
@@ -3512,8 +3853,34 @@ begin
   end if;
 
   -- Authorisation failure: raise. Not a routine outcome.
+  --
+  -- FIRST, and it must stay first: somebody who is not a Partner at all is told
+  -- that, rather than being told about a conflict they could not have had.
   if not public.is_approved_partner() then
     raise exception 'partner is not approved' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- CONFLICT OF INTEREST. Also authorisation failures, so also raised: this is
+  -- a Partner attempting something policy forbids, not one losing a race.
+  --
+  -- Neither message tells the caller anything they did not already know — that
+  -- an order is theirs, or that they work for a vendor.
+  if exists (
+    select 1 from public.orders o
+     where o.id = p_order_id and o.customer_id = v_partner
+  ) then
+    raise exception 'you cannot deliver an order you placed yourself'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if exists (
+    select 1
+      from public.orders o
+      join public.vendor_users vu on vu.vendor_id = o.vendor_id
+     where o.id = p_order_id and vu.user_id = v_partner
+  ) then
+    raise exception 'you cannot deliver an order from a vendor you work for'
+      using errcode = 'insufficient_privilege';
   end if;
 
   v_code := public.generate_numeric_code(4);
@@ -3529,6 +3896,10 @@ begin
   -- The one-active-delivery rule is belt AND braces: this NOT EXISTS plus the
   -- partial unique index orders_one_active_delivery_per_partner, which would
   -- reject a second claim even if this predicate were somehow bypassed.
+  --
+  -- The two conflict rules are repeated here for the same reason. The checks
+  -- above ran in an earlier statement; a staff row inserted in between would
+  -- otherwise slip through the gap.
   update public.orders o
      set partner_id = v_partner,
          delivery_status = 'ASSIGNED',
@@ -3546,6 +3917,11 @@ begin
        select 1 from public.orders a
         where a.partner_id = v_partner
           and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
+     )
+     and o.customer_id <> v_partner
+     and not exists (
+       select 1 from public.vendor_users vu
+        where vu.vendor_id = o.vendor_id and vu.user_id = v_partner
      )
   returning * into v_order;
 
@@ -3955,6 +4331,141 @@ $$;
 ALTER FUNCTION "public"."partner_set_availability"("p_available" boolean) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_row    public.payout_destinations%rowtype;
+  v_number text := regexp_replace(coalesce(p_account_number, ''), '[^0-9+]', '', 'g');
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+  if not exists (
+    select 1 from public.partner_profiles
+     where user_id = auth.uid() and status = 'APPROVED'
+  ) then
+    raise exception 'only an approved Partner has a payout destination'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if left(v_number, 4) = '+233' then
+    v_number := '0' || substring(v_number from 5);
+  elsif left(v_number, 3) = '233' then
+    v_number := '0' || substring(v_number from 4);
+  end if;
+
+  if v_number !~ '^0[0-9]{9}$' then
+    raise exception 'a Ghanaian mobile money number is required, e.g. 0551234567'
+      using errcode = 'check_violation';
+  end if;
+  if p_momo_network not in ('MTN', 'VODAFONE', 'AIRTELTIGO') then
+    raise exception 'choose MTN, VODAFONE or AIRTELTIGO' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_account_name, '')), '') is null then
+    raise exception 'the name on the mobile money account is required'
+      using errcode = 'check_violation';
+  end if;
+
+  insert into public.payout_destinations (
+    payee_type, payee_id, momo_network, account_number, account_name
+  )
+  values ('PARTNER', auth.uid(), p_momo_network, v_number, btrim(p_account_name))
+  on conflict (payee_type, payee_id) do update
+     set momo_network   = excluded.momo_network,
+         account_number = excluded.account_number,
+         account_name   = excluded.account_name,
+         provider                = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider end,
+         provider_recipient_code = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider_recipient_code end,
+         provider_synced_at      = case
+           when public.payout_destinations.account_number <> excluded.account_number
+             or public.payout_destinations.momo_network   <> excluded.momo_network
+           then null else public.payout_destinations.provider_synced_at end
+  returning * into v_row;
+
+  return v_row;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_url text;
+begin
+  perform public.assert_service_or_admin();
+  select raw ->> 'authorization_url' into v_url from public.payments where id = p_payment_id;
+  return v_url;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."payout_destination_for"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_row public.payout_destinations%rowtype;
+begin
+  perform public.assert_service_or_admin();
+  select * into v_row from public.payout_destinations
+   where payee_type = p_payee_type and payee_id = p_payee_id;
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."payout_destination_for"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text" DEFAULT NULL::"text") RETURNS "public"."payouts"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payout public.payouts%rowtype;
+  v_id     text;
+begin
+  perform public.assert_service_or_admin();
+
+  if p_provider_transfer_id is not null then
+    select * into v_payout from public.payouts
+     where provider = p_provider and provider_transfer_id = p_provider_transfer_id;
+    if found then
+      return v_payout;
+    end if;
+  end if;
+
+  if p_reference is not null then
+    v_id := substring(p_reference from '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})');
+    if v_id is not null then
+      select * into v_payout from public.payouts where id = v_id::uuid;
+    end if;
+  end if;
+
+  return v_payout;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."platform_config"() RETURNS "public"."pricing_config"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -4180,6 +4691,202 @@ $$;
 ALTER FUNCTION "public"."record_webhook_event"("p_provider" "text", "p_event_id" "text", "p_payload" "jsonb", "p_signature_valid" boolean) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."retry_payout"("p_payout_id" "uuid") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payout public.payouts%rowtype;
+  v_run    public.settlement_runs%rowtype;
+  v_sum    bigint;
+begin
+  perform public.assert_service_or_admin();
+
+  select * into v_payout from public.payouts where id = p_payout_id;
+  if not found then
+    return (false, 'payout not found')::public.transition_result;
+  end if;
+  if v_payout.status = 'PAID' then
+    return (false, 'this payout is already paid')::public.transition_result;
+  end if;
+  -- A reversal is not retried here. The allocations went back into the pool, so
+  -- the money is settled again by the NEXT run, under a new payout — never by
+  -- re-sending a transfer that already completed once.
+  if v_payout.status = 'REVERSED' then
+    return (false,
+      'this payout was reversed; the money is owed again and the next run will settle it')
+      ::public.transition_result;
+  end if;
+  if v_payout.status <> 'FAILED' then
+    return (false, 'only a failed payout is retried')::public.transition_result;
+  end if;
+
+  select * into v_run from public.settlement_runs where id = v_payout.settlement_run_id;
+
+  update public.allocations a
+     set settlement_run_id = v_run.id, status = 'SETTLING'
+    from public.orders o
+   where a.order_id = o.id
+     and a.payee_type = v_payout.payee_type
+     and a.payee_id   = v_payout.payee_id
+     and a.status = 'ELIGIBLE'
+     and a.settlement_run_id is null
+     and o.created_at < v_run.period_end;
+
+  select coalesce(sum(amount_pesewas), 0) into v_sum
+    from public.allocations
+   where settlement_run_id = v_run.id
+     and payee_type = v_payout.payee_type
+     and payee_id   = v_payout.payee_id;
+
+  if v_sum <> v_payout.amount_pesewas then
+    -- Put back whatever we just took, so a refused retry changes nothing.
+    update public.allocations
+       set settlement_run_id = null, status = 'ELIGIBLE'
+     where settlement_run_id = v_run.id
+       and payee_type = v_payout.payee_type
+       and payee_id   = v_payout.payee_id
+       and status = 'SETTLING';
+    return (false,
+      'the allocations behind this payout have moved to another run; settle it there')
+      ::public.transition_result;
+  end if;
+
+  update public.payouts
+     set status = 'PENDING', failure_reason = null,
+         provider_transfer_id = null,
+         -- The next attempt therefore builds a DIFFERENT provider reference.
+         transfer_attempt = transfer_attempt + 1
+   where id = p_payout_id and status = 'FAILED';
+
+  return (true, null)::public.transition_result;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."retry_payout"("p_payout_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."reverse_payout"("p_payout_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."payouts"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payout public.payouts%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  select * into v_payout from public.payouts where id = p_payout_id;
+  if not found then
+    raise exception 'payout not found' using errcode = 'no_data_found';
+  end if;
+
+  -- Idempotent: a provider that sends the reversal five times reverses once.
+  if v_payout.status = 'REVERSED' then
+    return v_payout;
+  end if;
+
+  -- A reversal that arrives for a payout which never reached PAID is simply a
+  -- failure, and is recorded as one. Nothing was settled, so there is nothing
+  -- to unwind beyond releasing the claim.
+  if v_payout.status in ('PENDING', 'PROCESSING') then
+    return public.fail_payout(p_payout_id, coalesce(p_reason, 'provider reported REVERSED'));
+  end if;
+
+  if v_payout.status <> 'PAID' then
+    return v_payout;  -- FAILED or CANCELLED: already not owed to anybody
+  end if;
+
+  update public.payouts
+     set status = 'REVERSED',
+         failure_reason = coalesce(p_reason, 'provider reversed this transfer'),
+         paid_at = null
+   where id = p_payout_id and status = 'PAID'
+  returning * into v_payout;
+
+  if not found then
+    raise exception 'payout was not reversible' using errcode = 'check_violation';
+  end if;
+
+  -- The liability comes back. These were SETTLED by mark_payout_paid; they are
+  -- owed again, so they return to the pool for the next run.
+  update public.allocations
+     set status = 'ELIGIBLE', settlement_run_id = null, settled_at = null
+   where settlement_run_id = v_payout.settlement_run_id
+     and payee_type = v_payout.payee_type
+     and payee_id   = v_payout.payee_id
+     and status = 'SETTLED';
+
+  return v_payout;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."reverse_payout"("p_payout_id" "uuid", "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."users" (
+    "id" "uuid" NOT NULL,
+    "phone" "text" NOT NULL,
+    "full_name" "text",
+    "is_admin" boolean DEFAULT false NOT NULL,
+    "is_suspended" boolean DEFAULT false NOT NULL,
+    "student_id_number" "text",
+    "student_verified_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "class_year" "text",
+    "email" "text",
+    CONSTRAINT "users_class_year_shape" CHECK ((("class_year" IS NULL) OR ("btrim"("class_year") <> ''::"text"))),
+    CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
+    CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
+);
+
+
+ALTER TABLE "public"."users" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."users"."class_year" IS 'Applicant-declared cohort, e.g. "Class of 2029". Declared, never verified.';
+
+
+COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
+
+
+CREATE OR REPLACE FUNCTION "public"."set_my_email"("p_email" "text") RETURNS "public"."users"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_user  public.users%rowtype;
+  v_email text := lower(btrim(coalesce(p_email, '')));
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if v_email = '' then
+    raise exception 'an email address is required' using errcode = 'check_violation';
+  end if;
+  if v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'that email address does not look like an address'
+      using errcode = 'check_violation';
+  end if;
+
+  update public.users set email = v_email where id = auth.uid()
+  returning * into v_user;
+
+  if not found then
+    raise exception 'no profile for this account' using errcode = 'no_data_found';
+  end if;
+
+  return v_user;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."set_my_email"("p_email" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."set_updated_at"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -4383,33 +5090,6 @@ $$;
 
 
 ALTER FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") OWNER TO "postgres";
-
-
-CREATE TABLE IF NOT EXISTS "public"."users" (
-    "id" "uuid" NOT NULL,
-    "phone" "text" NOT NULL,
-    "full_name" "text",
-    "is_admin" boolean DEFAULT false NOT NULL,
-    "is_suspended" boolean DEFAULT false NOT NULL,
-    "student_id_number" "text",
-    "student_verified_at" timestamp with time zone,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "class_year" "text",
-    "email" "text",
-    CONSTRAINT "users_class_year_shape" CHECK ((("class_year" IS NULL) OR ("btrim"("class_year") <> ''::"text"))),
-    CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
-    CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
-);
-
-
-ALTER TABLE "public"."users" OWNER TO "postgres";
-
-
-COMMENT ON COLUMN "public"."users"."class_year" IS 'Applicant-declared cohort, e.g. "Class of 2029". Declared, never verified.';
-
-
-COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
 
 
 CREATE OR REPLACE FUNCTION "public"."update_my_profile"("p_full_name" "text") RETURNS "public"."users"
@@ -5161,6 +5841,10 @@ ALTER TABLE ONLY "public"."payments"
     ADD CONSTRAINT "payments_pkey" PRIMARY KEY ("id");
 
 
+ALTER TABLE ONLY "public"."payout_destinations"
+    ADD CONSTRAINT "payout_destinations_pkey" PRIMARY KEY ("payee_type", "payee_id");
+
+
 ALTER TABLE ONLY "public"."payouts"
     ADD CONSTRAINT "payouts_pkey" PRIMARY KEY ("id");
 
@@ -5314,6 +5998,9 @@ CREATE INDEX "payments_order_idx" ON "public"."payments" USING "btree" ("order_i
 CREATE UNIQUE INDEX "payments_provider_txn_unique" ON "public"."payments" USING "btree" ("provider", "provider_transaction_id") WHERE ("provider_transaction_id" IS NOT NULL);
 
 
+CREATE UNIQUE INDEX "payout_destinations_provider_code_unique" ON "public"."payout_destinations" USING "btree" ("provider", "provider_recipient_code") WHERE ("provider_recipient_code" IS NOT NULL);
+
+
 CREATE UNIQUE INDEX "payouts_idempotency_key_unique" ON "public"."payouts" USING "btree" ("idempotency_key");
 
 
@@ -5393,6 +6080,9 @@ CREATE OR REPLACE TRIGGER "partner_profiles_set_updated_at" BEFORE UPDATE ON "pu
 
 
 CREATE OR REPLACE TRIGGER "payments_set_updated_at" BEFORE UPDATE ON "public"."payments" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+CREATE OR REPLACE TRIGGER "payout_destinations_set_updated_at" BEFORE UPDATE ON "public"."payout_destinations" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
 CREATE OR REPLACE TRIGGER "payouts_set_updated_at" BEFORE UPDATE ON "public"."payouts" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
@@ -5621,6 +6311,9 @@ CREATE POLICY "payments_read_customer" ON "public"."payments" FOR SELECT TO "aut
   WHERE (("o"."id" = "payments"."order_id") AND ("o"."customer_id" = "auth"."uid"())))));
 
 
+ALTER TABLE "public"."payout_destinations" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."payouts" ENABLE ROW LEVEL SECURITY;
 
 
@@ -5841,6 +6534,11 @@ GRANT ALL ON FUNCTION "public"."admin_payments"("p_limit" integer) TO "service_r
 GRANT ALL ON FUNCTION "public"."admin_payments"("p_limit" integer) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_payout_destinations"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_payout_destinations"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_payout_destinations"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") TO "authenticated";
@@ -5901,6 +6599,14 @@ GRANT ALL ON FUNCTION "public"."admin_set_menu_item_available"("p_menu_item_id" 
 GRANT ALL ON FUNCTION "public"."admin_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean, "p_reason" "text") TO "authenticated";
 
 
+GRANT ALL ON TABLE "public"."payout_destinations" TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "authenticated";
@@ -5959,8 +6665,12 @@ GRANT ALL ON TABLE "public"."payments" TO "service_role";
 GRANT SELECT ON TABLE "public"."payments" TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."check_allocations_balance"() FROM PUBLIC;
@@ -6056,6 +6766,14 @@ REVOKE ALL ON FUNCTION "public"."fail_payment"("p_payment_id" "uuid", "p_reason"
 GRANT ALL ON FUNCTION "public"."fail_payment"("p_payment_id" "uuid", "p_reason" "text") TO "service_role";
 
 
+GRANT ALL ON TABLE "public"."payouts" TO "service_role";
+GRANT SELECT ON TABLE "public"."payouts" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."fail_payout"("p_payout_id" "uuid", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."fail_payout"("p_payout_id" "uuid", "p_reason" "text") TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."forbid_mutation"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."forbid_mutation"() TO "service_role";
 
@@ -6139,12 +6857,12 @@ REVOKE ALL ON FUNCTION "public"."mark_payment_failed_internal"("p_payment_id" "u
 GRANT ALL ON FUNCTION "public"."mark_payment_failed_internal"("p_payment_id" "uuid", "p_reason" "text") TO "service_role";
 
 
-GRANT ALL ON TABLE "public"."payouts" TO "service_role";
-GRANT SELECT ON TABLE "public"."payouts" TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text", "p_amount_pesewas" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text", "p_amount_pesewas" bigint) TO "service_role";
 
 
-REVOKE ALL ON FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."mark_payout_paid"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."mark_payout_processing"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."mark_payout_processing"("p_payout_id" "uuid", "p_provider" "text", "p_provider_transfer_id" "text") TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "p_status" "public"."webhook_event_status", "p_error" "text") FROM PUBLIC;
@@ -6164,6 +6882,11 @@ GRANT ALL ON FUNCTION "public"."my_outstanding_terms"() TO "authenticated";
 REVOKE ALL ON FUNCTION "public"."my_partner_application"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."my_partner_application"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_partner_application"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."my_payout_destination"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_payout_destination"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_payout_destination"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."my_vendor_ids"() FROM PUBLIC;
@@ -6230,6 +6953,23 @@ GRANT ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean)
 GRANT ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."payout_destination_for"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."payout_destination_for"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text") TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."platform_config"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_config"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."platform_config"() TO "anon";
@@ -6257,6 +6997,23 @@ REVOKE ALL ON FUNCTION "public"."record_webhook_event"("p_provider" "text", "p_e
 GRANT ALL ON FUNCTION "public"."record_webhook_event"("p_provider" "text", "p_event_id" "text", "p_payload" "jsonb", "p_signature_valid" boolean) TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."retry_payout"("p_payout_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."retry_payout"("p_payout_id" "uuid") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."reverse_payout"("p_payout_id" "uuid", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."reverse_payout"("p_payout_id" "uuid", "p_reason" "text") TO "service_role";
+
+
+GRANT ALL ON TABLE "public"."users" TO "service_role";
+GRANT SELECT ON TABLE "public"."users" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."set_my_email"("p_email" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."set_my_email"("p_email" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."set_my_email"("p_email" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."set_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."set_updated_at"() TO "service_role";
 
@@ -6272,10 +7029,6 @@ GRANT ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilmen
 
 REVOKE ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "service_role";
-
-
-GRANT ALL ON TABLE "public"."users" TO "service_role";
-GRANT SELECT ON TABLE "public"."users" TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."update_my_profile"("p_full_name" "text") FROM PUBLIC;
