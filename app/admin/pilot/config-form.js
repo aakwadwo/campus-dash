@@ -18,17 +18,35 @@ export default function ConfigForm({ config }) {
         already placed keeps the price it was quoted.
       </p>
 
+      {/* FOOD AND SCAN PRICE DIFFERENTLY, and the form says so rather than
+          leaving an operator to infer it. Changing the food percentage cannot
+          move the scan fee: they are separate columns read by separate pricing
+          functions, and price_scan_order() never looks at service_fee_bps. */}
+      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Food orders</h3>
       <Field
-        label="Service fee (basis points — 500 = 5%)"
+        label="Food service fee (basis points — 500 = 5% of the food subtotal)"
         name="service_fee_bps"
         type="number"
         placeholder={String(config?.service_fee_bps ?? '')}
+        hint="A percentage of what the food costs. Applies to FOOD orders only."
       />
+
+      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Scan delivery</h3>
+      <Field
+        label="Scan service fee (pesewas — 200 = GH₵2.00, flat)"
+        name="scan_service_fee_pesewas"
+        type="number"
+        placeholder={String(config?.scan_service_fee_pesewas ?? 'not configured')}
+        hint="A flat amount per errand, never a percentage — a scan order has no food value to take a percentage of. Clearing it stops scan ordering rather than making it free."
+      />
+
+      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Both order types</h3>
       <Field
         label="Delivery fee (pesewas)"
         name="delivery_fee_pesewas"
         type="number"
         placeholder={String(config?.delivery_fee_pesewas ?? '')}
+        hint="Charged on every delivery, food or scan. The Partner's share of it is set separately."
       />
       <Field
         label="Vendor answer window (seconds)"

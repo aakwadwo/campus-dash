@@ -1,6 +1,7 @@
-import { listPartnerApplications } from '@/lib/admin';
+import Link from 'next/link';
+import { listPartnerApplications, partners as listPartners } from '@/lib/admin';
 import { getPartnerDocumentUrl } from '@/lib/admin/documents';
-import { Panel, Badge, Empty } from '../ui';
+import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
 import PartnerReviewForm from './partner-review-form';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,10 @@ const TONE = {
 };
 
 export default async function PartnersPage() {
-  const applications = await listPartnerApplications();
+  const [applications, roster] = await Promise.all([
+    listPartnerApplications(),
+    listPartners().catch(() => null),
+  ]);
 
   // Signed URLs are minted per render and live for two minutes. The bucket is
   // private with no policies, so this is the only way an image is ever exposed.
@@ -36,6 +40,56 @@ export default async function PartnersPage() {
         Approval is manual: compare the live face photograph against the student ID. Images are held
         in a private bucket and shown here through short-lived signed URLs.
       </p>
+
+      {/* THE ROSTER, above the queue. The queue answers "who is waiting for me";
+          this answers "who is actually out there delivering", which is the
+          question an operator has on every day that is not a review day. */}
+      <Panel title="All Partners" description={roster ? `${roster.length} accounts` : undefined}>
+        {roster === null ? (
+          <Unavailable>The Partner roster could not be loaded.</Unavailable>
+        ) : roster.length === 0 ? (
+          <Empty>Nobody has applied to be a Partner yet.</Empty>
+        ) : (
+          <Table
+            head={[
+              'Name',
+              'Phone',
+              'Class',
+              'Status',
+              'Available',
+              'Deliveries',
+              'Owed',
+              'Applied',
+            ]}
+            minWidth="52rem"
+          >
+            {roster.map((p) => (
+              <Row key={p.user_id}>
+                <Cell>
+                  <Link
+                    href={`/admin/partners/${p.user_id}`}
+                    className="text-brand-700 underline underline-offset-4"
+                  >
+                    {p.full_name ?? '—'}
+                  </Link>
+                </Cell>
+                <Cell mono>{p.phone}</Cell>
+                <Cell muted>{p.class_year ?? '—'}</Cell>
+                <Cell>
+                  <Badge tone={TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
+                  {p.is_suspended ? <Badge tone="bad">account suspended</Badge> : null}
+                </Cell>
+                <Cell>{p.is_available ? 'online' : 'offline'}</Cell>
+                <Cell numeric>{p.deliveries}</Cell>
+                <Cell numeric>
+                  <Cedis pesewas={p.owed_pesewas} />
+                </Cell>
+                <Cell muted>{when(p.applied_at)}</Cell>
+              </Row>
+            ))}
+          </Table>
+        )}
+      </Panel>
 
       <Panel title={`Waiting for review (${pending.length})`}>
         {pending.length ? (
@@ -79,9 +133,7 @@ function Application({ application }) {
         {application.class_year ? (
           <span className="text-muted text-sm">{application.class_year}</span>
         ) : null}
-        {application.email ? (
-          <span className="text-muted text-sm">{application.email}</span>
-        ) : null}
+        {application.email ? <span className="text-muted text-sm">{application.email}</span> : null}
       </header>
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2">

@@ -5,16 +5,29 @@ import AreaSwitcher from '@/app/area-switcher';
 
 export const metadata = { title: 'Admin · Campus Dash' };
 
+/**
+ * Grouped by the question being asked, not alphabetically.
+ *
+ * Scan Orders is the SAME orders screen with a type filter, not a second order
+ * system — a scan errand is an orders row with a different order_type, and
+ * giving it its own page would invite the two to drift apart.
+ */
 const NAV = [
-  { href: '/admin', label: 'Overview' },
-  { href: '/admin/pilot', label: 'Pilot' },
+  { href: '/admin', label: 'Dashboard' },
   { href: '/admin/orders', label: 'Orders' },
-  { href: '/admin/money', label: 'Money' },
-  { href: '/admin/settlements', label: 'Settlements' },
+  { href: '/admin/orders?type=SCAN', label: 'Scan orders' },
+  { href: '/admin/disputes', label: 'Disputes' },
   { href: '/admin/vendors', label: 'Vendors' },
-  { href: '/admin/locations', label: 'Locations' },
+  { href: '/admin/customers', label: 'Customers' },
   { href: '/admin/partners', label: 'Partners' },
+  { href: '/admin/payments', label: 'Payments' },
+  { href: '/admin/finance', label: 'Finance' },
+  { href: '/admin/settlements', label: 'Payouts' },
+  { href: '/admin/locations', label: 'Locations' },
+  { href: '/admin/notifications', label: 'Notifications' },
+  { href: '/admin/pilot', label: 'Configuration' },
   { href: '/admin/audit', label: 'Audit' },
+  { href: '/admin/system', label: 'System' },
 ];
 
 /**
@@ -28,7 +41,7 @@ export default async function AdminLayout({ children }) {
   return (
     <div className="min-h-dvh">
       <header className="border-b border-black/10 bg-white">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3">
           <Link href="/admin" className="font-semibold tracking-tight">
             Campus Dash <span className="text-muted font-normal">admin</span>
           </Link>
@@ -52,7 +65,7 @@ export default async function AdminLayout({ children }) {
           </form>
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
     </div>
   );
 }

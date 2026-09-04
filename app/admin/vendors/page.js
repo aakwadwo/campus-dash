@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { Panel, Badge, Empty } from '../ui';
+import { vendors as listVendors } from '@/lib/admin';
+import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis } from '../ui';
 import CreateVendorForm from './create-vendor-form';
 
 export const dynamic = 'force-dynamic';
@@ -10,11 +11,11 @@ const STATUS_TONE = { ACTIVE: 'good', DRAFT: 'warn', SUSPENDED: 'bad' };
 export default async function VendorsPage() {
   const supabase = await createClient();
 
-  const [{ data: vendors }, { data: locations }] = await Promise.all([
-    supabase
-      .from('vendors')
-      .select('id, name, phone, status, is_accepting_orders, location_id')
-      .order('name'),
+  // admin_vendors() carries the operational facts a list has to show — staff,
+  // menu size, order count, money owed and whether the stall takes scans —
+  // which a plain select on `vendors` cannot without four more round trips.
+  const [vendors, { data: locations }] = await Promise.all([
+    listVendors().catch(() => null),
     supabase.from('locations').select('id, name, kind, is_active').order('sort_order'),
   ]);
 
@@ -23,44 +24,55 @@ export default async function VendorsPage() {
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Vendors</h1>
 
       <Panel title="All vendors" description="Registration is closed — vendors are created here.">
-        {vendors?.length ? (
-          <table className="w-full text-sm">
-            <thead className="text-muted text-left text-xs uppercase">
-              <tr>
-                <th className="pb-2 font-medium">Name</th>
-                <th className="pb-2 font-medium">Phone</th>
-                <th className="pb-2 font-medium">Status</th>
-                <th className="pb-2 font-medium">Taking orders</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vendors.map((vendor) => (
-                <tr key={vendor.id} className="border-t border-black/5">
-                  <td className="py-2">
-                    <Link
-                      href={`/admin/vendors/${vendor.id}`}
-                      className="text-brand-700 underline underline-offset-4"
-                    >
-                      {vendor.name}
-                    </Link>
-                  </td>
-                  <td className="py-2 tabular-nums">{vendor.phone}</td>
-                  <td className="py-2">
-                    <Badge tone={STATUS_TONE[vendor.status]}>{vendor.status}</Badge>
-                  </td>
-                  <td className="py-2">
-                    {vendor.is_accepting_orders ? (
-                      <Badge tone="good">open</Badge>
-                    ) : (
-                      <Badge>closed</Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {vendors === null ? (
+          <Unavailable>The vendor list could not be loaded.</Unavailable>
+        ) : vendors.length === 0 ? (
+          <Empty>No vendors yet. Create one below.</Empty>
         ) : (
-          <Empty>No vendors yet.</Empty>
+          <Table
+            head={['Name', 'Phone', 'Status', 'Orders', 'Scans', 'Staff', 'Menu', 'Placed', 'Owed']}
+            minWidth="52rem"
+          >
+            {vendors.map((vendor) => (
+              <Row key={vendor.vendor_id}>
+                <Cell>
+                  <Link
+                    href={`/admin/vendors/${vendor.vendor_id}`}
+                    className="text-brand-700 underline underline-offset-4"
+                  >
+                    {vendor.name}
+                  </Link>
+                  <span className="text-muted block text-xs">{vendor.location_path ?? '—'}</span>
+                </Cell>
+                <Cell mono>{vendor.phone}</Cell>
+                <Cell>
+                  <Badge tone={STATUS_TONE[vendor.status]}>{vendor.status}</Badge>
+                </Cell>
+                <Cell>
+                  {vendor.is_accepting_orders ? (
+                    <Badge tone="good">open</Badge>
+                  ) : (
+                    <Badge>closed</Badge>
+                  )}
+                </Cell>
+                <Cell>
+                  {/* Off unless somebody deliberately turned it on: a scan errand
+                      sends a Partner to a counter expecting to be served free. */}
+                  {vendor.can_accept_scans ? (
+                    <Badge tone="warn">accepts scans</Badge>
+                  ) : (
+                    <span className="text-muted text-xs">no</span>
+                  )}
+                </Cell>
+                <Cell numeric>{vendor.staff_count}</Cell>
+                <Cell numeric>{vendor.menu_count}</Cell>
+                <Cell numeric>{vendor.order_count}</Cell>
+                <Cell numeric>
+                  <Cedis pesewas={vendor.owed_pesewas} />
+                </Cell>
+              </Row>
+            ))}
+          </Table>
         )}
       </Panel>
 
