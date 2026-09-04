@@ -197,7 +197,12 @@ try {
   console.log('\n  Administrator ready.');
   console.log(`  ${fullName} <${email}>  ${phone}`);
   console.log('\n  Sign in at /login/admin with the email and password.');
-  console.log('  The phone number also works at /login for ordering.\n');
+  // ADMIN does not imply CUSTOMER. This account holds the admin capability and
+  // nothing else: ordering needs a customer_profiles row, which only student
+  // onboarding creates. Saying the phone "works for ordering" was true before
+  // Customer became a capability and is now simply wrong.
+  console.log('  The phone number signs this account in at /login too, but ordering');
+  console.log('  needs student onboarding — admin does not grant Customer.\n');
 } catch (error) {
   console.error(`\n  ${error.message}\n`);
   process.exitCode = 1;

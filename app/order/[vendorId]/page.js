@@ -1,19 +1,27 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { requireUser } from '@/lib/auth/session';
+import { getCapabilities } from '@/lib/auth/session';
 import { getVendorWithMenu, listDeliverableLocations } from '@/lib/customer';
+import { OrderingGate } from '../page';
 import MenuAndBasket from './menu-and-basket';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * A stall's menu. Readable by anyone; orderable by a Customer.
+ *
+ * The gate is passed down rather than applied here so that someone signed out
+ * can still build a basket and see prices — losing that on the way to a login
+ * screen is how a marketplace loses people who were nearly ready to buy.
+ */
 export default async function VendorMenuPage({ params }) {
   const { vendorId } = await params;
-  await requireUser(`/order/${vendorId}`);
+  const me = await getCapabilities();
 
   const result = await getVendorWithMenu(vendorId);
   if (!result) notFound();
 
-  const locations = await listDeliverableLocations();
+  const locations = me.can_order ? await listDeliverableLocations() : [];
 
   return (
     <main className="mx-auto max-w-md px-4 pt-5 pb-40">
@@ -27,7 +35,25 @@ export default async function VendorMenuPage({ params }) {
         </p>
       ) : null}
 
-      <MenuAndBasket vendor={result.vendor} menu={result.menu} locations={locations ?? []} />
+      <div className="mt-4">
+        <OrderingGate me={me} />
+      </div>
+
+      <MenuAndBasket
+        vendor={result.vendor}
+        menu={result.menu}
+        locations={locations ?? []}
+        gate={
+          me.can_order
+            ? null
+            : {
+                href: me.authenticated
+                  ? `/onboarding?next=${encodeURIComponent(`/order/${vendorId}`)}`
+                  : `/login?next=${encodeURIComponent(`/order/${vendorId}`)}`,
+                label: me.authenticated ? 'Add your student details' : 'Sign in to order',
+              }
+        }
+      />
     </main>
   );
 }

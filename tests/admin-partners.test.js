@@ -313,6 +313,17 @@ describe('admin — Partner approval and suspension', () => {
     const due = await adminRows('select * from public.admin_partner_documents_due_for_purge()');
     assert.equal(due.length, 1);
     assert.equal(due[0].user_id, ACTORS.applicantKofi);
+    assert.ok(due[0].face_image_path, 'the Partner document is what is due');
+
+    // THE CUSTOMER'S ID PHOTOGRAPH IS NOT ON THIS LIST, and must not be. The
+    // purpose of this function is to hand an administrator a set of objects to
+    // delete; a customer's student ID is retained while the account is active,
+    // so naming it here would be an invitation to delete it and point a NOT
+    // NULL column at a missing file.
+    assert.ok(
+      !('student_id_image_path' in due[0]),
+      'a delete queue names only what may be deleted'
+    );
   });
 
   test('clearing documents removes the paths and is audited', async () => {
@@ -329,10 +340,24 @@ describe('admin — Partner approval and suspension', () => {
           ])
         ).rows[0]
     );
-    assert.equal(profile.student_id_image_path, null);
     assert.equal(profile.face_image_path, null);
     assert.equal(profile.documents_purge_after, null);
     assert.equal(profile.status, 'APPROVED', 'clearing documents does not revoke approval');
+
+    // The student ID photograph is NOT cleared with it. It stopped being a
+    // Partner document when Customer became a capability: it is the evidence
+    // for a capability this person still holds, and customer_profiles requires
+    // it. Purging Partner documents must not quietly revoke someone's ability
+    // to order lunch.
+    const customer = await asService(
+      async (c) =>
+        (
+          await c.query('select * from public.customer_profiles where user_id = $1', [
+            ACTORS.partnerYaw,
+          ])
+        ).rows[0]
+    );
+    assert.ok(customer.student_id_image_path, 'the Customer document survives');
 
     const audit = await auditFor(ACTORS.partnerYaw);
     assert.ok(audit.some((a) => a.action === 'PARTNER_DOCUMENTS_PURGED'));

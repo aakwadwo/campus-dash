@@ -1,17 +1,19 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getMyApplication } from '@/lib/partner';
-import ApplyForm from './apply-form';
+import { getMyCustomerProfile } from '@/lib/customer';
+import ApplyForm, { ContinueOrdering } from './apply-form';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Apply, or see where an existing application stands.
+ * Become a Partner, or see where an existing application stands.
  *
- * This page used to render the blank form unconditionally, which is what an
- * applicant saw every time they came back — landingFor() sends PENDING_REVIEW
- * accounts here, so the screen that was meant to say "we have your application"
- * instead invited them to submit it again.
+ * BECOME, not "create a Partner account". PARTNER ⇒ CUSTOMER is a foreign key
+ * in the database, so reaching this form at all means the account already has a
+ * student profile — and the form reuses it rather than asking again. There is
+ * no second login, no second email and no second identity anywhere in here.
  */
 const DECIDED = {
   PENDING_REVIEW: {
@@ -20,7 +22,7 @@ const DECIDED = {
   },
   REJECTED: {
     title: 'Application not approved',
-    body: 'You can apply again with a clearer student ID photograph and a new live photo.',
+    body: 'You can apply again with a new live photo. Your student details stay on your account.',
   },
   SUSPENDED: {
     title: 'Partner access suspended',
@@ -29,8 +31,14 @@ const DECIDED = {
 };
 
 export default async function PartnerApplyPage() {
-  await requireUser('/partner/apply');
-  const application = await getMyApplication();
+  const me = await requireUser('/partner/apply');
+
+  // PARTNER ⇒ CUSTOMER. partner_apply() raises without a customer profile, so
+  // the honest thing is to send them to acquire one rather than render a form
+  // the database will refuse. `next` brings them back here afterwards.
+  if (!me.can_order) redirect('/onboarding?next=%2Fpartner%2Fapply');
+
+  const [application, profile] = await Promise.all([getMyApplication(), getMyCustomerProfile()]);
   const state = DECIDED[application?.status];
 
   // REJECTED reopens the form underneath the explanation; PENDING_REVIEW and
@@ -40,7 +48,7 @@ export default async function PartnerApplyPage() {
   return (
     <main className="mx-auto max-w-md px-4 pt-6 pb-16">
       <h1 className="text-2xl font-semibold tracking-tight">
-        {state ? state.title : 'Apply to be a Partner'}
+        {state ? state.title : 'Become a Partner'}
       </h1>
 
       {state ? (
@@ -51,34 +59,28 @@ export default async function PartnerApplyPage() {
               {application.review_notes}
             </p>
           ) : null}
-          <ContinueAsCustomer />
+          <div className="mt-6">
+            <ContinueOrdering />
+          </div>
         </>
       ) : (
         <p className="text-muted mt-2 text-sm leading-relaxed">
-          An admin compares your face with your student ID by hand. That is why the selfie has to be
-          taken here and now, with your camera.
+          You already have a Campus Dash account, and this adds delivering to it — same login, same
+          details, same order history. All we need is a live photo so an admin can compare your face
+          with your student ID.
         </p>
       )}
 
-      {showForm ? <ApplyForm /> : null}
-    </main>
-  );
-}
+      {showForm ? <ApplyForm profile={profile} /> : null}
 
-/**
- * A Partner is also a customer on the SAME account — capabilities are additive
- * in my_capabilities(), so there is no second identity to create and nothing to
- * switch. Waiting for a decision should not mean being unable to order lunch.
- */
-export function ContinueAsCustomer() {
-  return (
-    <div className="mt-6 rounded-lg bg-white p-4 ring-1 ring-black/5">
-      <p className="text-sm">
-        You can keep ordering while you wait — the same account does both.
-      </p>
-      <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-medium">
-        Continue to ordering →
-      </Link>
-    </div>
+      {!state ? (
+        <p className="text-muted mt-8 text-center text-xs">
+          Not now?{' '}
+          <Link href="/order" className="text-brand-700 underline underline-offset-4">
+            Back to ordering
+          </Link>
+        </p>
+      ) : null}
+    </main>
   );
 }

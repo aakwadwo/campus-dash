@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth/session';
+import AreaSwitcher from '@/app/area-switcher';
 
 export const metadata = { title: 'Vendor · Campus Dash' };
 
@@ -18,5 +19,14 @@ export const metadata = { title: 'Vendor · Campus Dash' };
  */
 export default async function VendorLayout({ children }) {
   await requireUser('/vendor');
-  return <div className="bg-canvas min-h-dvh">{children}</div>;
+  return (
+    <div className="bg-canvas min-h-dvh">
+      {/* Staffing a stall does not consume the account. Someone who also orders
+          or delivers reaches those areas from here rather than from memory. */}
+      <div className="mx-auto flex max-w-md justify-end px-4 pt-3">
+        <AreaSwitcher current="/vendor" />
+      </div>
+      {children}
+    </div>
+  );
 }

@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { landingFor, safeNext } from '../lib/auth/landing.js';
+import { areasFor, landingFor, safeNext } from '../lib/auth/landing.js';
 
 /**
  * One sign-in form serves four kinds of person, so the destination is derived
@@ -62,6 +62,25 @@ describe('where a signed-in account lands', () => {
     assert.equal(landingFor({ ...both, is_admin: true }), '/admin', 'admin outranks everything');
   });
 
+  test('an account with no Customer capability goes to onboarding', () => {
+    // A verified phone is an identity. Ordering is a capability, and this is
+    // where it is acquired — so someone who holds none of the other
+    // capabilities is sent to the one thing that unlocks the rest.
+    assert.equal(landingFor({ ...base, can_order: false }), '/onboarding');
+  });
+
+  test('onboarding never outranks a capability the account already holds', () => {
+    // An administrator or vendor with no student profile still lands in their
+    // own area. Sending them to onboarding would imply their account is
+    // incomplete, when it is complete for what it does.
+    assert.equal(landingFor({ ...base, can_order: false, is_admin: true }), '/admin');
+    assert.equal(landingFor({ ...base, can_order: false, vendor_ids: ['v'] }), '/vendor');
+    assert.equal(
+      landingFor({ ...base, can_order: false, is_partner: true, partner_status: 'APPROVED' }),
+      '/partner'
+    );
+  });
+
   test('a suspended account is stopped, not routed', () => {
     // Suspension has to win over every capability, including admin. Routing a
     // suspended admin to /admin would hand the account back its own off switch.
@@ -97,5 +116,49 @@ describe('honouring a requested destination', () => {
     for (const value of ['', '   ', null, undefined, 42, {}]) {
       assert.equal(safeNext(value), null);
     }
+  });
+});
+
+/**
+ * The switcher is the other half of the precedence chain. landingFor() picks
+ * ONE destination; this is what stops that reading as "the account became an
+ * admin account and lost the rest", which is exactly how the capability model
+ * came to look mutually exclusive.
+ */
+describe('the areas an account may enter', () => {
+  test('a plain customer gets ordering and their account', () => {
+    assert.deepEqual(
+      areasFor(base).map((a) => a.href),
+      ['/order', '/account']
+    );
+  });
+
+  test('every held capability appears, in the same precedence order', () => {
+    const everything = {
+      ...base,
+      is_admin: true,
+      vendor_ids: ['v'],
+      is_partner: true,
+      partner_status: 'APPROVED',
+    };
+    assert.deepEqual(
+      areasFor(everything).map((a) => a.href),
+      ['/admin', '/vendor', '/partner', '/order', '/account']
+    );
+  });
+
+  test('a capability the account lacks is never offered', () => {
+    const adminOnly = { ...base, is_admin: true, can_order: false };
+    assert.deepEqual(
+      areasFor(adminOnly).map((a) => a.href),
+      ['/admin', '/account'],
+      'an admin who is not a customer is not sent to a checkout they cannot use'
+    );
+  });
+
+  test('a suspended or signed-out account is offered nothing', () => {
+    assert.deepEqual(areasFor({ ...base, is_suspended: true }), []);
+    assert.deepEqual(areasFor({ authenticated: false }), []);
+    assert.deepEqual(areasFor(null), []);
   });
 });

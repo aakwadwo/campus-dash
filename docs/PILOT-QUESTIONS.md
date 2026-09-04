@@ -124,10 +124,47 @@ absence, refunds, payment, data protection, and student ID/selfie handling.
 
 **Blocked on a lawyer, not on engineering.**
 
-**18. What retention applies to student IDs and selfies?**
+**18. What retention applies to Partner face photographs?**
 90 days after approval, 30 after rejection — both placeholders, both
 configurable. `admin_partner_documents_due_for_purge()` lists what is due;
-deletion is a deliberate admin act, not automatic.
+deletion is a deliberate admin act, not automatic. This is the Partner document
+only, and its behaviour is unchanged.
+
+**18b. What retention applies to customer student ID photographs? OPEN.**
+
+**Decided for the pilot:** a customer's student ID photograph is retained **for
+as long as the account holds the Customer capability.** It is not on any purge
+schedule, and the Partner retention job does not touch it.
+
+**The reasoning:** the two images are no longer the same kind of thing. A
+Partner face photograph exists so an administrator can make one decision; once
+that decision is made and the window has passed, keeping it serves nobody. A
+student ID photograph is the standing evidence that this account belongs to an
+Academic City student — the basis of the Customer capability itself. Deleting it
+on a clock would leave the platform unable to say why an account is allowed to
+order, and would point a `NOT NULL` column at a missing file.
+
+**What is NOT decided, and is a launch blocker rather than a nicety:**
+
+- There is **no account deletion or data deletion flow yet**, so in practice
+  "retained while the account is active" currently means retained indefinitely,
+  because nothing can make an account inactive. That is the real gap.
+- Whether a student may request deletion of the ID photograph while keeping the
+  account, and what the account can still do afterwards.
+- Whether the photograph should be deleted once a student graduates out of the
+  pilot, and how that would be known — `class_year` is declared, never verified.
+- Whether it should be deleted after some period once the ID has been checked
+  once, keeping only the checked-on date.
+
+**What must happen before real students onboard:** the customer terms have to
+say plainly that the photograph is kept while the account exists, and account
+deletion has to be built so that the sentence "deleted with the account" is
+true. Both are tracked in question 17 and question 19.
+
+**Deliberately not automated.** No customer retention clock, no sweep, no
+scheduled job was added. Inventing a deletion schedule would answer this
+question by accident, and a wrong automatic delete of identity evidence is not
+recoverable.
 
 **19. Data Protection Commission requirements?**
 We hold phone numbers, government-adjacent ID photographs and live face

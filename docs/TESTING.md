@@ -34,27 +34,29 @@ renamed.
 
 ## The suites
 
-| Suite                                    | Covers                                                                        |
-| ---------------------------------------- | ----------------------------------------------------------------------------- |
-| `schema`                                 | The invariants everything else rests on                                       |
-| `rls`                                    | Who can read what, attempted directly                                         |
-| `transitions`                            | Every legal move, and the illegal ones                                        |
-| `concurrency`                            | Races and idempotency                                                         |
-| `money`, `payment-webhook`, `settlement` | Allocation, dedup, payouts, reconciliation                                    |
-| `vendor`, `customer`, `partner`          | Each actor, including what they must not do                                   |
-| `auth`, `terms`, `notifications`         | Identity, versioned acceptance, message wiring                                |
-| `hardening`                              | Stuck payments, dedup, config, metrics, provider reconciliation               |
-| `dev-sms-hook`                           | The hosted-development Postgres Send SMS Hook, installed and dropped in-suite |
-| `sms-arkesel`                            | The Arkesel adapter, against a mocked fetch. Never spends credit              |
-| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack   |
-| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                   |
-| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack   |
-| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                   |
-| `sms-webhook-signature`                  | Signature, replay window, tampering, status mapping                           |
-| `notifications-delivery`                 | notify() at runtime: dedup, retry, delivery reports                           |
-| `secrets`                                | Credentials that must never reach a browser                                   |
-| `e2e`                                    | One complete order, plus nine failure variants                                |
-| `scheduler`                              | The sweeps, including one that waits for real cron                            |
+| Suite                                    | Covers                                                                                                                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`                                 | The invariants everything else rests on                                                                                                                                       |
+| `rls`                                    | Who can read what, attempted directly                                                                                                                                         |
+| `transitions`                            | Every legal move, and the illegal ones                                                                                                                                        |
+| `concurrency`                            | Races and idempotency                                                                                                                                                         |
+| `money`, `payment-webhook`, `settlement` | Allocation, dedup, payouts, reconciliation                                                                                                                                    |
+| `vendor`, `customer`, `partner`          | Each actor, including what they must not do                                                                                                                                   |
+| `auth`, `terms`, `notifications`         | Identity, versioned acceptance, message wiring                                                                                                                                |
+| `account-model`                          | Identity vs capability: onboarding, the Customer→Partner upgrade on one auth user, admin ⇏ customer, vendor ⇏ customer, email uniqueness, and the two delivery conflict rules |
+| `multi-capability`, `auth-landing`       | Several capabilities on one account, and where such an account is routed                                                                                                      |
+| `hardening`                              | Stuck payments, dedup, config, metrics, provider reconciliation                                                                                                               |
+| `dev-sms-hook`                           | The hosted-development Postgres Send SMS Hook, installed and dropped in-suite                                                                                                 |
+| `sms-arkesel`                            | The Arkesel adapter, against a mocked fetch. Never spends credit                                                                                                              |
+| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack                                                                                                   |
+| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                                                                                                                   |
+| `paystack`                               | The Paystack adapter, against a stub fetch. Real HMAC. Never calls Paystack                                                                                                   |
+| `paystack-payouts`                       | Payout lifecycle, customer email, mobile money destinations                                                                                                                   |
+| `sms-webhook-signature`                  | Signature, replay window, tampering, status mapping                                                                                                                           |
+| `notifications-delivery`                 | notify() at runtime: dedup, retry, delivery reports                                                                                                                           |
+| `secrets`                                | Credentials that must never reach a browser                                                                                                                                   |
+| `e2e`                                    | One complete order, plus nine failure variants                                                                                                                                |
+| `scheduler`                              | The sweeps, including one that waits for real cron                                                                                                                            |
 
 ## Why the runner has a loader
 
@@ -73,6 +75,19 @@ project because `.env.local` happens to name one.
 **No test spends SMS credit.** The Arkesel adapter is tested against a mocked
 fetch. `npm run sms:test` is the only thing that sends a real message, and it is
 run by hand.
+
+## One thing the tests deliberately do NOT claim
+
+The Partner face photograph must be captured live. **The server cannot prove
+that** — it receives bytes, and bytes carry no evidence of a camera. So there is
+no test asserting "a gallery upload is rejected", because such a test would
+either pass by accident or encode a guarantee the architecture does not make.
+
+What `account-model` asserts instead is what actually holds: the upload route
+accepts only image MIME types into a private bucket, `partner_apply()` refuses
+without a face path, neither the applicant nor the customer is ever handed a
+storage path back, and only an administrator can read one. The browser form
+offering no file input is a deterrent; manual review is the control.
 
 ## What the tests are for
 

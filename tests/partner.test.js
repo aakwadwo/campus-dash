@@ -17,6 +17,7 @@ import {
   getSecrets,
   expectRejection,
   tryTransition,
+  getAllocations,
   submitOrder,
 } from './helpers/flow.js';
 
@@ -64,17 +65,14 @@ describe('partner system', () => {
   // =========================================================================
   // Registration
   // =========================================================================
-  test('a customer applies, and lands in PENDING_REVIEW with documents recorded', async () => {
+  test('a customer becomes a Partner on the SAME account, adding one document', async () => {
     const before = await application(ACTORS.customerAma);
     assert.equal(before, null, 'no application until they make one');
 
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-      'TEST-STU-9001',
-      'Class of 2029',
-      'ama@example.com',
-      'ama/student-id.jpg',
-      'ama/face.jpg',
-    ]);
+    // ONE argument. Student ID number, class year, email and the ID photograph
+    // are already on the account from student onboarding — re-collecting them
+    // is what would make this look like a second identity.
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['ama/face.jpg']);
 
     const after = await application(ACTORS.customerAma);
     assert.equal(after.status, 'PENDING_REVIEW');
@@ -85,62 +83,48 @@ describe('partner system', () => {
       ACTORS.customerAma,
       async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
     );
+    assert.equal(caps.user_id, ACTORS.customerAma, 'the same identity, not a new one');
     assert.equal(caps.is_partner, false, 'applying is not approval');
     assert.equal(caps.can_order, true, 'and they are still a customer');
   });
 
-  test('an application missing any required field is refused', async () => {
-    for (const params of [
-      ['TEST-STU-9002', 'Class of 2029', 'ama@example.com', '', 'face.jpg'],
-      ['TEST-STU-9002', 'Class of 2029', 'ama@example.com', 'id.jpg', ''],
-      ['', 'Class of 2029', 'ama@example.com', 'id.jpg', 'face.jpg'],
-      // Declared identity is as required as the photographs: a reviewer uses
-      // the cohort to sanity-check the ID, and the address is the only channel
-      // that still works when SMS is the thing that has failed.
-      ['TEST-STU-9002', '', 'ama@example.com', 'id.jpg', 'face.jpg'],
-      ['TEST-STU-9002', 'Class of 2029', '', 'id.jpg', 'face.jpg'],
-    ]) {
+  test('an application without the live face photograph is refused', async () => {
+    for (const path of ['', '   ', null]) {
       const error = await expectRejection(
-        asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', params)
+        asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', [path])
       );
-      assert.match(error.message, /required/);
+      assert.match(error.message, /live face photograph is required/);
     }
+  });
 
-    const malformed = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-        'TEST-STU-9002',
-        'Class of 2029',
-        'not-an-address',
-        'id.jpg',
-        'face.jpg',
-      ])
+  test('applying without the Customer capability is refused — PARTNER ⇒ CUSTOMER', async () => {
+    // The vendor staff account has no student profile. The foreign key
+    // partner_requires_customer would refuse the row anyway; this is the check
+    // that turns that into a sentence somebody can act on.
+    const error = await expectRejection(
+      asPartner(ACTORS.vendor1Staff, 'select public.partner_apply($1)', ['face.jpg'])
     );
-    assert.match(malformed.message, /does not look like an address/);
+    assert.match(error.message, /complete your student onboarding/i);
+
+    // And the admin, for the same reason: admin does not imply customer.
+    const adminError = await expectRejection(
+      asPartner(ACTORS.admin, 'select public.partner_apply($1)', ['face.jpg'])
+    );
+    assert.match(adminError.message, /complete your student onboarding/i);
   });
 
   test('the applicant never receives a document path', async () => {
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-      'TEST-STU-9003',
-      'Class of 2029',
-      'ama@example.com',
-      'secret/student-id.jpg',
-      'secret/face.jpg',
-    ]);
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['secret/face.jpg']);
     const view = await application(ACTORS.customerAma);
     const serialised = JSON.stringify(view);
     assert.ok(!serialised.includes('secret/'), 'a storage key is never handed back');
+    assert.ok(!('face_image_path' in view));
     assert.ok(!('student_id_image_path' in view));
   });
 
   test('an approved Partner cannot re-apply; a suspended one is told to contact support', async () => {
     const approved = await expectRejection(
-      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-        'TEST-STU-0031',
-        'Class of 2028',
-        'yaw@example.com',
-        'id.jpg',
-        'face.jpg',
-      ])
+      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1)', ['face.jpg'])
     );
     assert.match(approved.message, /already an approved Partner/);
 
@@ -155,13 +139,7 @@ describe('partner system', () => {
       { commit: true }
     );
     const suspended = await expectRejection(
-      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-        'TEST-STU-0032',
-        'Class of 2028',
-        'adjoa@example.com',
-        'id.jpg',
-        'face.jpg',
-      ])
+      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1)', ['face.jpg'])
     );
     assert.match(suspended.message, /suspended/);
   });
@@ -179,31 +157,20 @@ describe('partner system', () => {
       { commit: true }
     );
 
-    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-      'TEST-STU-0033',
-      'Class of 2027',
-      'kofi@example.com',
-      'kofi/id2.jpg',
-      'kofi/face2.jpg',
-    ]);
+    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1)', ['kofi/face2.jpg']);
 
     const view = await application(ACTORS.applicantKofi);
     assert.equal(view.status, 'PENDING_REVIEW');
     assert.equal(view.reviewed_at, null, 'the previous decision no longer stands');
     assert.equal(view.review_notes, null);
-  });
 
-  test('two approved Partners cannot share a student ID number', async () => {
-    const error = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-        'TEST-STU-0031',
-        'Class of 2029',
-        'ama@example.com',
-        'id.jpg',
-        'face.jpg',
-      ])
+    // A rejection never took the Customer capability away, and re-applying
+    // does not re-grant it — it was never in question.
+    const caps = await asUser(
+      ACTORS.applicantKofi,
+      async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
     );
-    assert.match(error.message, /partner_profiles_student_id_unique/);
+    assert.equal(caps.can_order, true);
   });
 
   test('a suspended account cannot apply at all', async () => {
@@ -211,13 +178,7 @@ describe('partner system', () => {
       c.query('update public.users set is_suspended = true where id = $1', [ACTORS.customerAma])
     );
     const error = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2, $3, $4, $5)', [
-        'TEST-STU-9004',
-        'Class of 2029',
-        'ama@example.com',
-        'id.jpg',
-        'face.jpg',
-      ])
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['face.jpg'])
     );
     assert.match(error.message, /account suspended/);
   });
@@ -604,6 +565,156 @@ describe('partner system', () => {
     );
     assert.equal(earnings.earned_pesewas, 500);
     assert.equal(earnings.awaiting_pesewas, 500, 'owed, not yet paid out');
+  });
+
+  // =========================================================================
+  // Completing a delivery: AUTHORISATION and STATE are different failures
+  // =========================================================================
+  // Hard rule 9 — a transition RAISES for authorisation and returns
+  // { success, reason } for state and contention, because a raise rolls back
+  // the very log the rejection is supposed to leave behind.
+  //
+  // partner_complete_delivery() used to fold both into one guard, so the
+  // RIGHTFUL Partner re-submitting on an already-DELIVERED order was told they
+  // were not carrying a delivery they had just completed — and the replay was
+  // never recorded. These pin the two failures apart.
+  describe('completing a delivery — state failures are not authorisation failures', () => {
+    /** An order carried by partnerYaw and confirmed picked up. */
+    async function pickedUpOrder() {
+      const order = await orderReadyForDispatch();
+      await accept(ACTORS.partnerYaw, order.order_id);
+      const secrets = await getSecrets(order.order_id);
+      await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
+        order.order_id,
+        secrets.pickup_code,
+      ]);
+      return { order, secrets };
+    }
+
+    const completionEvents = (orderId) =>
+      asService(
+        async (c) =>
+          (
+            await c.query(
+              `select accepted, from_state, reason from public.order_events
+                where order_id = $1 and event = 'PARTNER_COMPLETE' order by id`,
+              [orderId]
+            )
+          ).rows
+      );
+
+    test('A. the rightful Partner with a PICKED_UP order completes it', async () => {
+      const { order, secrets } = await pickedUpOrder();
+      const done = await tryTransition(
+        ACTORS.partnerYaw,
+        'select public.partner_complete_delivery($1, $2)',
+        [order.order_id, secrets.delivery_code]
+      );
+      assert.equal(done.success, true);
+
+      const stored = await getOrder(order.order_id);
+      assert.equal(stored.delivery_status, 'DELIVERED');
+      assert.equal(stored.order_status, 'COMPLETED');
+    });
+
+    test('B. the rightful Partner on an already-DELIVERED order gets a SOFT rejection', async () => {
+      const { order, secrets } = await pickedUpOrder();
+      await tryTransition(ACTORS.partnerYaw, 'select public.partner_complete_delivery($1, $2)', [
+        order.order_id,
+        secrets.delivery_code,
+      ]);
+
+      // The replay must NOT raise. tryTransition would throw if it did.
+      const replay = await tryTransition(
+        ACTORS.partnerYaw,
+        'select public.partner_complete_delivery($1, $2)',
+        [order.order_id, secrets.delivery_code]
+      );
+      assert.equal(replay.success, false, 'a state failure, not an authorisation failure');
+      assert.match(replay.reason, /not awaiting completion/);
+
+      // And it is LOGGED — the whole point of not raising.
+      const events = await completionEvents(order.order_id);
+      assert.equal(events.length, 2, 'the success and the replay are both recorded');
+      assert.equal(events[0].accepted, true);
+      assert.equal(events[1].accepted, false, 'the rejected replay survived in order_events');
+      assert.equal(events[1].from_state, 'DELIVERED', 'and records the state it was actually in');
+    });
+
+    test('C. a DIFFERENT Partner is refused as an authorisation failure', async () => {
+      const { order, secrets } = await pickedUpOrder();
+      const error = await expectRejection(
+        asUser(ACTORS.partnerAdjoa, (c) =>
+          c.query('select public.partner_complete_delivery($1, $2)', [
+            order.order_id,
+            secrets.delivery_code,
+          ])
+        )
+      );
+      assert.match(error.message, /not carrying this delivery/);
+      assert.equal(error.code, '42501', 'insufficient_privilege — the security boundary is intact');
+      assert.equal((await getOrder(order.order_id)).delivery_status, 'PICKED_UP');
+    });
+
+    test('D. a user who is not a Partner at all is refused the same way', async () => {
+      const { order, secrets } = await pickedUpOrder();
+      for (const actor of [ACTORS.customerAma, ACTORS.vendor1Staff, ACTORS.admin]) {
+        const error = await expectRejection(
+          asUser(actor, (c) =>
+            c.query('select public.partner_complete_delivery($1, $2)', [
+              order.order_id,
+              secrets.delivery_code,
+            ])
+          )
+        );
+        assert.match(error.message, /not carrying this delivery/);
+        assert.equal(error.code, '42501');
+      }
+      // Nothing leaks: an order id that does not exist is refused identically,
+      // so the message cannot be used to probe for real orders.
+      const missing = await expectRejection(
+        asUser(ACTORS.partnerYaw, (c) =>
+          c.query('select public.partner_complete_delivery($1, $2)', [
+            '00000000-0000-4000-8000-0000000000ff',
+            '1234',
+          ])
+        )
+      );
+      assert.match(missing.message, /not carrying this delivery/);
+    });
+
+    test('E. a duplicate completion has no second financial or order effect', async () => {
+      const { order, secrets } = await pickedUpOrder();
+      await tryTransition(ACTORS.partnerYaw, 'select public.partner_complete_delivery($1, $2)', [
+        order.order_id,
+        secrets.delivery_code,
+      ]);
+
+      const before = await getOrder(order.order_id);
+      const allocationsBefore = await getAllocations(order.order_id);
+
+      await tryTransition(ACTORS.partnerYaw, 'select public.partner_complete_delivery($1, $2)', [
+        order.order_id,
+        secrets.delivery_code,
+      ]);
+
+      const after = await getOrder(order.order_id);
+      const allocationsAfter = await getAllocations(order.order_id);
+
+      assert.equal(after.delivery_status, 'DELIVERED');
+      assert.equal(after.order_status, 'COMPLETED');
+      assert.deepEqual(
+        after.delivered_at,
+        before.delivered_at,
+        'the delivery timestamp is not moved by a replay'
+      );
+      assert.deepEqual(after.completed_at, before.completed_at);
+      assert.deepEqual(
+        allocationsAfter,
+        allocationsBefore,
+        'the Partner is not paid twice for one delivery'
+      );
+    });
   });
 
   // =========================================================================

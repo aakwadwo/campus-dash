@@ -87,8 +87,13 @@ describe('terms and conditions', () => {
       ['CUSTOMER']
     );
 
+    // A vendor stall is asked about SELLING and nothing else. It used to be
+    // asked to accept customer terms as well, because CUSTOMER terms were
+    // required of every authenticated account — a side effect of there being no
+    // Customer capability to key them to. There is one now, and this account
+    // does not hold it.
     const vendor = await outstanding(ACTORS.vendor1Staff);
-    assert.deepEqual(vendor.map((t) => t.audience).sort(), ['CUSTOMER', 'VENDOR']);
+    assert.deepEqual(vendor.map((t) => t.audience).sort(), ['VENDOR']);
 
     const partner = await outstanding(ACTORS.partnerYaw);
     assert.deepEqual(partner.map((t) => t.audience).sort(), ['CUSTOMER', 'PARTNER']);

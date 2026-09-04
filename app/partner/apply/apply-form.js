@@ -5,22 +5,24 @@ import { useActionState, useEffect, useRef, useState } from 'react';
 import { applyAction } from '../actions';
 
 /**
- * Partner application.
+ * Becoming a Partner.
  *
- * The student ID may be a photo from the gallery — it is a document, and people
- * usually already have a picture of it.
+ * This form asks for ONE thing, and that is the whole design. Name, student ID
+ * number, class year, email and the ID photograph are already on the account —
+ * they were collected at student onboarding, and the database refuses this
+ * application without them. Re-asking would imply a second identity is being
+ * created, which is exactly the confusion this flow exists to avoid.
  *
- * The FACE photograph may not. It is captured from the live camera stream in
- * this component, and there is no file input for it anywhere in the markup.
- * The point of the selfie is that an admin can compare a real face against the
- * ID, so a saved image would defeat it.
+ * The FACE photograph is captured from the live camera stream in this
+ * component, and there is no file input for it anywhere in the markup. The
+ * point of the selfie is that an admin can compare a real face against the ID,
+ * so a saved image would defeat it.
  *
  * This is a deterrent, not a guarantee: anyone can POST to the upload endpoint
  * directly. The actual control is that a human reviews every application.
  */
-export default function ApplyForm() {
+export default function ApplyForm({ profile }) {
   const [state, submit, submitting] = useActionState(applyAction, {});
-  const [studentIdPath, setStudentIdPath] = useState('');
   const [facePath, setFacePath] = useState('');
 
   // The form is REPLACED on success. Leaving a filled-in form on screen under a
@@ -36,65 +38,36 @@ export default function ApplyForm() {
             done by hand, so it is not instant.
           </p>
         </div>
-        <div className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-          <p className="text-sm">
-            You can keep ordering while you wait — the same account does both.
-          </p>
-          <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-medium">
-            Continue to ordering →
-          </Link>
-        </div>
+        <ContinueOrdering />
       </section>
     );
   }
 
   return (
     <form action={submit} className="mt-6 space-y-6">
-      <input type="hidden" name="student_id_image_path" value={studentIdPath} />
       <input type="hidden" name="face_image_path" value={facePath} />
 
-      <label className="block">
-        <span className="text-sm font-medium">
-          Student ID number <span className="text-red-700">*</span>
-        </span>
-        <input
-          name="student_id_number"
-          required
-          placeholder="e.g. 10012345"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
-        />
-      </label>
+      {/* Read-only, and shown rather than re-asked: this is the evidence the
+          reviewer will compare the selfie against, and seeing it here is how an
+          applicant understands that the same account is being upgraded. */}
+      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+        <h2 className="text-sm font-medium">Your student details</h2>
+        <p className="text-muted mt-1 text-xs">
+          Already on your account. A reviewer compares your selfie against this ID.
+        </p>
+        <dl className="mt-3 space-y-1.5 text-sm">
+          <Row label="Student ID" value={profile?.student_id_number} />
+          <Row label="Class year" value={profile?.class_year} />
+          <Row label="ID photo" value={profile?.has_student_id ? 'On file' : 'Missing'} />
+        </dl>
+        <Link
+          href="/onboarding"
+          className="text-brand-700 mt-3 inline-block text-xs font-medium underline underline-offset-4"
+        >
+          Something wrong? Update your student details
+        </Link>
+      </section>
 
-      <label className="block">
-        <span className="text-sm font-medium">
-          Class year <span className="text-red-700">*</span>
-        </span>
-        <input
-          name="class_year"
-          required
-          placeholder="e.g. Class of 2029"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
-        />
-      </label>
-
-      <label className="block">
-        <span className="text-sm font-medium">
-          Email address <span className="text-red-700">*</span>
-        </span>
-        <input
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          placeholder="you@example.com"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
-        />
-        <span className="text-muted mt-1 block text-xs">
-          Any working address. A school address is not required.
-        </span>
-      </label>
-
-      <StudentIdCapture path={studentIdPath} onUploaded={setStudentIdPath} />
       <FaceCapture path={facePath} onUploaded={setFacePath} />
 
       {state.message ? (
@@ -108,7 +81,7 @@ export default function ApplyForm() {
 
       <button
         type="submit"
-        disabled={submitting || !studentIdPath || !facePath}
+        disabled={submitting || !facePath}
         className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
       >
         {submitting ? 'Submitting…' : 'Submit application'}
@@ -120,78 +93,40 @@ export default function ApplyForm() {
   );
 }
 
+function Row({ label, value }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted">{label}</dt>
+      <dd className="font-medium">{value ?? '—'}</dd>
+    </div>
+  );
+}
+
+/**
+ * A Partner is also a customer on the SAME account — capabilities are additive
+ * in my_capabilities(), so there is no second identity to create and nothing to
+ * switch. Waiting for a decision should not mean being unable to order lunch.
+ */
+export function ContinueOrdering() {
+  return (
+    <div className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <p className="text-sm">You can keep ordering while you wait — the same account does both.</p>
+      <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-medium">
+        Continue to ordering →
+      </Link>
+    </div>
+  );
+}
+
 async function upload(kind, blob, filename) {
   const form = new FormData();
   form.set('kind', kind);
   form.set('file', blob, filename);
 
-  const response = await fetch('/api/partner/documents', { method: 'POST', body: form });
+  const response = await fetch('/api/verification/documents', { method: 'POST', body: form });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error ?? 'Upload failed.');
   return body.path;
-}
-
-/** A document, so a gallery photo is fine. */
-function StudentIdCapture({ path, onUploaded }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  // Object URLs are revoked when replaced and on unmount; a preview that leaks
-  // one per retry holds the whole image in memory for the life of the page.
-  const [preview, setPreview] = usePreview();
-
-  return (
-    <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-      <h2 className="text-sm font-medium">
-        Photo of your student ID <span className="text-red-700">*</span>
-      </h2>
-      <p className="text-muted mt-1 text-xs">
-        Make sure the name, photo and ID number are readable.
-      </p>
-
-      <input
-        type="file"
-        accept="image/jpeg,image/png,image/webp"
-        capture="environment"
-        disabled={busy}
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          setBusy(true);
-          setError(null);
-          try {
-            const uploaded = await upload('student-id', file, file.name);
-            setPreview(URL.createObjectURL(file));
-            onUploaded(uploaded);
-          } catch (caught) {
-            setError(caught.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-        className="mt-3 w-full text-sm"
-      />
-
-      {busy ? <p className="text-muted mt-2 text-sm">Uploading…</p> : null}
-
-      {/* Check it before submitting: an unreadable ID is the single most common
-          reason an application comes back rejected. */}
-      {preview ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={preview}
-          alt="The student ID photograph you selected"
-          className="mt-3 w-full rounded ring-1 ring-black/10"
-        />
-      ) : null}
-      {path ? (
-        <p className="text-brand-700 mt-2 text-sm font-medium">
-          ✓ Student ID received — check the name, photo and number are readable, and choose another
-          file above if not.
-        </p>
-      ) : null}
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
-    </section>
-  );
 }
 
 /** Live camera only. There is no file input in this component, by design. */
@@ -261,7 +196,8 @@ function FaceCapture({ path, onUploaded }) {
         Live photo of your face <span className="text-red-700">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs">
-        Taken now, with your camera. You cannot upload a saved picture for this step.
+        Taken now, with your camera. You cannot upload a saved picture for this step. It is the only
+        thing this application asks for that your account does not already have.
       </p>
       {/* Said before the camera opens, not after the photo is taken. Someone
           who would rather not be shown to customers should learn that while it

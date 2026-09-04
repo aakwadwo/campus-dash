@@ -109,18 +109,23 @@ const client = new pg.Client({
 await client.connect();
 
 try {
+  // Two documents, two owners. The student ID photograph is the CUSTOMER's and
+  // lives on customer_profiles; the live face photograph is the PARTNER's and
+  // lives on partner_profiles. The review screen shows them side by side, so
+  // both have to exist for it to be worth looking at.
   const { rows } = await client.query(`
-    select p.user_id, u.full_name, p.status,
-           p.student_id_image_path, p.face_image_path
-      from public.partner_profiles p
-      join public.users u on u.id = p.user_id
-     where p.student_id_image_path is not null
+    select u.id as user_id, u.full_name, p.status,
+           c.student_id_image_path, p.face_image_path
+      from public.users u
+      left join public.customer_profiles c on c.user_id = u.id
+      left join public.partner_profiles  p on p.user_id = u.id
+     where c.student_id_image_path is not null
         or p.face_image_path is not null
      order by u.full_name
   `);
 
   if (rows.length === 0) {
-    console.log('No partner profiles carry document paths. Run `npm run db:reset` first.');
+    console.log('No accounts carry document paths. Run `npm run db:reset` first.');
   }
 
   for (const [index, row] of rows.entries()) {
@@ -138,7 +143,7 @@ try {
     }
   }
 
-  console.log(`\nUploaded placeholder documents for ${rows.length} partner profile(s).`);
+  console.log(`\nUploaded placeholder documents for ${rows.length} account(s).`);
 } finally {
   await client.end();
 }

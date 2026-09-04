@@ -171,9 +171,14 @@ tampered client changes nothing but its own display.
   "user_id": "…",
   "phone": "+233…",
   "full_name": "…",
+  "email": "…",
   "is_admin": false,
   "is_suspended": false,
+  "is_customer": true,
   "can_order": true,
+  "customer_status": "ONBOARDED",
+  "student_id_number": "…",
+  "class_year": "Class of 2029",
   "partner_status": "APPROVED",
   "is_partner": true,
   "partner_available": true,
@@ -181,9 +186,25 @@ tampered client changes nothing but its own display.
 }
 ```
 
-Ordering is deliberately low-friction: a confirmed phone is enough. No ID
-upload, no selfie, no manual approval. Partner capability requires all of that
-plus an admin decision.
+Each field answers a different question, and none implies another:
+
+| Field                       | True when                                       |
+| --------------------------- | ----------------------------------------------- |
+| `authenticated`             | A phone number has been confirmed. An IDENTITY. |
+| `can_order` / `is_customer` | A `customer_profiles` row exists                |
+| `is_partner`                | An APPROVED `partner_profiles` row exists       |
+| `vendor_ids`                | `vendor_users` links, listed — never inferred   |
+| `is_admin`                  | `users.is_admin`                                |
+
+`can_order` used to be `not is_suspended` — true for every account that existed,
+which meant "admin does not imply customer" could not be expressed because there
+was no Customer capability to withhold. It is now the capability itself, and an
+administrator or vendor account that has not completed student onboarding
+genuinely cannot place an order. `submit_order_for()` asserts it server-side, so
+this is not a display decision.
+
+Users hold no write grant on `customer_profiles` either, so the only way to
+acquire the capability is `complete_customer_onboarding()`.
 
 Users hold no `UPDATE` grant on `public.users`, so even a name change goes
 through `update_my_profile()`. `is_admin` and `is_suspended` are therefore
@@ -200,11 +221,19 @@ chosen: `lib/auth/landing.js` reads `my_capabilities()` and returns
 | vendor staff      | `/vendor`                                                |
 | approved Partner  | `/partner`                                               |
 | Partner applicant | `/partner/apply` — their own status, not the admin queue |
-| everyone else     | `/order`                                                 |
+| customer          | `/order`                                                 |
+| no capability yet | `/onboarding` — the one thing that unlocks the rest      |
 | suspended         | `/suspended`, whatever else is true                      |
 
-Precedence, not preference: an admin who also staffs a stall lands on `/admin`
-because that is the job they signed in to do, and can still walk to `/vendor`.
+Precedence, not **exclusivity**, and this is the single most misread thing in
+the application. An admin who also staffs a stall lands on `/admin` because that
+is the job they signed in to do. They have lost nothing: `areasFor()` returns
+every area the account holds and each layout renders it as an `AreaSwitcher`, so
+the other capabilities are one click away rather than invisible.
+
+Note that onboarding never outranks a capability the account already has. An
+administrator with no student profile still lands on `/admin` — their account is
+complete for what it does.
 
 A guard that redirected somebody to sign in supplies a `next`, and that wins —
 they were already going somewhere specific. `next` is only ever honoured as a
@@ -218,16 +247,23 @@ decides where somebody _useful_ lands, never what they may do.
 
 ## Guards
 
-`lib/auth/session.js` provides `requireUser`, `requireAdmin`, `requirePartner`
-and `requireVendorStaff`. These stop a page forgetting to check — they are
-**not** the security boundary. A user who bypassed one would reach a page
+`lib/auth/session.js` provides `requireUser`, `requireCustomer`, `requireAdmin`,
+`requirePartner` and `requireVendorStaff`. These stop a page forgetting to check
+— they are **not** the security boundary.
+
+`requireCustomer` is the one that does not simply bounce to `landingFor()`: it
+sends people to `/onboarding`, because "you wanted to order something" is
+answered by acquiring the capability, not by being returned to `/admin`. A user who bypassed one would reach a page
 rendering nothing they are entitled to, because every query underneath still
 filters by `auth.uid()`.
 
 ## Terms acceptance
 
 `terms_acceptances` records which version of which document an account agreed
-to, and when. The documents themselves are reference data installed by migration
+to, and when. Customer terms are accepted **inside** the onboarding transaction,
+so a customer who can order has always agreed to something; each audience is
+asked only of accounts that hold the matching capability, so a vendor stall is
+never asked to agree to terms about ordering lunch. The documents themselves are reference data installed by migration
 and present in every environment, because a gate that silently opens — an empty
 `terms_documents` table, nothing to accept, everything appearing to work — is
 worse than no gate.

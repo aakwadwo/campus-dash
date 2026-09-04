@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
+import AreaSwitcher from '@/app/area-switcher';
 
 export const metadata = { title: 'Partner · Campus Dash' };
 
@@ -16,9 +17,13 @@ export default async function PartnerLayout({ children }) {
           <Link href="/partner" className="font-semibold tracking-tight">
             Campus Dash <span className="text-muted font-normal">Partner</span>
           </Link>
-          <Link href="/account" className="text-muted ml-auto">
-            Account
-          </Link>
+          <div className="ml-auto flex items-center gap-4">
+            {/* A Partner is always also a Customer. Say so with a link. */}
+            <AreaSwitcher current="/partner" />
+            <Link href="/account" className="text-muted">
+              Account
+            </Link>
+          </div>
         </div>
       </header>
       {children}

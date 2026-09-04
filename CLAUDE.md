@@ -121,10 +121,22 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
   yourself typing a timeout, put it there instead.
 - The Supabase CLI is pinned as a dev dependency; `npm run db:*` uses it. Do not
   rely on a globally installed one.
+- **Identity is not capability.** The identity is `auth.users.id` and nothing
+  else is ever the key. Capabilities are additive rows on top of it — CUSTOMER
+  is a `customer_profiles` row, PARTNER an APPROVED `partner_profiles` row,
+  VENDOR a `vendor_users` link, ADMIN the `users.is_admin` column. There is no
+  account TYPE, and `Admin + Customer + Partner + Vendor` is valid. Holding one
+  capability never confers another: admin does not imply customer, and a vendor
+  account is not a shopper.
+- **PARTNER ⇒ CUSTOMER** is a foreign key (`partner_requires_customer`,
+  `ON DELETE RESTRICT`), not a convention. Becoming a Partner is an upgrade to
+  the same account — never a second auth user, email or login.
 - Auth roles come from `my_capabilities()`, derived from the database on every
-  request. Never trust a role sent by the client.
+  request. Never trust a role sent by the client. `can_order` is the CUSTOMER
+  capability, not "has a pulse".
 - Customers, vendors and Partners sign in by phone OTP; administrators sign in
-  with email and password at `/login/admin`.
+  with email and password at `/login/admin`. Ordering additionally requires
+  student onboarding at `/onboarding`.
 - Brand colours are white, pastel yellow (`#F7E7A1`) and soft charcoal
   (`#242424`) — never pure black. `brand-500` is the pastel fill for primary
   buttons and always carries `text-ink`; `brand-700` is the darkened ochre for
@@ -132,4 +144,7 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
   Amber and red are the only other colours, and only for warning and failure.
 - Sign-in destination is derived from capabilities in `lib/auth/landing.js`,
   never chosen by the client. Admin → /admin, vendor → /vendor, approved
-  Partner → /partner, applicant → /partner/apply, otherwise → /order.
+  Partner → /partner, applicant → /partner/apply, customer → /order, otherwise
+  → /onboarding. That order is PRECEDENCE, not exclusivity: `areasFor()` lists
+  every area the account holds and each layout renders it as an `AreaSwitcher`,
+  so landing on /admin never means losing /order.

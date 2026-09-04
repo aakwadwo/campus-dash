@@ -93,14 +93,35 @@ compares.
 Codes come from pgcrypto's CSPRNG, never `random()`. A pickup code rotates on
 every reassignment, so a superseded code is gone rather than merely unused.
 
-## Partner documents
+## Verification documents
 
-A private bucket with **no storage policies at all**, so RLS denies every
-client read and write. An admin sees an image through a signed URL valid for a
-configurable two minutes. Deleting the object invalidates outstanding URLs
-immediately — they resolve to a 404.
+Both images live in one private bucket with **no storage policies at all**, so
+RLS denies every client read and write. An admin sees an image through a signed
+URL valid for a configurable two minutes. Deleting the object invalidates
+outstanding URLs immediately — they resolve to a 404.
 
-The applicant never receives a storage path.
+Nobody ever receives a storage path for their own document:
+`my_partner_application()` and `my_customer_profile()` return booleans.
+
+**They have different owners and different retention, and conflating them is a
+real hazard:**
+
+| Document              | Owner               | Retention                                                |
+| --------------------- | ------------------- | -------------------------------------------------------- |
+| Live face photograph  | `partner_profiles`  | Purged after the review window — `documents_purge_after` |
+| Student ID photograph | `customer_profiles` | **Retained while the account holds CUSTOMER**            |
+
+The face photograph exists so one decision can be made; the student ID is the
+standing evidence for a capability the account still holds. So three separate
+things refuse to delete the second one: `admin_partner_documents_due_for_purge()`
+does not list it, `admin_clear_partner_documents()` only clears
+`face_image_path`, and `purgePartnerDocuments()` re-reads the deletable path
+server-side and discards anything else it was handed.
+
+Customer ID photographs are deleted with the account when account deletion
+exists. Until then, retention is "while the account is active" — an **open
+policy item**, stated as such in `docs/PILOT-QUESTIONS.md` question 18b rather
+than left to be inferred from behaviour.
 
 ## Credentials
 

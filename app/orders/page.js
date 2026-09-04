@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { requireUser } from '@/lib/auth/session';
+import { requireCustomer } from '@/lib/auth/session';
 import { listMyOrders } from '@/lib/customer';
 import { formatPesewas } from '@/lib/util/money';
 import { STAGE } from './stage';
@@ -8,7 +8,7 @@ export const metadata = { title: 'My orders · Campus Dash' };
 export const dynamic = 'force-dynamic';
 
 export default async function MyOrdersPage() {
-  await requireUser('/orders');
+  await requireCustomer('/orders');
   const orders = await listMyOrders();
 
   return (

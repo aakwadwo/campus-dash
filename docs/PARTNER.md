@@ -5,27 +5,48 @@ and phone released only when the Partner is actually holding the food.
 
 ## Becoming a Partner
 
-Deliberately heavier than becoming a customer. Ordering needs a phone OTP and
-nothing else; delivering needs:
+**An upgrade to an existing account, never a second one.** Same
+`auth.users.id`, same phone, same email, same student ID, same order history.
+The UI says "Become a Partner" for that reason, and the form shows the student
+details already on file rather than asking for them again.
 
-1. a phone OTP (already done — it is the same account),
-2. a photograph of a student ID,
+`PARTNER ⇒ CUSTOMER` is a foreign key — `partner_requires_customer`, from
+`partner_profiles.user_id` to `customer_profiles.user_id`, `ON DELETE RESTRICT`.
+So a Partner profile cannot exist without a Customer profile beneath it, and the
+Customer capability cannot be pulled out from under an approved Partner even by
+a service-role statement. It is an invariant, not a convention.
+
+What is already true by the time somebody reaches the form:
+
+1. a phone OTP — the identity, established at sign-in,
+2. student onboarding — full name, student ID number, class year, unique email,
+   a photograph of the student ID, terms accepted.
+
+What the application actually adds:
+
 3. a **live** face photograph, captured from the camera in the app,
-4. an admin who looks at both and decides.
+4. an admin who compares that face against the student ID already on file.
 
-`partner_apply()` refuses an application missing either image, because a
-half-application in the review queue wastes the one scarce resource in this
-flow: a human's attention.
+`partner_apply()` therefore takes ONE argument. It refuses an account with no
+Customer capability, and it refuses an application with no face photograph,
+because a half-application in the review queue wastes the one scarce resource in
+this flow: a human's attention.
 
 **The live-capture constraint is a deterrent, not a guarantee.** The face step
 offers no file input anywhere in the markup, but anyone can POST to the upload
-endpoint directly. The real control is that every application is reviewed by a
-person — which is also why approval is manual in V1.
+endpoint directly, and the server receives bytes that carry no evidence of a
+camera. The real control is that every application is reviewed by a person —
+which is also why approval is manual in V1. The tests assert the controls that
+actually hold, not a guarantee the architecture does not provide.
 
 Documents live in a private bucket with **no storage policies at all**. An
-admin sees them through a signed URL valid for two minutes. The applicant never
-receives a storage path: `my_partner_application()` returns a `has_documents`
-boolean and nothing else.
+admin sees them through a signed URL valid for two minutes. Neither the
+applicant nor the customer ever receives a storage path: `my_partner_application()`
+and `my_customer_profile()` return booleans and nothing else.
+
+Approval grants the Partner capability and takes nothing away — an approved
+Partner still orders lunch on the same account. A rejection likewise leaves the
+Customer capability untouched.
 
 ## Dispatch
 

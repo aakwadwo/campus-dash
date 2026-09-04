@@ -69,7 +69,7 @@ describe('authentication and capabilities', () => {
     assert.equal(profile.is_suspended, false);
   });
 
-  test('a new account has no Partner capability until an admin approves one', async () => {
+  test('a fresh account is an IDENTITY and holds no capability at all', async () => {
     const id = await createUnconfirmedAuthUser('233209990003');
     await confirmPhone(id);
 
@@ -77,8 +77,12 @@ describe('authentication and capabilities', () => {
       id,
       async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
     );
+    // A verified phone proves WHO this is. It grants nothing on its own —
+    // which is the whole distinction this model rests on.
     assert.equal(caps.authenticated, true);
-    assert.equal(caps.can_order, true, 'ordering is low-friction: phone OTP is enough');
+    assert.equal(caps.can_order, false, 'a verified phone is not a Customer');
+    assert.equal(caps.is_customer, false);
+    assert.equal(caps.customer_status, 'NOT_ONBOARDED');
     assert.equal(caps.is_partner, false);
     assert.equal(caps.partner_status, 'NOT_APPLIED');
     assert.deepEqual(caps.vendor_ids, []);
@@ -91,7 +95,8 @@ describe('authentication and capabilities', () => {
       async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
     );
     assert.equal(caps.user_id, ACTORS.partnerYaw, 'the same account id, not a second login');
-    assert.equal(caps.can_order, true);
+    assert.equal(caps.can_order, true, 'a Partner is always also a Customer');
+    assert.equal(caps.is_customer, true);
     assert.equal(caps.is_partner, true);
     assert.equal(caps.partner_status, 'APPROVED');
   });
@@ -103,6 +108,10 @@ describe('authentication and capabilities', () => {
     );
     assert.deepEqual(caps.vendor_ids, [VENDORS.one]);
     assert.equal(caps.is_partner, false);
+    // Staffing a stall is not shopping. This account has no student profile, so
+    // it holds no Customer capability either.
+    assert.equal(caps.can_order, false, 'a vendor account is not automatically a customer');
+    assert.equal(caps.is_customer, false);
   });
 
   test('a signed-out caller gets no capabilities', async () => {

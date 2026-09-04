@@ -24,31 +24,31 @@ import { expectRejection } from './helpers/flow.js';
  */
 describe('one account, several capabilities', () => {
   /** The multi-role account is built here rather than seeded, then unwound. */
-  let originalStudentId = null;
-
   before(async () => {
     await asService(async (c) => {
-      originalStudentId = (
-        await c.query('select student_id_number from public.users where id = $1', [ACTORS.admin])
-      ).rows[0].student_id_number;
-
       // The administrator now also staffs vendor one...
       await c.query(
         `insert into public.vendor_users (vendor_id, user_id) values ($1, $2)
          on conflict do nothing`,
         [VENDORS.one, ACTORS.admin]
       );
-      // ...and is an approved Partner. APPROVED requires a recorded decision,
-      // and the student ID must not collide with another approved Partner's.
-      await c.query('update public.users set student_id_number = $2 where id = $1', [
-        ACTORS.admin,
-        'TEST-STU-MULTI-1',
-      ]);
+      // ...and is a Customer. This step is NOT optional and that is the point:
+      // partner_requires_customer is a foreign key, so even a service-role
+      // insert cannot make somebody a Partner without the Customer capability
+      // underneath. PARTNER ⇒ CUSTOMER is enforced by the schema, not by a
+      // convention a fixture could skip.
+      await c.query(
+        `insert into public.customer_profiles
+           (user_id, student_id_number, class_year, student_id_image_path)
+         values ($1, 'TEST-STU-MULTI-1', 'Class of 2027', 'x/id.jpg')
+         on conflict (user_id) do nothing`,
+        [ACTORS.admin]
+      );
+      // ...and is an approved Partner. APPROVED requires a recorded decision.
       await c.query(
         `insert into public.partner_profiles
-           (user_id, status, student_id_image_path, face_image_path, is_available,
-            reviewed_at, reviewed_by)
-         values ($1, 'APPROVED', 'x/id.jpg', 'x/face.jpg', true, now(), $1)
+           (user_id, status, face_image_path, is_available, reviewed_at, reviewed_by)
+         values ($1, 'APPROVED', 'x/face.jpg', true, now(), $1)
          on conflict (user_id) do update
             set status = 'APPROVED', is_available = true,
                 reviewed_at = now(), reviewed_by = $1`,
@@ -63,11 +63,10 @@ describe('one account, several capabilities', () => {
         VENDORS.one,
         ACTORS.admin,
       ]);
+      // Partner before Customer: the foreign key is ON DELETE RESTRICT, which
+      // is exactly the invariant being unwound here.
       await c.query('delete from public.partner_profiles where user_id = $1', [ACTORS.admin]);
-      await c.query('update public.users set student_id_number = $2 where id = $1', [
-        ACTORS.admin,
-        originalStudentId,
-      ]);
+      await c.query('delete from public.customer_profiles where user_id = $1', [ACTORS.admin]);
     });
     await closePools();
   });
@@ -91,7 +90,20 @@ describe('one account, several capabilities', () => {
     assert.equal(caps.is_admin, true, 'still an administrator');
     assert.deepEqual(caps.vendor_ids, [VENDORS.one], 'and staffs exactly one stall');
     assert.equal(caps.is_partner, true, 'and is an approved Partner');
+    assert.equal(caps.is_customer, true, 'and holds the Customer capability');
     assert.equal(caps.can_order, true, 'and has lost nothing as a customer');
+  });
+
+  test('the Customer capability cannot be pulled out from under a Partner', async () => {
+    // ON DELETE RESTRICT. "A Partner is always also a Customer" is not a rule
+    // somebody has to remember when writing a cleanup script — the database
+    // refuses. This is the invariant that makes the upgrade path safe.
+    const error = await expectRejection(
+      asService((c) =>
+        c.query('delete from public.customer_profiles where user_id = $1', [ACTORS.admin])
+      )
+    );
+    assert.match(error.message, /partner_requires_customer/);
   });
 
   test('vendor membership lists only the stalls actually linked, never all of them', async () => {
@@ -134,6 +146,8 @@ describe('one account, several capabilities', () => {
     assert.equal(caps.is_admin, false);
     assert.deepEqual(caps.vendor_ids, [], 'no stall');
     assert.equal(caps.can_order, true, 'but they can still order');
+    assert.equal(caps.is_partner, false, 'and a Customer is NOT thereby a Partner');
+    assert.equal(caps.partner_status, 'NOT_APPLIED');
 
     assert.deepEqual(await board(ACTORS.customerAma, VENDORS.one), [], 'no vendor board');
 
@@ -152,6 +166,7 @@ describe('one account, several capabilities', () => {
   test('an approved Partner is not thereby a vendor or an administrator', async () => {
     const caps = await capabilities(ACTORS.partnerYaw);
     assert.equal(caps.is_partner, true);
+    assert.equal(caps.can_order, true, 'a Partner is always also a Customer');
     assert.equal(caps.is_admin, false);
     assert.deepEqual(caps.vendor_ids, []);
     assert.deepEqual(await board(ACTORS.partnerYaw, VENDORS.one), []);

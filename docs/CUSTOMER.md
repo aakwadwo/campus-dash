@@ -2,6 +2,41 @@
 
 One job: a student on a phone picks food from an approved stall and pays for it.
 
+## Browsing is open; ordering is a capability
+
+Anyone can look. `vendors`, `menu_items` and `locations` are readable by `anon`
+under their own RLS policies, so `/order` runs the same queries signed out as it
+does signed in, and someone can build a basket before they have an account.
+
+Placing an order needs the **CUSTOMER capability**, which is a
+`customer_profiles` row, which is acquired by completing student onboarding:
+
+- full name
+- student ID number
+- class year
+- a unique email address
+- a photograph of the student ID
+- acceptance of the current customer terms
+
+`complete_customer_onboarding()` writes all of it in one transaction, including
+the terms acceptance — a capability granted before the agreement it depends on
+is a gate that opens itself. There is no admin review: completing the form **is**
+the grant.
+
+The student ID photograph goes into the same private bucket as the Partner face
+photograph, with no storage policies — only an administrator can see it, through
+a short-lived signed URL. It is **retained while the account holds the Customer
+capability**, because it is the standing evidence for that capability rather
+than a record of a past decision, and the Partner document purge does not touch
+it. How it is eventually deleted is an open policy item — see
+`docs/PILOT-QUESTIONS.md` question 18b.
+
+It is not a new account. The identity already exists — a phone number was
+verified to get this far — so onboarding only ever adds a capability to the
+`auth.users.id` already in the session. An administrator or a vendor account
+that has not done it genuinely cannot order, because `submit_order_for()`
+asserts `is_customer()` server-side rather than trusting a screen.
+
 ## The flow, and why it is in this order
 
 ```

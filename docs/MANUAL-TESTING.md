@@ -52,19 +52,46 @@ customer out.
 
 ## Development accounts
 
-| Role                      | Phone        | Name                | Where they land  |
-| ------------------------- | ------------ | ------------------- | ---------------- |
-| Admin                     | `0200000001` | Dev Admin           | `/admin`         |
-| Vendor — Test Kitchen One | `0200000011` | Muni Owner          | `/vendor`        |
-| Vendor — Test Grill Two   | `0200000012` | Grill Owner         | `/vendor`        |
-| Customer                  | `0200000021` | Ama Test-Customer   | `/order`         |
-| Customer                  | `0200000022` | Kwesi Test-Customer | `/order`         |
-| Partner (approved)        | `0200000031` | Yaw Test-Partner    | `/partner`       |
-| Partner (approved)        | `0200000032` | Adjoa Test-Partner  | `/partner`       |
-| Partner applicant         | `0200000033` | Kofi Test-Applicant | `/partner/apply` |
-| Partner applicant         | `0200000035` | Kojo Test-Applicant | `/partner/apply` |
+| Capabilities         | Phone        | Name                | Where they land  |
+| -------------------- | ------------ | ------------------- | ---------------- |
+| Admin                | `0200000001` | Dev Admin           | `/admin`         |
+| Vendor (Kitchen One) | `0200000011` | Muni Owner          | `/vendor`        |
+| Vendor (Grill Two)   | `0200000012` | Grill Owner         | `/vendor`        |
+| Customer             | `0200000021` | Ama Test-Customer   | `/order`         |
+| Customer             | `0200000022` | Kwesi Test-Customer | `/order`         |
+| Customer + Partner   | `0200000031` | Yaw Test-Partner    | `/partner`       |
+| Customer + Partner   | `0200000032` | Adjoa Test-Partner  | `/partner`       |
+| Customer, applied    | `0200000033` | Kofi Test-Applicant | `/partner/apply` |
+| Customer, applied    | `0200000035` | Kojo Test-Applicant | `/partner/apply` |
 
 Customers `0200000023` / `0200000024` and Partner `0200000034` are spare.
+
+**The admin and the two vendor accounts hold NO Customer capability, and that is
+deliberate** — it is the seed demonstrating that admin does not imply customer
+and that a stall is not a shopper. Signing in as any of them and visiting
+`/order` shows the marketplace with a prompt to add student details, and
+`/orders` redirects to `/onboarding`. Give one the capability by completing
+onboarding as that account; it keeps everything it already had.
+
+Every Partner account is also a Customer — `PARTNER ⇒ CUSTOMER` is a foreign
+key. Each area's header carries an **AreaSwitcher** linking to the other areas
+the account holds, which is how you get from `/partner` to `/order` without
+signing out.
+
+### Testing a delivery end to end
+
+Use three DIFFERENT accounts, and never weaken the conflict rules to make it
+work:
+
+- **Customer A** places the order — say `0200000021` (Ama).
+- **Vendor C** accepts, prepares and marks it READY — `0200000011` for Kitchen
+  One.
+- **Partner B** must be neither the customer nor staff of that vendor. Adjoa
+  (`0200000032`) works for a Kitchen One order placed by Ama.
+
+If an order shows no eligible Partner, the exclusions are working. Check whether
+your Partner placed the order, or staffs the vendor it came from, before
+suspecting a bug.
 
 ## Timings
 

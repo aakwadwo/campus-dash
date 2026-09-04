@@ -289,7 +289,9 @@ export async function purgePartnerDocumentsAction(_prev, formData) {
     () =>
       purgePartnerDocuments({
         userId: str(formData, 'user_id'),
-        paths: [str(formData, 'student_id_image_path'), str(formData, 'face_image_path')],
+        // The face photograph only. The student ID belongs to the Customer
+        // profile now and is not a Partner document to purge.
+        paths: [str(formData, 'face_image_path')],
         reason: str(formData, 'reason'),
       }),
     'Verification documents deleted.',

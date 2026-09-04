@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { requireUser } from '@/lib/auth/session';
+import { requireCustomer } from '@/lib/auth/session';
 import { getMyOrder } from '@/lib/customer';
 import { getPollIntervals } from '@/lib/platform-config';
 import { formatPesewas } from '@/lib/util/money';
@@ -13,7 +13,7 @@ export default async function CustomerOrderPage({ params }) {
   const { orderId } = await params;
   // The capabilities come back from the database on this request; `email` is
   // read from them so the pay button can ask for one when the provider needs it.
-  const me = await requireUser(`/orders/${orderId}`);
+  const me = await requireCustomer(`/orders/${orderId}`);
 
   // Returns nothing unless the order belongs to the signed-in customer, so
   // another customer's id lands on a 404 rather than a message confirming it

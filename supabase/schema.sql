@@ -502,7 +502,6 @@ ALTER FUNCTION "public"."admin_cancel_order"("p_order_id" "uuid", "p_reason" "te
 CREATE TABLE IF NOT EXISTS "public"."partner_profiles" (
     "user_id" "uuid" NOT NULL,
     "status" "public"."partner_application_status" DEFAULT 'PENDING_REVIEW'::"public"."partner_application_status" NOT NULL,
-    "student_id_image_path" "text",
     "face_image_path" "text",
     "is_available" boolean DEFAULT false NOT NULL,
     "applied_at" timestamp with time zone DEFAULT "now"() NOT NULL,
@@ -517,6 +516,9 @@ CREATE TABLE IF NOT EXISTS "public"."partner_profiles" (
 
 
 ALTER TABLE "public"."partner_profiles" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."partner_profiles"."face_image_path" IS 'PARTNER verification document, in the private partner-documents bucket. Purged after the review retention window — see documents_purge_after and admin_partner_documents_due_for_purge().';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_clear_partner_documents"("p_user_id" "uuid", "p_reason" "text") RETURNS "public"."partner_profiles"
@@ -537,8 +539,7 @@ begin
   end if;
 
   update public.partner_profiles
-     set student_id_image_path = null,
-         face_image_path = null,
+     set face_image_path = null,
          documents_purge_after = null
    where user_id = p_user_id
   returning * into v_after;
@@ -921,12 +922,14 @@ CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select p.user_id, u.full_name, u.phone, u.student_id_number, u.class_year, u.email, p.status,
-         p.student_id_image_path, p.face_image_path, p.is_available,
+  select p.user_id, u.full_name, u.phone,
+         c.student_id_number, c.class_year, u.email, p.status,
+         c.student_id_image_path, p.face_image_path, p.is_available,
          p.applied_at, p.reviewed_at, r.full_name, p.review_notes,
          p.documents_purge_after
     from public.partner_profiles p
     join public.users u on u.id = p.user_id
+    join public.customer_profiles c on c.user_id = p.user_id
     left join public.users r on r.id = p.reviewed_by
    where public.is_admin()
      and (p_status is null or p.status = p_status)
@@ -1151,22 +1154,27 @@ $$;
 ALTER FUNCTION "public"."admin_order_money"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_partner_documents_due_for_purge"() RETURNS TABLE("user_id" "uuid", "student_id_image_path" "text", "face_image_path" "text", "status" "public"."partner_application_status", "documents_purge_after" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_partner_documents_due_for_purge"() RETURNS TABLE("user_id" "uuid", "face_image_path" "text", "status" "public"."partner_application_status", "documents_purge_after" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select p.user_id, p.student_id_image_path, p.face_image_path,
-         p.status, p.documents_purge_after
+  select p.user_id, p.face_image_path, p.status, p.documents_purge_after
     from public.partner_profiles p
    where public.is_admin()
      and p.documents_purge_after is not null
      and p.documents_purge_after <= now()
-     and (p.student_id_image_path is not null or p.face_image_path is not null)
+     -- Only rows that still HAVE a face photograph. A profile already purged
+     -- has nothing due, and listing it invites a second delete of a file that
+     -- is gone.
+     and p.face_image_path is not null
    order by p.documents_purge_after asc;
 $$;
 
 
 ALTER FUNCTION "public"."admin_partner_documents_due_for_purge"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_partner_documents_due_for_purge"() IS 'Partner face photographs whose retention window has elapsed. Deliberately does NOT list customer_profiles.student_id_image_path: that document is retained while the account is active, and a delete queue must name only things that may be deleted.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_payments"("p_limit" integer DEFAULT 100) RETURNS TABLE("payment_id" "uuid", "order_id" "uuid", "order_number" "text", "provider" "text", "provider_transaction_id" "text", "amount_pesewas" bigint, "status" "public"."payment_txn_status", "failure_reason" "text", "created_at" timestamp with time zone, "succeeded_at" timestamp with time zone)
@@ -2385,6 +2393,129 @@ $$;
 ALTER FUNCTION "public"."check_allocations_balance"() OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."customer_profiles" (
+    "user_id" "uuid" NOT NULL,
+    "student_id_number" "text" NOT NULL,
+    "class_year" "text" NOT NULL,
+    "student_id_image_path" "text" NOT NULL,
+    "onboarded_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "customer_class_year_shape" CHECK (("btrim"("class_year") <> ''::"text")),
+    CONSTRAINT "customer_id_image_shape" CHECK (("btrim"("student_id_image_path") <> ''::"text")),
+    CONSTRAINT "customer_student_id_shape" CHECK (("btrim"("student_id_number") <> ''::"text"))
+);
+
+
+ALTER TABLE "public"."customer_profiles" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."customer_profiles" IS 'The CUSTOMER capability. A row here is the capability; there is no flag. Admin and vendor-staff accounts do not get one automatically.';
+
+
+COMMENT ON COLUMN "public"."customer_profiles"."student_id_image_path" IS 'CUSTOMER verification document, in the private partner-documents bucket. Retained while the account holds the CUSTOMER capability — it is evidence for a standing capability, not a record of a past review. NOT purged by the Partner document retention job. Subject to the account deletion policy when that exists. See docs/PILOT-QUESTIONS.md.';
+
+
+CREATE OR REPLACE FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") RETURNS "public"."customer_profiles"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_user    uuid := auth.uid();
+  v_email   text := lower(btrim(coalesce(p_email, '')));
+  v_profile public.customer_profiles%rowtype;
+  v_doc     public.terms_documents%rowtype;
+begin
+  if v_user is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+  if exists (select 1 from public.users where id = v_user and is_suspended) then
+    raise exception 'account suspended' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- Every field is required. A half-filled identity record is not a lighter
+  -- version of this capability, it is an unusable one.
+  if nullif(btrim(coalesce(p_full_name, '')), '') is null then
+    raise exception 'your full name is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_student_id_number, '')), '') is null then
+    raise exception 'a student ID number is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_class_year, '')), '') is null then
+    raise exception 'a class year is required' using errcode = 'check_violation';
+  end if;
+  if v_email = '' then
+    raise exception 'an email address is required' using errcode = 'check_violation';
+  end if;
+  if v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'that email address does not look like an address'
+      using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_student_id_image_path, '')), '') is null then
+    raise exception 'a photograph of your student ID is required'
+      using errcode = 'check_violation';
+  end if;
+
+  -- The terms must be the CURRENT published customer terms. Accepting a
+  -- superseded version, or a Partner document, is not consent to these.
+  select * into v_doc from public.terms_documents where id = p_terms_id;
+  if not found or v_doc.published_at is null or v_doc.audience <> 'CUSTOMER' then
+    raise exception 'the customer terms must be accepted to continue'
+      using errcode = 'check_violation';
+  end if;
+  if v_doc.version <> (
+    select max(t.version) from public.terms_documents t
+     where t.audience = 'CUSTOMER' and t.published_at is not null
+  ) then
+    raise exception 'those terms have been superseded; reload and try again'
+      using errcode = 'check_violation';
+  end if;
+
+  -- Identity fields live on public.users; capability evidence lives on the
+  -- profile. The split is the whole point of this migration.
+  begin
+    update public.users
+       set full_name = btrim(p_full_name),
+           email     = v_email
+     where id = v_user;
+  exception when unique_violation then
+    raise exception 'that email address is already used by another Campus Dash account'
+      using errcode = 'unique_violation';
+  end;
+
+  begin
+    insert into public.customer_profiles (
+      user_id, student_id_number, class_year, student_id_image_path
+    )
+    values (
+      v_user, btrim(p_student_id_number), btrim(p_class_year), btrim(p_student_id_image_path)
+    )
+    -- Re-running onboarding updates the declared facts. It never revokes the
+    -- capability, and it never moves onboarded_at: when someone became a
+    -- customer is a fact about the past.
+    on conflict (user_id) do update
+       set student_id_number     = excluded.student_id_number,
+           class_year            = excluded.class_year,
+           student_id_image_path = excluded.student_id_image_path
+    returning * into v_profile;
+  exception when unique_violation then
+    raise exception 'that student ID number is already registered to another account'
+      using errcode = 'unique_violation';
+  end;
+
+  insert into public.terms_acceptances (user_id, terms_id, audience, version)
+  values (v_user, v_doc.id, v_doc.audience, v_doc.version)
+  on conflict (user_id, audience, version)
+    do update set accepted_at = public.terms_acceptances.accepted_at;
+
+  return v_profile;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) RETURNS "public"."payments"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3409,6 +3540,23 @@ $$;
 ALTER FUNCTION "public"."is_approved_partner"("p_user_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."is_customer"("p_user_id" "uuid" DEFAULT NULL::"uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select exists (
+    select 1
+      from public.customer_profiles c
+      join public.users u on u.id = c.user_id
+     where c.user_id = coalesce(p_user_id, auth.uid())
+       and not u.is_suspended
+  );
+$$;
+
+
+ALTER FUNCTION "public"."is_customer"("p_user_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."is_service_or_admin"() RETURNS boolean
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -3693,17 +3841,29 @@ CREATE OR REPLACE FUNCTION "public"."my_capabilities"() RETURNS "jsonb"
         'email',            u.email,
         'is_suspended',     u.is_suspended,
         'is_admin',         u.is_admin,
-        'can_order',        not u.is_suspended,
+
+        -- CUSTOMER: a completed onboarding, not merely an account.
+        'is_customer',      (c.user_id is not null) and not u.is_suspended,
+        'can_order',        (c.user_id is not null) and not u.is_suspended,
+        'customer_status',  case when c.user_id is not null then 'ONBOARDED'
+                                 else 'NOT_ONBOARDED' end,
+        'student_id_number', c.student_id_number,
+        'class_year',       c.class_year,
+
+        -- PARTNER: the same identity, one capability further on.
         'partner_status',   coalesce(p.status::text, 'NOT_APPLIED'),
         'is_partner',       coalesce(p.status = 'APPROVED', false) and not u.is_suspended,
         'partner_available', coalesce(p.is_available, false),
+
+        -- VENDOR: a business the account may operate. Never a customer grant.
         'vendor_ids',       coalesce(
                               (select jsonb_agg(vu.vendor_id)
                                  from public.vendor_users vu where vu.user_id = u.id),
                               '[]'::jsonb)
       )
       from public.users u
-      left join public.partner_profiles p on p.user_id = u.id
+      left join public.customer_profiles c on c.user_id = u.id
+      left join public.partner_profiles  p on p.user_id = u.id
       where u.id = auth.uid()
     )
   end;
@@ -3713,13 +3873,28 @@ $$;
 ALTER FUNCTION "public"."my_capabilities"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."my_customer_profile"() RETURNS TABLE("student_id_number" "text", "class_year" "text", "has_student_id" boolean, "onboarded_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select c.student_id_number, c.class_year,
+         nullif(btrim(c.student_id_image_path), '') is not null,
+         c.onboarded_at
+    from public.customer_profiles c
+   where c.user_id = auth.uid();
+$$;
+
+
+ALTER FUNCTION "public"."my_customer_profile"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."my_outstanding_terms"() RETURNS TABLE("audience" "public"."terms_audience", "version" integer, "title" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   with required as (
     select 'CUSTOMER'::public.terms_audience as audience
-     where auth.uid() is not null
+     where exists (select 1 from public.customer_profiles c where c.user_id = auth.uid())
     union all
     select 'VENDOR'::public.terms_audience
      where exists (select 1 from public.vendor_users vu where vu.user_id = auth.uid())
@@ -3754,7 +3929,7 @@ CREATE OR REPLACE FUNCTION "public"."my_partner_application"() RETURNS TABLE("st
     SET "search_path" TO ''
     AS $$
   select p.status, p.applied_at, p.reviewed_at, p.review_notes, p.is_available,
-         (p.student_id_image_path is not null and p.face_image_path is not null)
+         nullif(btrim(coalesce(p.face_image_path, '')), '') is not null
     from public.partner_profiles p
    where p.user_id = auth.uid();
 $$;
@@ -4004,10 +4179,10 @@ $$;
 ALTER FUNCTION "public"."partner_active_delivery"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") RETURNS "public"."partner_profiles"
+CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_face_image_path" "text") RETURNS "public"."partner_profiles"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
-    AS $_$
+    AS $$
 declare
   v_user    uuid := auth.uid();
   v_profile public.partner_profiles%rowtype;
@@ -4020,23 +4195,16 @@ begin
     raise exception 'account suspended' using errcode = 'insufficient_privilege';
   end if;
 
-  if nullif(btrim(coalesce(p_student_id_number, '')), '') is null then
-    raise exception 'a student ID number is required' using errcode = 'check_violation';
+  -- PARTNER ⇒ CUSTOMER. The foreign key would refuse this anyway; checking it
+  -- here is what turns a constraint violation into a sentence a person can act
+  -- on. This is an upgrade to an existing account, never a new one.
+  if not exists (select 1 from public.customer_profiles where user_id = v_user) then
+    raise exception 'complete your student onboarding before applying to be a Partner'
+      using errcode = 'insufficient_privilege';
   end if;
-  if nullif(btrim(coalesce(p_class_year, '')), '') is null then
-    raise exception 'a class year is required' using errcode = 'check_violation';
-  end if;
-  if nullif(btrim(coalesce(p_email, '')), '') is null then
-    raise exception 'an email address is required' using errcode = 'check_violation';
-  end if;
-  if btrim(p_email) !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
-    raise exception 'that email address does not look like an address'
-      using errcode = 'check_violation';
-  end if;
-  if nullif(btrim(coalesce(p_student_id_image_path, '')), '') is null
-     or nullif(btrim(coalesce(p_face_image_path, '')), '') is null then
-    raise exception 'both a student ID photograph and a live face photograph are required'
-      using errcode = 'check_violation';
+
+  if nullif(btrim(coalesce(p_face_image_path, '')), '') is null then
+    raise exception 'a live face photograph is required' using errcode = 'check_violation';
   end if;
 
   select status into v_status from public.partner_profiles where user_id = v_user;
@@ -4051,23 +4219,12 @@ begin
       using errcode = 'insufficient_privilege';
   end if;
 
-  -- The declared fields go on the user, where the approved-uniqueness index
-  -- for the student ID lives.
-  update public.users
-     set student_id_number = btrim(p_student_id_number),
-         class_year        = btrim(p_class_year),
-         email             = btrim(p_email)
-   where id = v_user;
-
   insert into public.partner_profiles (
-    user_id, status, student_id_image_path, face_image_path, is_available, applied_at
+    user_id, status, face_image_path, is_available, applied_at
   )
-  values (
-    v_user, 'PENDING_REVIEW', p_student_id_image_path, p_face_image_path, false, now()
-  )
+  values (v_user, 'PENDING_REVIEW', btrim(p_face_image_path), false, now())
   on conflict (user_id) do update
      set status                = 'PENDING_REVIEW',
-         student_id_image_path = excluded.student_id_image_path,
          face_image_path       = excluded.face_image_path,
          is_available          = false,
          applied_at            = now(),
@@ -4081,10 +4238,10 @@ begin
 
   return v_profile;
 end;
-$_$;
+$$;
 
 
-ALTER FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."partner_apply"("p_face_image_path" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
@@ -4136,16 +4293,32 @@ CREATE OR REPLACE FUNCTION "public"."partner_complete_delivery"("p_order_id" "uu
     SET "search_path" TO ''
     AS $$
 declare
-  v_partner uuid := auth.uid();
-  v_order   public.orders%rowtype;
-  v_stored  text;
+  v_partner  uuid := auth.uid();
+  v_order    public.orders%rowtype;
+  v_stored   text;
+  v_assigned uuid;
+  v_state    public.delivery_status;
 begin
-  -- Authorisation failure: raise.
-  if not exists (
-    select 1 from public.orders
-     where id = p_order_id and partner_id = v_partner and delivery_status = 'PICKED_UP'
-  ) then
+  select o.partner_id, o.delivery_status
+    into v_assigned, v_state
+    from public.orders o
+   where o.id = p_order_id;
+
+  -- AUTHORISATION failure: raise. Covers the wrong Partner, an order with no
+  -- Partner attached, and an order id that does not exist — all three get the
+  -- same message, so probing tells the caller nothing.
+  if v_assigned is null or v_assigned is distinct from v_partner then
     raise exception 'you are not carrying this delivery' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- STATE failure: the rightful Partner, at the wrong moment. Routine, so it is
+  -- logged and returned rather than raised — a replayed completion is evidence,
+  -- and evidence that rolls itself back is no evidence at all.
+  if v_state <> 'PICKED_UP' then
+    perform public.log_order_event(p_order_id, 'PARTNER_COMPLETE', false, 'PARTNER',
+      'delivery_status', v_state::text, 'DELIVERED',
+      'order is not awaiting delivery completion');
+    return row(false, 'this delivery is not awaiting completion')::public.transition_result;
   end if;
 
   select delivery_code into v_stored from public.order_secrets where order_id = p_order_id;
@@ -4831,22 +5004,16 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "full_name" "text",
     "is_admin" boolean DEFAULT false NOT NULL,
     "is_suspended" boolean DEFAULT false NOT NULL,
-    "student_id_number" "text",
     "student_verified_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "class_year" "text",
     "email" "text",
-    CONSTRAINT "users_class_year_shape" CHECK ((("class_year" IS NULL) OR ("btrim"("class_year") <> ''::"text"))),
     CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
     CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
 );
 
 
 ALTER TABLE "public"."users" OWNER TO "postgres";
-
-
-COMMENT ON COLUMN "public"."users"."class_year" IS 'Applicant-declared cohort, e.g. "Class of 2029". Declared, never verified.';
 
 
 COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
@@ -4988,6 +5155,17 @@ begin
 
   if exists (select 1 from public.users where id = p_customer_id and is_suspended) then
     raise exception 'account suspended' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- THE CUSTOMER CAPABILITY. An authorisation failure, so it raises rather than
+  -- returning — this is not a lost race, it is an account that may not order.
+  --
+  -- Checked against p_customer_id rather than auth.uid() so that a server-side
+  -- order placed on somebody's behalf is held to the same rule. An
+  -- administrator ordering FOR a customer does not lend them the capability.
+  if not public.is_customer(p_customer_id) then
+    raise exception 'this account has not completed student onboarding'
+      using errcode = 'insufficient_privilege';
   end if;
 
   if not exists (
@@ -5801,6 +5979,10 @@ ALTER TABLE ONLY "public"."allocations"
     ADD CONSTRAINT "allocations_pkey" PRIMARY KEY ("id");
 
 
+ALTER TABLE ONLY "public"."customer_profiles"
+    ADD CONSTRAINT "customer_profiles_pkey" PRIMARY KEY ("user_id");
+
+
 ALTER TABLE ONLY "public"."idempotency_keys"
     ADD CONSTRAINT "idempotency_keys_pkey" PRIMARY KEY ("key");
 
@@ -5899,6 +6081,9 @@ CREATE INDEX "allocations_payee_idx" ON "public"."allocations" USING "btree" ("p
 CREATE INDEX "allocations_settlement_idx" ON "public"."allocations" USING "btree" ("settlement_run_id") WHERE ("settlement_run_id" IS NOT NULL);
 
 
+CREATE UNIQUE INDEX "customer_profiles_student_id_unique" ON "public"."customer_profiles" USING "btree" ("student_id_number");
+
+
 CREATE INDEX "idempotency_keys_expiry_idx" ON "public"."idempotency_keys" USING "btree" ("expires_at");
 
 
@@ -5980,9 +6165,6 @@ CREATE UNIQUE INDEX "partner_profiles_one_approved_per_user" ON "public"."partne
 CREATE INDEX "partner_profiles_status_idx" ON "public"."partner_profiles" USING "btree" ("status");
 
 
-CREATE UNIQUE INDEX "partner_profiles_student_id_unique" ON "public"."users" USING "btree" ("student_id_number") WHERE ("student_id_number" IS NOT NULL);
-
-
 CREATE UNIQUE INDEX "payments_idempotency_key_unique" ON "public"."payments" USING "btree" ("idempotency_key");
 
 
@@ -6025,6 +6207,12 @@ CREATE UNIQUE INDEX "terms_acceptances_user_version_unique" ON "public"."terms_a
 CREATE UNIQUE INDEX "terms_documents_audience_version_unique" ON "public"."terms_documents" USING "btree" ("audience", "version");
 
 
+CREATE UNIQUE INDEX "users_email_unique" ON "public"."users" USING "btree" ("lower"("email")) WHERE ("email" IS NOT NULL);
+
+
+COMMENT ON INDEX "public"."users_email_unique" IS 'ONE EMAIL → ONE ACCOUNT IDENTITY. Not an identity key: auth.users.id is. Makes future OAuth account-linking unambiguous.';
+
+
 CREATE INDEX "users_is_admin_idx" ON "public"."users" USING "btree" ("id") WHERE "is_admin";
 
 
@@ -6053,6 +6241,9 @@ CREATE CONSTRAINT TRIGGER "allocations_must_balance" AFTER INSERT OR DELETE OR U
 
 
 CREATE OR REPLACE TRIGGER "allocations_set_updated_at" BEFORE UPDATE ON "public"."allocations" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+CREATE OR REPLACE TRIGGER "customer_profiles_set_updated_at" BEFORE UPDATE ON "public"."customer_profiles" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
 CREATE OR REPLACE TRIGGER "locations_no_cycles" BEFORE INSERT OR UPDATE OF "parent_id" ON "public"."locations" FOR EACH ROW EXECUTE FUNCTION "public"."locations_prevent_cycle"();
@@ -6110,6 +6301,10 @@ ALTER TABLE ONLY "public"."allocations"
 
 ALTER TABLE ONLY "public"."allocations"
     ADD CONSTRAINT "allocations_settlement_run_fk" FOREIGN KEY ("settlement_run_id") REFERENCES "public"."settlement_runs"("id") ON DELETE SET NULL;
+
+
+ALTER TABLE ONLY "public"."customer_profiles"
+    ADD CONSTRAINT "customer_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
 ALTER TABLE ONLY "public"."idempotency_keys"
@@ -6180,6 +6375,13 @@ ALTER TABLE ONLY "public"."partner_profiles"
     ADD CONSTRAINT "partner_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
+ALTER TABLE ONLY "public"."partner_profiles"
+    ADD CONSTRAINT "partner_requires_customer" FOREIGN KEY ("user_id") REFERENCES "public"."customer_profiles"("user_id") ON DELETE RESTRICT;
+
+
+COMMENT ON CONSTRAINT "partner_requires_customer" ON "public"."partner_profiles" IS 'A Partner is always also a Customer. The Customer capability cannot be removed from under an existing Partner profile.';
+
+
 ALTER TABLE ONLY "public"."payments"
     ADD CONSTRAINT "payments_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE RESTRICT;
 
@@ -6229,6 +6431,15 @@ CREATE POLICY "allocations_read_partner" ON "public"."allocations" FOR SELECT TO
 
 
 CREATE POLICY "allocations_read_vendor" ON "public"."allocations" FOR SELECT TO "authenticated" USING ((("payee_type" = 'VENDOR'::"public"."payee_type") AND ("payee_id" IN ( SELECT "public"."my_vendor_ids"() AS "my_vendor_ids"))));
+
+
+ALTER TABLE "public"."customer_profiles" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "customer_profiles_read_admin" ON "public"."customer_profiles" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
+
+
+CREATE POLICY "customer_profiles_read_self" ON "public"."customer_profiles" FOR SELECT TO "authenticated" USING (("user_id" = "auth"."uid"()));
 
 
 ALTER TABLE "public"."idempotency_keys" ENABLE ROW LEVEL SECURITY;
@@ -6677,6 +6888,15 @@ REVOKE ALL ON FUNCTION "public"."check_allocations_balance"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."check_allocations_balance"() TO "service_role";
 
 
+GRANT ALL ON TABLE "public"."customer_profiles" TO "service_role";
+GRANT SELECT ON TABLE "public"."customer_profiles" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) TO "service_role";
 
@@ -6819,6 +7039,12 @@ REVOKE ALL ON FUNCTION "public"."is_approved_partner"("p_user_id" "uuid") FROM P
 GRANT ALL ON FUNCTION "public"."is_approved_partner"("p_user_id" "uuid") TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."is_customer"("p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."is_customer"("p_user_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."is_customer"("p_user_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."is_customer"("p_user_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."is_service_or_admin"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."is_service_or_admin"() TO "service_role";
 
@@ -6874,6 +7100,11 @@ GRANT ALL ON FUNCTION "public"."my_capabilities"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_capabilities"() TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."my_customer_profile"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_customer_profile"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_customer_profile"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."my_outstanding_terms"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."my_outstanding_terms"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_outstanding_terms"() TO "authenticated";
@@ -6913,9 +7144,9 @@ GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_face_image_path" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") FROM PUBLIC;

@@ -1,12 +1,21 @@
 import Link from 'next/link';
-import { requireUser } from '@/lib/auth/session';
+import { getCapabilities } from '@/lib/auth/session';
 import { listVendors } from '@/lib/customer';
 
 export const metadata = { title: 'Order · Campus Dash' };
 export const dynamic = 'force-dynamic';
 
+/**
+ * The marketplace. Open to everyone; ordering is not.
+ *
+ * Browsing needs no account — vendors and menu items are readable by `anon`
+ * under their own RLS policies, so this page hits exactly the same queries
+ * signed out as it does signed in. What an account (and student onboarding)
+ * buys is the ability to place an order, and that is enforced in
+ * submit_order_for(), not by hiding the menu.
+ */
 export default async function VendorListPage() {
-  await requireUser('/order');
+  const me = await getCapabilities();
   const vendors = await listVendors();
 
   return (
@@ -16,10 +25,14 @@ export default async function VendorListPage() {
           <p className="text-muted text-xs font-medium tracking-[0.2em] uppercase">Campus Dash</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">Order</h1>
         </div>
-        <Link href="/orders" className="text-brand-700 text-sm underline underline-offset-4">
-          My orders
-        </Link>
+        {me.can_order ? (
+          <Link href="/orders" className="text-brand-700 text-sm underline underline-offset-4">
+            My orders
+          </Link>
+        ) : null}
       </header>
+
+      <OrderingGate me={me} />
 
       {vendors.length ? (
         <ul className="space-y-2">
@@ -48,5 +61,35 @@ export default async function VendorListPage() {
         </p>
       )}
     </main>
+  );
+}
+
+/**
+ * Says what is missing and links to the one thing that fixes it. Two different
+ * states, because "sign in" and "finish your student details" are two different
+ * problems and telling someone the wrong one wastes their time.
+ */
+export function OrderingGate({ me }) {
+  if (me.can_order) return null;
+
+  const { href, label, body } = !me.authenticated
+    ? {
+        href: '/login?next=%2Forder',
+        label: 'Sign in',
+        body: 'Browse as much as you like. To place an order you need a Campus Dash account.',
+      }
+    : {
+        href: '/onboarding?next=%2Forder',
+        label: 'Add your student details',
+        body: 'Campus Dash is for Academic City students. Add your student details to this account and you can order.',
+      };
+
+  return (
+    <div className="border-brand-600/60 bg-brand-50/60 mb-5 rounded-lg border p-4">
+      <p className="text-sm leading-relaxed">{body}</p>
+      <Link href={href} className="text-brand-700 mt-2 inline-block text-sm font-semibold">
+        {label} →
+      </Link>
+    </div>
   );
 }

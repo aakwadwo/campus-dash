@@ -167,7 +167,12 @@ describe('schema invariants', () => {
       'allocations_order_payee_unique',
       'settlement_runs_period_unique',
       'users_phone_key',
-      'partner_profiles_student_id_unique',
+      // One student ID backs one CUSTOMER identity. The index moved here with
+      // the column it guards when Customer became a capability.
+      'customer_profiles_student_id_unique',
+      // ONE EMAIL → ONE ACCOUNT IDENTITY. Not an identity key — auth.users.id
+      // is — but unique, which is what makes future OAuth linking unambiguous.
+      'users_email_unique',
     ];
     const present = await asService(async (c) =>
       (
@@ -209,6 +214,10 @@ describe('schema invariants', () => {
       'current_user_id',
       'deliverable_locations',
       'is_admin',
+      // Readable by anon for the same reason is_admin is: the marketplace is
+      // browsable signed out, and the page needs to know whether the viewer
+      // may actually order before it offers a checkout button.
+      'is_customer',
       'is_vendor_staff',
       'location_path',
       'location_zone',
@@ -260,6 +269,7 @@ describe('schema invariants', () => {
       'admin_update_menu_item',
       'admin_update_vendor',
       'admin_webhook_events',
+      'complete_customer_onboarding',
       'customer_abandon_stuck_payment',
       'customer_collect_instead',
       'customer_dispute_delivery',
@@ -271,6 +281,7 @@ describe('schema invariants', () => {
       'get_my_delivery_code',
       'get_my_pickup_code',
       'my_capabilities',
+      'my_customer_profile',
       'my_outstanding_terms',
       'my_partner_application',
       'my_payout_destination',

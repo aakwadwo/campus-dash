@@ -90,48 +90,75 @@ values
 -- The on_auth_user_created trigger has ALREADY created a base profile for each
 -- auth.users row above. This upsert only adds what the trigger cannot know:
 -- who is an admin, and which student ID backs a Partner application.
-insert into public.users (id, phone, full_name, is_admin, student_id_number) values
-  ('00000000-0000-4000-8000-000000000001', '+233200000001', 'Dev Admin',            true,  null),
-  ('00000000-0000-4000-8000-000000000011', '+233200000011', 'Muni Owner (test)',    false, null),
-  ('00000000-0000-4000-8000-000000000012', '+233200000012', 'Grill Owner (test)',   false, null),
-  ('00000000-0000-4000-8000-000000000021', '+233200000021', 'Ama Test-Customer',    false, null),
-  ('00000000-0000-4000-8000-000000000022', '+233200000022', 'Kwesi Test-Customer',  false, null),
-  ('00000000-0000-4000-8000-000000000023', '+233200000023', 'Efua Test-Customer',   false, null),
-  ('00000000-0000-4000-8000-000000000031', '+233200000031', 'Yaw Test-Partner',     false, 'TEST-STU-0031'),
-  ('00000000-0000-4000-8000-000000000032', '+233200000032', 'Adjoa Test-Partner',   false, 'TEST-STU-0032'),
-  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false, 'TEST-STU-0033'),
-  ('00000000-0000-4000-8000-000000000034', '+233200000034', 'Esi Test-Partner',     false, 'TEST-STU-0034'),
-  ('00000000-0000-4000-8000-000000000035', '+233200000035', 'Kojo Test-Applicant',  false, 'TEST-STU-0035'),
-  ('00000000-0000-4000-8000-000000000024', '+233200000024', 'Abena Test-Customer',  false, null)
+insert into public.users (id, phone, full_name, is_admin) values
+  ('00000000-0000-4000-8000-000000000001', '+233200000001', 'Dev Admin',            true),
+  ('00000000-0000-4000-8000-000000000011', '+233200000011', 'Muni Owner (test)',    false),
+  ('00000000-0000-4000-8000-000000000012', '+233200000012', 'Grill Owner (test)',   false),
+  ('00000000-0000-4000-8000-000000000021', '+233200000021', 'Ama Test-Customer',    false),
+  ('00000000-0000-4000-8000-000000000022', '+233200000022', 'Kwesi Test-Customer',  false),
+  ('00000000-0000-4000-8000-000000000023', '+233200000023', 'Efua Test-Customer',   false),
+  ('00000000-0000-4000-8000-000000000031', '+233200000031', 'Yaw Test-Partner',     false),
+  ('00000000-0000-4000-8000-000000000032', '+233200000032', 'Adjoa Test-Partner',   false),
+  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false),
+  ('00000000-0000-4000-8000-000000000034', '+233200000034', 'Esi Test-Partner',     false),
+  ('00000000-0000-4000-8000-000000000035', '+233200000035', 'Kojo Test-Applicant',  false),
+  ('00000000-0000-4000-8000-000000000024', '+233200000024', 'Abena Test-Customer',  false)
 on conflict (id) do update
-   set full_name         = excluded.full_name,
-       is_admin          = excluded.is_admin,
-       student_id_number = excluded.student_id_number;
+   set full_name = excluded.full_name,
+       is_admin  = excluded.is_admin;
+
+-- ---------------------------------------------------------------------------
+-- Customer profiles — the CUSTOMER capability
+-- ---------------------------------------------------------------------------
+-- WHO IS DELIBERATELY ABSENT FROM THIS LIST IS THE POINT.
+--
+-- The administrator (…0001) and the two vendor staff (…0011, …0012) get NO
+-- customer profile. They hold their own capabilities and nothing else, so the
+-- seed itself demonstrates that admin does not imply customer and that a
+-- vendor account is not a shopper. tests/account-model.test.js leans on exactly
+-- that.
+--
+-- Every student actor gets one, including the two Partner applicants: a Partner
+-- application is an upgrade to an existing Customer, and the foreign key
+-- partner_requires_customer would refuse the partner_profiles rows below
+-- without these.
+insert into public.customer_profiles (
+  user_id, student_id_number, class_year, student_id_image_path
+) values
+  ('00000000-0000-4000-8000-000000000021', 'TEST-STU-0021', 'Class of 2028', 'partner-docs/dev/0021/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000022', 'TEST-STU-0022', 'Class of 2028', 'partner-docs/dev/0022/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000023', 'TEST-STU-0023', 'Class of 2029', 'partner-docs/dev/0023/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000024', 'TEST-STU-0024', 'Class of 2029', 'partner-docs/dev/0024/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000031', 'TEST-STU-0031', 'Class of 2027', 'partner-docs/dev/0031/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000032', 'TEST-STU-0032', 'Class of 2027', 'partner-docs/dev/0032/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000033', 'TEST-STU-0033', 'Class of 2028', 'partner-docs/dev/0033/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000034', 'TEST-STU-0034', 'Class of 2026', 'partner-docs/dev/0034/student-id.jpg'),
+  ('00000000-0000-4000-8000-000000000035', 'TEST-STU-0035', 'Class of 2029', 'partner-docs/dev/0035/student-id.jpg')
+on conflict (user_id) do update
+   set student_id_number     = excluded.student_id_number,
+       class_year            = excluded.class_year,
+       student_id_image_path = excluded.student_id_image_path;
 
 -- ---------------------------------------------------------------------------
 -- Partner profiles
 -- ---------------------------------------------------------------------------
 -- Two approved and available; one still awaiting manual review, so the admin
 -- approval screen has something real to act on.
+-- The student ID photograph is NOT here: it belongs to the Customer profile
+-- above. A Partner application adds exactly one document — the live face.
 insert into public.partner_profiles (
-  user_id, status, is_available, student_id_image_path, face_image_path,
-  reviewed_at, reviewed_by
+  user_id, status, is_available, face_image_path, reviewed_at, reviewed_by
 ) values
   ('00000000-0000-4000-8000-000000000031', 'APPROVED', true,
-   'partner-docs/dev/0031/student-id.jpg', 'partner-docs/dev/0031/face.jpg',
-   now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0031/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000032', 'APPROVED', true,
-   'partner-docs/dev/0032/student-id.jpg', 'partner-docs/dev/0032/face.jpg',
-   now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0032/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000033', 'PENDING_REVIEW', false,
-   'partner-docs/dev/0033/student-id.jpg', 'partner-docs/dev/0033/face.jpg',
-   null, null),
+   'partner-docs/dev/0033/face.jpg', null, null),
   ('00000000-0000-4000-8000-000000000034', 'APPROVED', true,
-   'partner-docs/dev/0034/student-id.jpg', 'partner-docs/dev/0034/face.jpg',
-   now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0034/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000035', 'PENDING_REVIEW', false,
-   'partner-docs/dev/0035/student-id.jpg', 'partner-docs/dev/0035/face.jpg',
-   null, null);
+   'partner-docs/dev/0035/face.jpg', null, null);
 
 -- ---------------------------------------------------------------------------
 -- Locations — Academic City campus tree
@@ -221,9 +248,11 @@ update public.pricing_config
 -- are development-only: they exist so a local walkthrough does not start behind
 -- a consent wall. New sign-ups still get the real prompt.
 
+-- Customer terms go to accounts that hold the CUSTOMER capability, not to every
+-- account. A vendor stall is not asked to agree to terms about ordering lunch.
 insert into public.terms_acceptances (user_id, terms_id, audience, version)
-select u.id, t.id, t.audience, t.version
-  from public.users u
+select c.user_id, t.id, t.audience, t.version
+  from public.customer_profiles c
   cross join public.terms_documents t
  where t.audience = 'CUSTOMER'
 on conflict do nothing;

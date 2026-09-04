@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { requireAdmin } from '@/lib/auth/session';
 import { signOut } from '@/app/(auth)/login/actions';
+import AreaSwitcher from '@/app/area-switcher';
 
 export const metadata = { title: 'Admin · Campus Dash' };
 
@@ -38,7 +39,13 @@ export default async function AdminLayout({ children }) {
               </Link>
             ))}
           </nav>
-          <form action={signOut} className="ml-auto">
+          <div className="ml-auto flex items-center gap-6">
+            {/* Admin is a capability, not an account type. If this account also
+                orders, staffs a stall or carries deliveries, those areas are
+                one click away rather than lost behind the landing precedence. */}
+            <AreaSwitcher current="/admin" />
+          </div>
+          <form action={signOut}>
             <button type="submit" className="text-muted text-sm hover:text-red-700">
               Sign out ({me.full_name ?? me.phone})
             </button>

@@ -104,29 +104,83 @@ removed, delivery returns to SEARCHING, the pickup code rotates and the old one
 dies immediately. Payment and vendor preparation are untouched. The vendor is
 never asked to recreate an order.
 
-## Identity and roles
+## Identity and capability
 
-One account per person. Partner capability is a **role on the same account**, not
-a second login — a user can be Customer and Partner and switch modes in the UI.
+**IDENTITY IS NOT CAPABILITY.** One person has one authenticated identity, and
+capabilities sit on top of it. They are additive and independently granted:
+holding one never confers another, and never takes another away.
 
-- Customer: phone OTP only. No ID upload, no selfie, no manual approval.
-  Supabase Auth owns the code; our Send SMS Hook delivers it through the same
-  `SmsProvider` seam as every other notification. See `docs/AUTH.md`.
-- Partner: phone OTP **plus** student ID photo **plus** a live face photograph
-  captured with the device camera. No gallery or file upload — the point is to
-  let an admin compare the face to the ID. Approval is manual in V1.
-- Vendor: hand-recruited; registration is closed. Admin creates and approves.
+```
+AUTH IDENTITY  ── auth.users.id, and nothing else is ever the key
+      │
+      ├── CUSTOMER   a customer_profiles row, from student onboarding
+      ├── PARTNER    an APPROVED partner_profiles row — REQUIRES Customer
+      ├── VENDOR     a vendor_users link to a business
+      └── ADMIN      users.is_admin
+```
+
+There is no account TYPE anywhere in the schema. No enum, no column and no table
+expresses `CUSTOMER | PARTNER | VENDOR | ADMIN` as one exclusive choice, and
+`Admin + Customer + Partner + Vendor` is a valid account.
+
+The rules, and where each is enforced:
+
+| Rule                                    | Enforced by                                    |
+| --------------------------------------- | ---------------------------------------------- |
+| **PARTNER ⇒ CUSTOMER**, always          | `partner_requires_customer`, a foreign key     |
+| **CUSTOMER ⇏ PARTNER** without approval | `is_approved_partner()`                        |
+| **ADMIN ⇏ CUSTOMER / PARTNER / VENDOR** | by construction — none creates the other's row |
+| **VENDOR ⇏ CUSTOMER / PARTNER**         | by construction, likewise                      |
+| **one email → one identity**            | `users_email_unique` on `lower(email)`         |
+
+- Identity: a verified phone number. It proves **who** somebody is and grants
+  nothing on its own. Supabase Auth owns the code; our Send SMS Hook delivers it
+  through the same `SmsProvider` seam as every other notification. Anyone may
+  browse the marketplace with no account at all.
+- Customer: student onboarding — full name, student ID number, class year, a
+  unique email, a photograph of the student ID, and terms acceptance, all in one
+  transaction. No admin review: completing it **is** the grant. Nobody can place
+  an order without it, including administrators and vendor accounts.
+- Partner: an **upgrade to an existing Customer**, on the same `auth.users.id`.
+  It adds exactly one thing — a live face photograph captured with the device
+  camera, so an admin can compare the face to the student ID already on file.
+  There is no second login, no second email and no second identity. Approval is
+  manual in V1, and an approved Partner keeps full Customer functionality.
+- Vendor: a business. Hand-recruited; registration is closed. Admin creates and
+  approves, and `vendor_users` says who may operate it. A vendor account is not
+  a shopper: staffing a stall grants no ordering and no delivering.
 - Admin: email and password, at `/login/admin`. Not phone OTP — operational
   access must not depend on an SMS arriving, least of all when messaging is the
   thing that is broken. `is_admin` is a database column no client statement can
   reach, and every `admin_*` function re-checks it in its own body. The first
-  administrator is created out-of-band with `npm run admin:create`.
+  administrator is created out-of-band with `npm run admin:create`. Admin is an
+  elevated **authorisation** capability and is deliberately kept separate from
+  the ordinary ones: it does not make an account a customer, and it does not
+  stop one being a customer either.
+
+Sign-in derives ONE destination from precedence (`lib/auth/landing.js`), and
+every area carries an `AreaSwitcher` listing the others the account holds — so
+landing on `/admin` never reads as having lost `/order`.
+
+### Adding OAuth later
+
+Not built, and not needed for any of the above. What makes it clean when it
+comes: the stable key is already `auth.users.id`, no capability is keyed on
+email, phone or student ID, and email is already unique — so a Google identity
+resolving to an existing auth user inherits every capability with no migration
+and no risk of merging two people who were never the same.
 
 ## Privacy
 
-Partner verification documents live in a **private** Supabase Storage bucket,
-reachable only through short-lived signed URLs generated server-side for an
-admin. They are deleted after the approval retention period.
+Verification documents live in a **private** Supabase Storage bucket, reachable
+only through short-lived signed URLs generated server-side for an admin.
+
+The Partner's live face photograph is deleted after the approval retention
+period. The customer's student ID photograph is **not** on that clock: it is the
+standing evidence for the Customer capability, so it is retained while the
+account holds it and is deleted with the account. Account deletion does not
+exist yet, which makes this an open policy item rather than a finished one —
+`docs/PILOT-QUESTIONS.md` question 18b.
 
 Phone numbers are exposed only during an active delivery — never before Partner
 assignment, never in public lists, never in completed order history.

@@ -40,13 +40,15 @@ async function run(fn, successMessage, paths = ['/partner']) {
   return outcome(result, successMessage);
 }
 
+/**
+ * One field, because the application adds one thing. Everything else the
+ * reviewer needs is already on the account, and partner_apply() reads it from
+ * there — this action could not pass a different student ID even if the form
+ * sent one.
+ */
 export async function applyAction(_prev, formData) {
   try {
     await partner.apply({
-      studentIdNumber: String(formData.get('student_id_number') ?? '').trim(),
-      classYear: String(formData.get('class_year') ?? '').trim(),
-      email: String(formData.get('email') ?? '').trim(),
-      studentIdImagePath: String(formData.get('student_id_image_path') ?? '').trim(),
       faceImagePath: String(formData.get('face_image_path') ?? '').trim(),
     });
   } catch (error) {

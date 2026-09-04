@@ -129,11 +129,12 @@ export async function resetTransactionalState() {
     await c.query('truncate table public.admin_actions restart identity cascade');
     // Restore the seeded Partner states. Tests suspend and approve Partners, and
     // without this those changes leak into later tests as order-dependent flakes.
+    // The student ID photograph is no longer here — it is the Customer's
+    // document, restored with customer_profiles below.
     await c.query(`
       update public.partner_profiles
          set status = 'APPROVED', is_available = true,
              reviewed_at = now(), reviewed_by = '00000000-0000-4000-8000-000000000001',
-             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg',
              face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg',
              review_notes = null, documents_purge_after = null
        where user_id in (
@@ -147,7 +148,6 @@ export async function resetTransactionalState() {
          set status = 'PENDING_REVIEW', is_available = false,
              reviewed_at = null, reviewed_by = null, documents_purge_after = null,
              review_notes = null,
-             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg',
              face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg'
        where user_id in (
          '00000000-0000-4000-8000-000000000033',
@@ -155,6 +155,8 @@ export async function resetTransactionalState() {
        )
     `);
     // Applications created by tests, and any profile for a non-seeded user.
+    // MUST run before the customer_profiles cleanup below: PARTNER ⇒ CUSTOMER is
+    // a foreign key with ON DELETE RESTRICT, so the Partner row goes first.
     await c.query(`
       delete from public.partner_profiles
        where user_id not in (
@@ -165,26 +167,40 @@ export async function resetTransactionalState() {
          '00000000-0000-4000-8000-000000000035'
        )
     `);
-    // Student ID numbers are unique across approved Partners; tests set them.
+    // Customer capabilities granted by tests (onboarding, multi-capability
+    // fixtures) are removed, and the seeded ones restored to their declared
+    // facts. Student ID numbers are unique across customer_profiles, so a
+    // leftover row from one file breaks onboarding in the next.
     await c.query(`
-      update public.users u set student_id_number = v.sid
-        from (values
-          ('00000000-0000-4000-8000-000000000031','TEST-STU-0031'),
-          ('00000000-0000-4000-8000-000000000032','TEST-STU-0032'),
-          ('00000000-0000-4000-8000-000000000033','TEST-STU-0033'),
-          ('00000000-0000-4000-8000-000000000034','TEST-STU-0034'),
-          ('00000000-0000-4000-8000-000000000035','TEST-STU-0035')
-        ) as v(id, sid)
-       where u.id = v.id::uuid
-    `);
-    await c.query(`
-      update public.users set student_id_number = null
-       where id in (
+      delete from public.customer_profiles
+       where user_id not in (
          '00000000-0000-4000-8000-000000000021',
          '00000000-0000-4000-8000-000000000022',
          '00000000-0000-4000-8000-000000000023',
-         '00000000-0000-4000-8000-000000000024'
+         '00000000-0000-4000-8000-000000000024',
+         '00000000-0000-4000-8000-000000000031',
+         '00000000-0000-4000-8000-000000000032',
+         '00000000-0000-4000-8000-000000000033',
+         '00000000-0000-4000-8000-000000000034',
+         '00000000-0000-4000-8000-000000000035'
        )
+    `);
+    await c.query(`
+      insert into public.customer_profiles (user_id, student_id_number, class_year, student_id_image_path)
+      values
+        ('00000000-0000-4000-8000-000000000021','TEST-STU-0021','Class of 2028','partner-docs/dev/0021/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000022','TEST-STU-0022','Class of 2028','partner-docs/dev/0022/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000023','TEST-STU-0023','Class of 2029','partner-docs/dev/0023/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000024','TEST-STU-0024','Class of 2029','partner-docs/dev/0024/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000031','TEST-STU-0031','Class of 2027','partner-docs/dev/0031/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000032','TEST-STU-0032','Class of 2027','partner-docs/dev/0032/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000033','TEST-STU-0033','Class of 2028','partner-docs/dev/0033/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000034','TEST-STU-0034','Class of 2026','partner-docs/dev/0034/student-id.jpg'),
+        ('00000000-0000-4000-8000-000000000035','TEST-STU-0035','Class of 2029','partner-docs/dev/0035/student-id.jpg')
+      on conflict (user_id) do update
+         set student_id_number     = excluded.student_id_number,
+             class_year            = excluded.class_year,
+             student_id_image_path = excluded.student_id_image_path
     `);
     await c.query(`
       update public.pricing_config

@@ -46,24 +46,58 @@ export default async function AccountPage() {
       </section>
 
       <section className="mt-8">
-        <h2 className="text-sm font-semibold tracking-wide uppercase">Modes</h2>
+        <h2 className="text-sm font-semibold tracking-wide uppercase">What this account can do</h2>
         <p className="text-muted mt-1 text-sm">
-          One account, one login. Partner is a capability on this same account.
+          One identity, one login. These are capabilities on it, and they are additive — holding one
+          never takes another away.
         </p>
 
         <div className="mt-4 space-y-2">
           <ModeRow
-            title="Ordering"
+            title="Customer"
             enabled={me.can_order}
-            detail={me.can_order ? 'Phone verified — you can place orders.' : 'Unavailable.'}
+            detail={customerDetail(me)}
+            action={me.can_order ? { href: '/order', label: 'Order' } : null}
           />
           <ModeRow
             title="Partner"
             enabled={me.is_partner}
             detail={partnerDetail(me.partner_status)}
+            action={
+              me.is_partner
+                ? { href: '/partner', label: 'Deliveries' }
+                : me.can_order
+                  ? { href: '/partner/apply', label: 'Become a Partner' }
+                  : null
+            }
           />
-          {me.is_admin ? <ModeRow title="Admin" enabled detail="Full operational access." /> : null}
+          <ModeRow
+            title="Vendor"
+            enabled={Boolean(me.vendor_ids?.length)}
+            detail={
+              me.vendor_ids?.length
+                ? `Staff at ${me.vendor_ids.length} stall${me.vendor_ids.length === 1 ? '' : 's'}.`
+                : 'Not linked to a stall. An administrator adds vendor staff.'
+            }
+            action={me.vendor_ids?.length ? { href: '/vendor', label: 'Order board' } : null}
+          />
+          <ModeRow
+            title="Admin"
+            enabled={me.is_admin}
+            detail={
+              me.is_admin
+                ? 'Full operational access. It does not replace your other capabilities.'
+                : 'No administrative access.'
+            }
+            action={me.is_admin ? { href: '/admin', label: 'Admin' } : null}
+          />
         </div>
+
+        {me.can_order ? (
+          <p className="text-muted mt-3 text-xs">
+            Student ID {me.student_id_number} · {me.class_year}
+          </p>
+        ) : null}
       </section>
 
       {me.is_partner ? (
@@ -107,6 +141,11 @@ export default async function AccountPage() {
   );
 }
 
+function customerDetail(me) {
+  if (me.can_order) return 'Student details on file — you can place orders.';
+  return 'Add your student details to order. Same account, nothing new to create.';
+}
+
 function partnerDetail(status) {
   switch (status) {
     case 'APPROVED':
@@ -118,21 +157,29 @@ function partnerDetail(status) {
     case 'SUSPENDED':
       return 'Partner access is suspended.';
     default:
-      return 'Not applied. You can apply to deliver around campus.';
+      return 'Not applied. You can add delivering to this account.';
   }
 }
 
-function ModeRow({ title, enabled, detail }) {
+function ModeRow({ title, enabled, detail, action = null }) {
   return (
     <div className="flex items-start gap-3 rounded-lg bg-white px-4 py-3 ring-1 ring-black/5">
       <span
         className={`mt-0.5 size-2.5 shrink-0 rounded-full ${enabled ? 'bg-brand-700' : 'bg-black/20'}`}
         aria-hidden
       />
-      <div>
+      <div className="min-w-0">
         <p className="font-medium">{title}</p>
         <p className="text-muted text-sm">{detail}</p>
       </div>
+      {action ? (
+        <Link
+          href={action.href}
+          className="text-brand-700 mt-0.5 ml-auto shrink-0 text-sm font-medium"
+        >
+          {action.label} →
+        </Link>
+      ) : null}
     </div>
   );
 }

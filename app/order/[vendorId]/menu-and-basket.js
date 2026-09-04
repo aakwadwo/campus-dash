@@ -11,7 +11,7 @@ import { formatPesewas } from '@/lib/util/money';
  * shown comes back from the server, priced by the same function that will
  * charge the customer.
  */
-export default function MenuAndBasket({ vendor, menu, locations }) {
+export default function MenuAndBasket({ vendor, menu, locations, gate = null }) {
   const [quantities, setQuantities] = useState({});
   const [step, setStep] = useState('menu');
   const [fulfilment, setFulfilment] = useState('DELIVERY');
@@ -27,7 +27,10 @@ export default function MenuAndBasket({ vendor, menu, locations }) {
     .map(([menuItemId, quantity]) => ({ menuItemId, quantity }));
 
   const itemCount = items.reduce((total, item) => total + item.quantity, 0);
-  const canOrder = vendor.is_accepting_orders && itemCount > 0;
+  // `gate` is set when the viewer lacks the CUSTOMER capability — signed out,
+  // or signed in without student onboarding. They can still browse and build a
+  // basket; the checkout step becomes a link to whatever they are missing.
+  const canOrder = vendor.is_accepting_orders && itemCount > 0 && !gate;
 
   // Re-price whenever anything that affects the total changes.
   useEffect(() => {
@@ -59,7 +62,7 @@ export default function MenuAndBasket({ vendor, menu, locations }) {
   const setQuantity = (id, next) =>
     setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
 
-  if (step === 'review') {
+  if (step === 'review' && !gate) {
     return (
       <Review
         vendor={vendor}
@@ -123,14 +126,23 @@ export default function MenuAndBasket({ vendor, menu, locations }) {
             <span className="text-sm">
               {itemCount} item{itemCount === 1 ? '' : 's'}
             </span>
-            <button
-              type="button"
-              disabled={!canOrder}
-              onClick={() => setStep('review')}
-              className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold disabled:opacity-60"
-            >
-              Review order
-            </button>
+            {gate ? (
+              <a
+                href={gate.href}
+                className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold"
+              >
+                {gate.label}
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled={!canOrder}
+                onClick={() => setStep('review')}
+                className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold disabled:opacity-60"
+              >
+                Review order
+              </button>
+            )}
           </div>
         </div>
       ) : null}
