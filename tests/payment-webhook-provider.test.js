@@ -1,7 +1,7 @@
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { processPaymentWebhook } from '@/lib/payments/webhook';
+import { processPaymentWebhook, resetPaymentWebhookThrottle } from '@/lib/payments/webhook';
 import { resetPaymentProvider, getPaymentProvider } from '@/lib/payments';
 
 /**
@@ -34,6 +34,10 @@ describe('the payment webhook provider guard', () => {
     restore('PAYMENT_PROVIDER', ORIGINAL.provider);
     restore('NODE_ENV', ORIGINAL.nodeEnv);
     resetPaymentProvider();
+    // The unverified-request counters are module-level state, and every
+    // malformed body below counts against them. Without this the later tests
+    // in this file would inherit the earlier ones' spending.
+    resetPaymentWebhookThrottle();
   });
 
   function restore(name, value) {

@@ -23,6 +23,13 @@ export async function POST(request, { params }) {
   const rawBody = await request.text();
   const headers = Object.fromEntries(request.headers.entries());
 
-  const { status, body } = await processPaymentWebhook({ provider, rawBody, headers });
-  return NextResponse.json(body, { status });
+  const {
+    status,
+    body,
+    headers: responseHeaders,
+  } = await processPaymentWebhook({ provider, rawBody, headers });
+
+  // Retry-After rides along on a throttled response, so a caller that is simply
+  // misconfigured rather than hostile is told when to come back.
+  return NextResponse.json(body, { status, headers: responseHeaders });
 }
