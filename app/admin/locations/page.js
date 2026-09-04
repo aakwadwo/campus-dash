@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
-import { Panel, Badge, Empty } from '../ui';
+import { Panel, Badge, Empty, Unavailable } from '../ui';
 import LocationForms from './location-forms';
 
 export const dynamic = 'force-dynamic';
@@ -29,8 +29,11 @@ function buildTree(rows) {
 
 export default async function LocationsPage() {
   const supabase = await createClient();
-  const { data: rows } = await supabase.from('locations').select('*');
-  const tree = buildTree(rows ?? []);
+  // The error was previously discarded and `rows ?? []` turned a failed read
+  // into an empty campus — a tree with nothing in it, and an "add a location"
+  // form inviting someone to rebuild it. Distinguish the two.
+  const { data: rows, error } = await supabase.from('locations').select('*');
+  const tree = error || !rows ? null : buildTree(rows);
 
   return (
     <>
@@ -44,7 +47,12 @@ export default async function LocationsPage() {
         title="The tree"
         description="Only rows marked deliverable can be chosen as a destination."
       >
-        {tree.length ? (
+        {tree === null ? (
+          <Unavailable>
+            The location tree could not be loaded. This is not an empty campus — do not add
+            locations from this screen until it loads.
+          </Unavailable>
+        ) : tree.length ? (
           <table className="w-full text-sm">
             <thead className="text-muted text-left text-xs uppercase">
               <tr>
@@ -85,7 +93,10 @@ export default async function LocationsPage() {
         )}
       </Panel>
 
-      <LocationForms locations={tree} />
+      {/* No tree, no forms. Every control in LocationForms names a location by
+          id, and an editor built from a list we failed to read is a control
+          that can only mislead. */}
+      {tree === null ? null : <LocationForms locations={tree} />}
     </>
   );
 }

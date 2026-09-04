@@ -8,6 +8,7 @@ import {
   deleteMenuItemAction,
 } from '../../actions';
 import { Field, ReasonField, Button, ActionResult } from '../../ui';
+import { ConfirmButton } from '../../confirm';
 
 export default function MenuForms({ vendorId, items }) {
   const [createState, createAction, creating] = useActionState(createMenuItemAction, {});
@@ -121,6 +122,12 @@ export default function MenuForms({ vendorId, items }) {
                   </Button>
                 </form>
 
+                {/* Deletion is confirmed; disabling is not. Disabling is
+                    reversible in one click and is the thing an operator
+                    normally wants — "we have run out" is not "this dish no
+                    longer exists". The reason is still required either way:
+                    the confirmation is in addition to the audit trail, never
+                    instead of it. */}
                 <form action={deleteAction} className="flex items-end gap-2">
                   <input type="hidden" name="menu_item_id" value={selected.id} />
                   <Field
@@ -130,9 +137,14 @@ export default function MenuForms({ vendorId, items }) {
                     minLength={3}
                     placeholder="Added by mistake"
                   />
-                  <Button variant="danger" disabled={deleting}>
+                  <ConfirmButton
+                    pending={deleting}
+                    pendingLabel="Deleting…"
+                    confirmLabel="Yes, delete it"
+                    question={`Delete “${selected.name}” from the menu? If you only need it off the menu for now, disable it instead — that is reversible.`}
+                  >
                     Delete item
-                  </Button>
+                  </ConfirmButton>
                 </form>
               </div>
               <ActionResult state={availState} />

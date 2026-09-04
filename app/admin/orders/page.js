@@ -1,29 +1,102 @@
 import Link from 'next/link';
-import { orderBoard, orderBoardSummary } from '@/lib/admin';
-import { formatPesewas } from '@/lib/util/money';
-import { Panel, Badge, Empty } from '../ui';
+import { orderBoard, orderBoardSummary, vendors as listVendors } from '@/lib/admin';
+import {
+  Panel,
+  Badge,
+  Empty,
+  Unavailable,
+  Table,
+  Row,
+  Cell,
+  Cedis,
+  FilterBar,
+  FilterChip,
+  ATTENTION,
+  ORDER_BOARD_ATTENTION,
+  SCAN_STATUS,
+  age,
+} from '../ui';
 
 export const dynamic = 'force-dynamic';
 
-const ATTENTION = {
-  DISPUTED: { label: 'Disputed', tone: 'bad' },
-  CUSTOMER_ABSENT: { label: 'Customer absent', tone: 'bad' },
-  NO_PARTNER: { label: 'No Partner', tone: 'bad' },
-  REFUND_PENDING: { label: 'Refund pending', tone: 'warn' },
-  PAYMENT_FAILED: { label: 'Payment failed', tone: 'bad' },
-  AWAITING_VENDOR: { label: 'Awaiting vendor', tone: 'warn' },
-  AWAITING_PAYMENT: { label: 'Awaiting payment', tone: 'warn' },
-  SEARCHING_PARTNER: { label: 'Searching Partner', tone: 'neutral' },
-  IN_PROGRESS: { label: 'In progress', tone: 'neutral' },
-  DONE: { label: 'Done', tone: 'good' },
-  CLOSED: { label: 'Closed', tone: 'neutral' },
-};
+/**
+ * Orders — food and scan, in one board.
+ *
+ * There is no separate scan-orders screen and there should not be: a scan
+ * errand is an `orders` row with a different order_type, and giving it its own
+ * page would let the two drift until an operator has to remember which screen
+ * shows the truth. The nav's "Scan orders" entry is this page with ?type=SCAN.
+ *
+ * FILTERS ARE URL STATE. Every filter is a query parameter applied in the
+ * database, so a filtered board is a link an operator can bookmark, reload and
+ * hand to somebody else — and the browser never receives rows it will hide.
+ */
+
+const ORDER_STATUSES = [
+  'SUBMITTED',
+  'ACCEPTED',
+  'PREPARING',
+  'READY',
+  'COMPLETED',
+  'CANCELLED',
+  'REJECTED',
+  'EXPIRED',
+];
+const PAYMENT_STATUSES = ['UNPAID', 'PENDING', 'PAID', 'FAILED', 'REFUND_PENDING', 'REFUNDED'];
+
+/** Only keeps a value the database will recognise. Anything else becomes null. */
+function pick(value, allowed) {
+  const v = typeof value === 'string' ? value.trim().toUpperCase() : null;
+  return v && allowed.includes(v) ? v : null;
+}
 
 export default async function AdminOrdersPage({ searchParams }) {
-  const params = await searchParams;
-  const filter = typeof params?.attention === 'string' ? params.attention : null;
+  const params = (await searchParams) ?? {};
 
-  const [orders, summary] = await Promise.all([orderBoard(filter, 200), orderBoardSummary()]);
+  const filters = {
+    // ORDER_BOARD_ATTENTION, not ATTENTION. The wider map exists so the
+    // exceptions queue can label FAILED_PAYOUT and RECONCILIATION rows, and
+    // neither is a state an order can be in: admin_order_board(p_filter) would
+    // match no row and render an empty table that looks exactly like "no orders
+    // need this" — a filter that appears to have worked and silently did not.
+    attention: pick(params.attention, Object.keys(ORDER_BOARD_ATTENTION)),
+    orderType: pick(params.type, ['FOOD', 'SCAN']),
+    orderStatus: pick(params.status, ORDER_STATUSES),
+    paymentStatus: pick(params.payment, PAYMENT_STATUSES),
+    partnerState: pick(params.partner, ['ASSIGNED', 'UNASSIGNED']),
+    vendorId: typeof params.vendor === 'string' && params.vendor ? params.vendor : null,
+    since: typeof params.since === 'string' && params.since ? params.since : null,
+    search: typeof params.q === 'string' && params.q.trim() ? params.q.trim() : null,
+    limit: 200,
+  };
+
+  const [orders, summary, vendorList] = await Promise.all([
+    orderBoard(filters).catch(() => null),
+    orderBoardSummary().catch(() => []),
+    listVendors().catch(() => []),
+  ]);
+
+  // Rebuilds the current URL with one parameter changed, so chips compose
+  // instead of resetting each other.
+  const url = (changes) => {
+    const next = new URLSearchParams();
+    const current = {
+      attention: filters.attention,
+      type: filters.orderType,
+      status: filters.orderStatus,
+      payment: filters.paymentStatus,
+      partner: filters.partnerState,
+      vendor: filters.vendorId,
+      since: filters.since,
+      q: filters.search,
+      ...changes,
+    };
+    for (const [k, v] of Object.entries(current)) if (v) next.set(k, v);
+    const qs = next.toString();
+    return qs ? `/admin/orders?${qs}` : '/admin/orders';
+  };
+
+  const anyFilter = Object.entries(filters).some(([k, v]) => k !== 'limit' && v);
 
   return (
     <>
@@ -33,89 +106,216 @@ export default async function AdminOrdersPage({ searchParams }) {
         past.
       </p>
 
-      <div className="mb-6 flex flex-wrap gap-2">
-        <FilterChip active={!filter} href="/admin/orders" label="Everything" />
+      {/* What needs attention — the counts are the whole board, unfiltered. */}
+      <FilterBar>
+        <FilterChip active={!filters.attention} href={url({ attention: null })} label="Any state" />
         {(summary ?? []).map((row) => (
           <FilterChip
             key={row.attention}
-            active={filter === row.attention}
-            href={`/admin/orders?attention=${row.attention}`}
+            active={filters.attention === row.attention}
+            href={url({ attention: row.attention })}
             label={`${ATTENTION[row.attention]?.label ?? row.attention} (${row.count})`}
           />
         ))}
-      </div>
+      </FilterBar>
 
-      <Panel title={filter ? (ATTENTION[filter]?.label ?? filter) : 'All orders'}>
-        {orders?.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[46rem] text-sm">
-              <thead className="text-muted text-left text-xs uppercase">
-                <tr>
-                  <th className="pb-2 font-medium">Order</th>
-                  <th className="pb-2 font-medium">Needs</th>
-                  <th className="pb-2 font-medium">Vendor</th>
-                  <th className="pb-2 font-medium">Customer</th>
-                  <th className="pb-2 font-medium">Partner</th>
-                  <th className="pb-2 font-medium">States</th>
-                  <th className="pb-2 font-medium">Total</th>
-                  <th className="pb-2 font-medium">Age</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((order) => (
-                  <tr key={order.order_id} className="border-t border-black/5">
-                    <td className="py-2">
-                      <Link
-                        href={`/admin/orders/${order.order_id}`}
-                        className="text-brand-700 font-mono underline underline-offset-4"
-                      >
-                        {order.order_number}
-                      </Link>
-                    </td>
-                    <td className="py-2">
-                      <Badge tone={ATTENTION[order.attention]?.tone ?? 'neutral'}>
-                        {ATTENTION[order.attention]?.label ?? order.attention}
-                      </Badge>
-                    </td>
-                    <td className="py-2">{order.vendor_name}</td>
-                    <td className="py-2">{order.customer_name ?? '—'}</td>
-                    <td className="py-2">{order.partner_name ?? '—'}</td>
-                    <td className="text-muted py-2 font-mono text-xs">
-                      {order.order_status}/{order.payment_status}/{order.delivery_status}
-                    </td>
-                    <td className="py-2 tabular-nums">{formatPesewas(order.total_pesewas)}</td>
-                    <td className="text-muted py-2 tabular-nums">{age(order.age_seconds)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <FilterBar>
+        <span className="text-muted text-xs font-semibold uppercase">Type</span>
+        <FilterChip active={!filters.orderType} href={url({ type: null })} label="All" />
+        <FilterChip
+          active={filters.orderType === 'FOOD'}
+          href={url({ type: 'FOOD' })}
+          label="Food"
+        />
+        <FilterChip
+          active={filters.orderType === 'SCAN'}
+          href={url({ type: 'SCAN' })}
+          label="Scan"
+        />
+
+        <span className="text-muted ml-4 text-xs font-semibold uppercase">Partner</span>
+        <FilterChip active={!filters.partnerState} href={url({ partner: null })} label="Any" />
+        <FilterChip
+          active={filters.partnerState === 'ASSIGNED'}
+          href={url({ partner: 'ASSIGNED' })}
+          label="Assigned"
+        />
+        <FilterChip
+          active={filters.partnerState === 'UNASSIGNED'}
+          href={url({ partner: 'UNASSIGNED' })}
+          label="Unassigned"
+        />
+      </FilterBar>
+
+      {/* Search and the long dropdowns are a GET form: no client state, and the
+          resulting URL is shareable. */}
+      <form method="get" action="/admin/orders" className="mb-6 flex flex-wrap items-end gap-3">
+        {filters.attention ? (
+          <input type="hidden" name="attention" value={filters.attention} />
+        ) : null}
+        {filters.orderType ? <input type="hidden" name="type" value={filters.orderType} /> : null}
+        {filters.partnerState ? (
+          <input type="hidden" name="partner" value={filters.partnerState} />
+        ) : null}
+
+        <label className="block">
+          <span className="text-muted text-xs font-semibold uppercase">Search</span>
+          <input
+            name="q"
+            defaultValue={filters.search ?? ''}
+            placeholder="Order number or customer"
+            className="mt-1 block w-56 rounded border border-black/15 px-3 py-1.5 text-sm"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-muted text-xs font-semibold uppercase">Vendor</span>
+          <select
+            name="vendor"
+            defaultValue={filters.vendorId ?? ''}
+            className="mt-1 block w-48 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+          >
+            <option value="">Any vendor</option>
+            {(vendorList ?? []).map((v) => (
+              <option key={v.vendor_id} value={v.vendor_id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-muted text-xs font-semibold uppercase">Order status</span>
+          <select
+            name="status"
+            defaultValue={filters.orderStatus ?? ''}
+            className="mt-1 block w-40 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+          >
+            <option value="">Any</option>
+            {ORDER_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-muted text-xs font-semibold uppercase">Payment</span>
+          <select
+            name="payment"
+            defaultValue={filters.paymentStatus ?? ''}
+            className="mt-1 block w-40 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+          >
+            <option value="">Any</option>
+            {PAYMENT_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-muted text-xs font-semibold uppercase">Since</span>
+          <input
+            type="date"
+            name="since"
+            defaultValue={filters.since ?? ''}
+            className="mt-1 block rounded border border-black/15 px-3 py-1.5 text-sm"
+          />
+        </label>
+
+        <button
+          type="submit"
+          className="bg-brand-500 text-ink rounded px-4 py-1.5 text-sm font-semibold"
+        >
+          Apply
+        </button>
+        {anyFilter ? (
+          <Link href="/admin/orders" className="text-muted py-1.5 text-sm underline">
+            Clear
+          </Link>
+        ) : null}
+      </form>
+
+      <Panel
+        title={filters.orderType === 'SCAN' ? 'Scan orders' : 'Orders'}
+        description={orders ? `${orders.length} shown` : undefined}
+      >
+        {orders === null ? (
+          <Unavailable>The order board could not be loaded.</Unavailable>
+        ) : orders.length === 0 ? (
+          <Empty>
+            {anyFilter ? 'No orders match these filters.' : 'No orders have been placed yet.'}
+          </Empty>
         ) : (
-          <Empty>Nothing here.</Empty>
+          <Table
+            head={[
+              'Order',
+              'Type',
+              'Needs',
+              'Vendor',
+              'Customer',
+              'Partner',
+              'States',
+              'Total',
+              'Age',
+            ]}
+            minWidth="58rem"
+          >
+            {orders.map((o) => (
+              <Row key={o.order_id}>
+                <Cell>
+                  <Link
+                    href={`/admin/orders/${o.order_id}`}
+                    className="text-brand-700 font-mono text-xs underline underline-offset-4"
+                  >
+                    {o.order_number}
+                  </Link>
+                </Cell>
+                <Cell>
+                  <Badge tone={o.order_type === 'SCAN' ? 'warn' : 'neutral'}>{o.order_type}</Badge>
+                </Cell>
+                <Cell>
+                  <Badge tone={ATTENTION[o.attention]?.tone ?? 'neutral'}>
+                    {ATTENTION[o.attention]?.label ?? o.attention}
+                  </Badge>
+                </Cell>
+                <Cell>{o.vendor_name}</Cell>
+                <Cell>{o.customer_name ?? '—'}</Cell>
+                <Cell>{o.partner_name ?? '—'}</Cell>
+                <Cell mono muted>
+                  {o.order_status}/{o.payment_status}/{o.delivery_status}
+                  {o.scan_status ? (
+                    <>
+                      {' '}
+                      <span className="text-amber-800">scan:{o.scan_status}</span>
+                    </>
+                  ) : null}
+                </Cell>
+                <Cell numeric>
+                  <Cedis pesewas={o.total_pesewas} />
+                </Cell>
+                <Cell muted numeric>
+                  {age(o.age_seconds)}
+                </Cell>
+              </Row>
+            ))}
+          </Table>
         )}
       </Panel>
+
+      {filters.orderType === 'SCAN' ? (
+        <p className="text-muted text-xs">
+          Scan lifecycle: UPLOADED → RELEASED (Partner assigned) → REDEEMED or REFUSED. Redemption
+          is a separate act from delivery completion — see{' '}
+          {Object.entries(SCAN_STATUS)
+            .map(([k]) => k)
+            .join(' · ')}
+          .
+        </p>
+      ) : null}
     </>
   );
-}
-
-function FilterChip({ active, href, label }) {
-  return (
-    <Link
-      href={href}
-      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-        active ? 'bg-brand-500 text-ink' : 'bg-white ring-1 ring-black/10'
-      }`}
-    >
-      {label}
-    </Link>
-  );
-}
-
-function age(seconds) {
-  if (seconds == null) return '—';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
 }

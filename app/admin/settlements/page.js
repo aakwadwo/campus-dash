@@ -5,22 +5,33 @@ import {
   payoutDestinations,
 } from '@/lib/admin';
 import { formatPesewas } from '@/lib/util/money';
-import { Panel, Badge, Empty } from '../ui';
+import { Panel, Badge, Empty, Unavailable } from '../ui';
 import SettlementControls from './settlement-controls';
 import PayoutDestinations from './payout-destinations';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * NULL MEANS THE QUESTION FAILED, [] MEANS THE ANSWER IS NONE.
+ *
+ * Every fetch on this page is caught to null, and every panel below renders
+ * <Unavailable> for null and <Empty> for an empty list. On a settlement screen
+ * the difference is money: "nothing owed to Partners" and "we could not find
+ * out what is owed to Partners" look identical as an empty table, and an
+ * operator who reads the second as the first concludes the week is settled.
+ */
 export default async function AdminSettlementsPage() {
   const [vendorPending, partnerPending, runs, destinations] = await Promise.all([
-    pendingSettlement('VENDOR'),
-    pendingSettlement('PARTNER'),
-    settlementRuns(20),
-    payoutDestinations(),
+    pendingSettlement('VENDOR').catch(() => null),
+    pendingSettlement('PARTNER').catch(() => null),
+    settlementRuns(20).catch(() => null),
+    payoutDestinations().catch(() => null),
   ]);
 
   const latestRun = runs?.[0];
-  const latestPayouts = latestRun ? await settlementPayouts(latestRun.run_id) : [];
+  const latestPayouts = latestRun
+    ? await settlementPayouts(latestRun.run_id).catch(() => null)
+    : [];
 
   return (
     <>
@@ -46,7 +57,9 @@ export default async function AdminSettlementsPage() {
       </Panel>
 
       <Panel title="Settlement runs">
-        {runs?.length ? (
+        {runs === null ? (
+          <Unavailable>The settlement runs could not be loaded.</Unavailable>
+        ) : runs.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[40rem] text-sm">
               <thead className="text-muted text-left text-xs uppercase">
@@ -108,7 +121,9 @@ export default async function AdminSettlementsPage() {
           title="Most recent run"
           description={`${latestRun.payee_type} · ${new Date(latestRun.created_at).toLocaleString()}`}
         >
-          {latestPayouts?.length ? (
+          {latestPayouts === null ? (
+            <Unavailable>This run&apos;s payouts could not be loaded.</Unavailable>
+          ) : latestPayouts.length ? (
             <table className="w-full text-sm">
               <thead className="text-muted text-left text-xs uppercase">
                 <tr>
@@ -156,7 +171,8 @@ export default async function AdminSettlementsPage() {
 }
 
 function PendingTable({ rows }) {
-  if (!rows?.length) return <Empty>Nothing owed.</Empty>;
+  if (rows === null) return <Unavailable>What is owed could not be read.</Unavailable>;
+  if (!rows.length) return <Empty>Nothing owed.</Empty>;
   return (
     <table className="w-full text-sm">
       <thead className="text-muted text-left text-xs uppercase">

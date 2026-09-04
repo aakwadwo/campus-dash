@@ -6,6 +6,7 @@ import { actionFailure } from '@/lib/errors';
 
 import { revalidatePath } from 'next/cache';
 import * as admin from '@/lib/admin';
+import { scanImageUrl } from '@/lib/scan';
 import { purgePartnerDocuments } from '@/lib/admin/documents';
 import { runSettlement, retryFailedPayouts, periodFor } from '@/lib/settlement';
 import { pesewasFromCedisInput, formatPesewas } from '@/lib/util/money';
@@ -307,18 +308,61 @@ export async function reviewPartnerAction(_prev, formData) {
   );
 }
 
+/**
+ * Irreversible. The confirmation lives in the form; the authorisation and the
+ * choice of WHAT may be deleted live in purgePartnerDocuments(), which
+ * re-derives the one allowed path itself and ignores anything else.
+ */
 export async function purgePartnerDocumentsAction(_prev, formData) {
+  const path = str(formData, 'face_image_path');
   return run(
     () =>
       purgePartnerDocuments({
         userId: str(formData, 'user_id'),
         // The face photograph only. The student ID belongs to the Customer
-        // profile now and is not a Partner document to purge.
-        paths: [str(formData, 'face_image_path')],
+        // profile now and is not a Partner document to purge. Omitted entirely
+        // when the caller has no path, which is the usual case — the server
+        // looks it up rather than trusting a hidden field.
+        paths: path ? [path] : null,
         reason: str(formData, 'reason'),
       }),
     'Verification documents deleted.',
     ['/admin/partners']
+  );
+}
+
+// --- Accounts ----------------------------------------------------------------
+
+/**
+ * Suspends or reinstates an account.
+ *
+ * `suspend` arrives as an explicit "true"/"false" rather than a checkbox,
+ * because "suspend" and "reinstate" are two different decisions and a control
+ * whose meaning depends on the row's current state is a control an operator
+ * misreads at speed.
+ *
+ * THE AUTHORISATION AND THE SELF-SUSPENSION REFUSAL BOTH LIVE IN SQL.
+ * admin_set_user_suspended() re-checks is_admin(), demands a reason and rejects
+ * `p_user_id = auth.uid()` itself. Nothing here is a substitute for that.
+ */
+export async function setUserSuspendedAction(_prev, formData) {
+  const suspend = str(formData, 'suspend');
+  if (suspend !== 'true' && suspend !== 'false') {
+    return { ok: false, message: 'Say explicitly whether this account is being suspended.' };
+  }
+
+  return run(
+    () =>
+      admin.setUserSuspended({
+        userId: str(formData, 'user_id'),
+        suspended: suspend === 'true',
+        reason: str(formData, 'reason'),
+      }),
+    (u) =>
+      u.is_suspended
+        ? 'Account suspended. Every capability it held — ordering, delivering, vendor staff — is now refused.'
+        : 'Account reinstated. The capabilities it holds are available again; a Partner must go online themselves.',
+    ['/admin/customers', '/admin/partners']
   );
 }
 
@@ -467,8 +511,43 @@ export async function updateConfigAction(_prev, formData) {
         paymentPendingTimeoutSeconds: num(formData, 'payment_pending_timeout_seconds'),
         minPayoutPesewas: num(formData, 'min_payout_pesewas'),
         customerPollSeconds: num(formData, 'customer_poll_seconds'),
+        scanServiceFeePesewas: num(formData, 'scan_service_fee_pesewas'),
       }),
     'Settings saved. Fee changes apply to the next order.',
     ['/admin/pilot']
   );
+}
+
+// --- Scan delivery -----------------------------------------------------------
+
+/**
+ * Mints a short-lived link to one customer's meal scan.
+ *
+ * THE AUTHORISATION IS NOT HERE. scan_image_path() decides, in SQL, whether the
+ * caller may see this scan at all — customer, currently-assigned Partner, or
+ * admin — and returns nothing otherwise. This action cannot widen that, and an
+ * administrator who is somehow not an administrator gets null rather than a URL.
+ *
+ * Deliberately an ACTION rather than something the page renders on load: viewing
+ * a student's meal voucher should be a thing somebody chose to do, and the link
+ * expires on its own so a copied URL is dead by the time it is shared.
+ */
+export async function viewScanAction(_prev, formData) {
+  const orderId = str(formData, 'order_id');
+  if (!orderId) return { ok: false, message: 'No order was named.' };
+
+  try {
+    const url = await scanImageUrl(orderId);
+    if (!url) {
+      return {
+        ok: false,
+        message: 'No scan is available for this order, or you are not authorised to see it.',
+      };
+    }
+    // The URL is handed to the browser and never logged: it is a bearer link to
+    // a private document for as long as it lives.
+    return { ok: true, message: 'Link ready — it expires shortly.', url };
+  } catch (error) {
+    return actionFailure(error, CONTEXT);
+  }
 }

@@ -319,6 +319,26 @@ describe('schema invariants', () => {
       'vendor_set_accepting_orders',
       'vendor_set_menu_item_available',
 
+      // --- Admin operating console -------------------------------------------
+      // Read models only. Every one re-checks is_admin() itself, so the grant is
+      // reachability and the check is authorisation — a non-admin who calls one
+      // directly gets an empty result or null, never data. None is anon-callable.
+      'admin_dashboard',
+      'admin_customers',
+      'admin_customer_detail',
+      'admin_partners',
+      'admin_partner_detail',
+      'admin_vendors',
+      'admin_ledger',
+      'admin_ledger_totals',
+      'admin_exceptions',
+      // The one WRITE in the console additions. Same shape as every other admin
+      // write: is_admin(), a mandatory reason, an admin_actions row in the same
+      // transaction — and it refuses self-suspension, because is_admin() reads
+      // `not is_suspended` and an admin suspending themselves would revoke the
+      // authority to undo it.
+      'admin_set_user_suspended',
+
       // --- Scan delivery -----------------------------------------------------
       // Reads and writes for the scan flow. `scan_image_path` is the sensitive
       // one and is authenticated-only on purpose: it resolves auth.uid() itself

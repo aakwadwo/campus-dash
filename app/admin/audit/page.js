@@ -1,10 +1,14 @@
 import { listAdminActions } from '@/lib/admin';
-import { Panel, Empty } from '../ui';
+import { Panel, Empty, Unavailable } from '../ui';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AuditPage() {
-  const actions = await listAdminActions(200);
+  // null is "we could not read the log", which on THIS page is the one thing
+  // that must never render as an empty list: an audit trail that appears empty
+  // reads as "nobody has overridden anything", and that is precisely the
+  // conclusion somebody would draw while investigating whether they had.
+  const actions = await listAdminActions(200).catch(() => null);
 
   return (
     <>
@@ -14,8 +18,12 @@ export default async function AuditPage() {
         and DELETE regardless of privilege.
       </p>
 
-      <Panel title={`Most recent ${actions.length} actions`}>
-        {actions.length ? (
+      <Panel title={actions === null ? 'Recent actions' : `Most recent ${actions.length} actions`}>
+        {actions === null ? (
+          <Unavailable>
+            The audit log could not be read. Do not take this as evidence that nothing has happened.
+          </Unavailable>
+        ) : actions.length ? (
           <ul className="divide-y divide-black/5 text-sm">
             {actions.map((action) => (
               <li key={action.id} className="py-3">

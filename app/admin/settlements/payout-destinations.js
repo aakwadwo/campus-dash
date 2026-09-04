@@ -2,7 +2,7 @@
 
 import { useActionState } from 'react';
 import { setPayoutDestinationAction } from '../actions';
-import { Panel, Button, ActionResult, Empty } from '../ui';
+import { Panel, Button, ActionResult, Empty, Unavailable } from '../ui';
 
 const NETWORKS = ['MTN', 'VODAFONE', 'AIRTELTIGO'];
 
@@ -25,7 +25,14 @@ export default function PayoutDestinations({ destinations }) {
       title="Payout destinations"
       description="Mobile money accounts settlement transfers are sent to. Server-only — no client role can read this table."
     >
-      {destinations?.length ? (
+      {destinations === null ? (
+        <div className="mb-6">
+          <Unavailable>
+            The payout destinations could not be loaded. This is not the same as there being none —
+            do not conclude a payee is unregistered from this screen.
+          </Unavailable>
+        </div>
+      ) : destinations.length ? (
         <div className="mb-6 overflow-x-auto">
           <table className="w-full min-w-[40rem] text-sm">
             <thead className="text-muted text-left text-xs uppercase">

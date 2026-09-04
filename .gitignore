@@ -38,3 +38,6 @@ yarn-error.log*
 # IDE
 /.idea/
 .env*
+
+# Design reference images, kept locally. Not part of the application.
+/inspo/

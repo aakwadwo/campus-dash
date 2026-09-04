@@ -810,6 +810,184 @@ $$;
 ALTER FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "has_student_id" boolean, "is_suspended" boolean, "is_admin" boolean, "onboarded_at" timestamp with time zone, "created_at" timestamp with time zone, "partner_status" "text", "partner_applied_at" timestamp with time zone, "vendor_names" "text"[], "order_count" bigint, "completed_count" bigint, "spent_pesewas" bigint, "recent_orders" "jsonb")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select u.id, u.full_name, u.phone, u.email,
+         c.student_id_number, c.class_year,
+         c.student_id_image_path is not null,
+         u.is_suspended, u.is_admin, c.onboarded_at, u.created_at,
+         coalesce(p.status::text, 'NOT_APPLIED'), p.applied_at,
+         coalesce((select array_agg(v.name order by v.name)
+                     from public.vendor_users vu
+                     join public.vendors v on v.id = vu.vendor_id
+                    where vu.user_id = u.id), '{}'),
+         (select count(*) from public.orders o where o.customer_id = u.id and o.order_status <> 'DRAFT'),
+         (select count(*) from public.orders o where o.customer_id = u.id and o.order_status = 'COMPLETED'),
+         (select coalesce(sum(pay.amount_pesewas),0)::bigint
+            from public.payments pay
+            join public.orders o on o.id = pay.order_id
+           where o.customer_id = u.id and pay.status = 'SUCCEEDED'),
+         coalesce((select jsonb_agg(jsonb_build_object(
+                     'order_id', o.id, 'order_number', o.order_number,
+                     'order_type', o.order_type, 'order_status', o.order_status,
+                     'payment_status', o.payment_status, 'delivery_status', o.delivery_status,
+                     'total_pesewas', o.total_pesewas, 'created_at', o.created_at
+                   ) order by o.created_at desc)
+             from (select * from public.orders o2
+                    where o2.customer_id = u.id and o2.order_status <> 'DRAFT'
+                    order by o2.created_at desc limit 20) o), '[]'::jsonb)
+    from public.users u
+    join public.customer_profiles c on c.user_id = u.id
+    left join public.partner_profiles p on p.user_id = u.id
+   where public.is_admin() and u.id = p_user_id;
+$$;
+
+
+ALTER FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_customers"("p_search" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "is_suspended" boolean, "is_admin" boolean, "partner_status" "text", "order_count" bigint, "last_order_at" timestamp with time zone, "onboarded_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select u.id, u.full_name, u.phone, u.email,
+         c.student_id_number, c.class_year,
+         u.is_suspended, u.is_admin,
+         coalesce(p.status::text, 'NOT_APPLIED'),
+         (select count(*) from public.orders o where o.customer_id = u.id and o.order_status <> 'DRAFT'),
+         (select max(o.created_at) from public.orders o where o.customer_id = u.id),
+         c.onboarded_at
+    from public.customer_profiles c
+    join public.users u on u.id = c.user_id
+    left join public.partner_profiles p on p.user_id = u.id
+   where public.is_admin()
+     and (p_search is null or btrim(p_search) = ''
+          or u.full_name ilike '%' || btrim(p_search) || '%'
+          or u.phone ilike '%' || btrim(p_search) || '%'
+          or coalesce(u.email,'') ilike '%' || btrim(p_search) || '%'
+          or c.student_id_number ilike '%' || btrim(p_search) || '%')
+   order by c.onboarded_at desc
+   limit least(coalesce(p_limit, 100), 500);
+$$;
+
+
+ALTER FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_dashboard"() RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  -- One row per non-cancelled PLATFORM allocation, split into what the platform
+  -- has actually earned and what it is merely holding.
+  --
+  -- `service_component` is capped at the allocation because the ledger may only
+  -- ever carve the DELIVERY fee out of this row (partner_earnings_pesewas <=
+  -- delivery_fee_pesewas is a table constraint), so the service fee is always
+  -- fully present — the least() is belt and braces against a future change
+  -- making that untrue and silently reporting a negative delivery component.
+  with platform_rows as (
+    select a.amount_pesewas,
+           least(o.service_fee_pesewas, a.amount_pesewas)                as service_component,
+           a.amount_pesewas - least(o.service_fee_pesewas, a.amount_pesewas) as delivery_component,
+           exists (
+             select 1 from public.allocations pa
+              where pa.order_id = a.order_id
+                and pa.payee_type = 'PARTNER'
+                and pa.status <> 'CANCELLED'
+           ) as partner_settled
+      from public.allocations a
+      join public.orders o on o.id = a.order_id
+     where a.payee_type = 'PLATFORM' and a.status <> 'CANCELLED'
+  )
+  select case when not public.is_admin() then null else jsonb_build_object(
+
+    'operations', jsonb_build_object(
+      'orders_today', (select count(*) from public.orders
+                        where order_status <> 'DRAFT' and created_at >= date_trunc('day', now())),
+      'active_food',  (select count(*) from public.orders
+                        where order_type = 'FOOD' and order_status not in ('DRAFT','COMPLETED','CANCELLED','REJECTED','EXPIRED')),
+      'active_scan',  (select count(*) from public.orders
+                        where order_type = 'SCAN' and order_status not in ('DRAFT','COMPLETED','CANCELLED','REJECTED','EXPIRED')),
+      'searching',    (select count(*) from public.orders where delivery_status = 'SEARCHING'),
+      'assigned',     (select count(*) from public.orders where delivery_status in ('ASSIGNED','PICKED_UP')),
+      'no_partner',   (select count(*) from public.orders where delivery_status = 'FAILED_NO_PARTNER'),
+      'scan_refused', (select count(*) from public.orders
+                        where order_type = 'SCAN' and scan_status = 'REFUSED'),
+      'needs_attention', (select count(*) from public.admin_order_board(null, 500) b
+                           where b.attention in ('DISPUTED','SCAN_REFUSED','CUSTOMER_ABSENT','NO_PARTNER',
+                                                 'REFUND_PENDING','PAYMENT_FAILED'))
+    ),
+
+    'money', jsonb_build_object(
+      -- What customers have actually paid us, gross.
+      'collected_pesewas', (select coalesce(sum(amount_pesewas),0) from public.payments where status = 'SUCCEEDED'),
+      'payments_count',    (select count(*) from public.payments where status = 'SUCCEEDED'),
+      -- What we owe, by payee, excluding anything already settled or cancelled.
+      'vendor_owed',   (select coalesce(sum(amount_pesewas),0) from public.allocations
+                         where payee_type = 'VENDOR'  and status in ('PENDING','ELIGIBLE')),
+      'partner_owed',  (select coalesce(sum(amount_pesewas),0) from public.allocations
+                         where payee_type = 'PARTNER' and status in ('PENDING','ELIGIBLE')),
+
+      -- REVENUE. The service fee the platform charged, plus whatever it keeps
+      -- of a delivery fee once the Partner on that delivery has been settled.
+      -- It deliberately EXCLUDES delivery money still waiting on a delivery.
+      'platform_earned', (select coalesce(sum(service_component),0)::bigint
+                            + coalesce(sum(delivery_component) filter (where partner_settled),0)::bigint
+                            from platform_rows),
+      -- The same figure's two halves, so a suspicious number can be taken apart
+      -- on the screen instead of in a SQL client.
+      'platform_service_fee',    (select coalesce(sum(service_component),0)::bigint from platform_rows),
+      'platform_delivery_margin',(select coalesce(sum(delivery_component) filter (where partner_settled),0)::bigint
+                                    from platform_rows),
+      -- LIABILITY, not revenue: delivery fees collected from customers, sitting
+      -- in the platform allocation only because no Partner row exists to hold
+      -- them yet. This is the money the old `platform_earned` was quietly
+      -- counting as ours.
+      'delivery_fees_held',      (select coalesce(sum(delivery_component) filter (where not partner_settled),0)::bigint
+                                    from platform_rows),
+      -- The raw allocation row total, unchanged, so the ledger identity
+      -- vendor + partner + platform_allocated = gross can still be checked.
+      'platform_allocated',      (select coalesce(sum(amount_pesewas),0)::bigint from platform_rows),
+
+      'payouts_pending',    (select coalesce(sum(amount_pesewas),0) from public.payouts where status = 'PENDING'),
+      'payouts_processing', (select coalesce(sum(amount_pesewas),0) from public.payouts where status = 'PROCESSING'),
+      'payouts_failed',     (select coalesce(sum(amount_pesewas),0) from public.payouts where status = 'FAILED'),
+      'payouts_paid',       (select coalesce(sum(amount_pesewas),0) from public.payouts where status = 'PAID'),
+      'refunded_pesewas',   (select coalesce(sum(total_pesewas),0) from public.orders where payment_status = 'REFUNDED'),
+      'refund_pending_pesewas', (select coalesce(sum(total_pesewas),0) from public.orders where payment_status = 'REFUND_PENDING')
+    ),
+
+    'people', jsonb_build_object(
+      'customers',        (select count(*) from public.customer_profiles),
+      'partners',         (select count(*) from public.partner_profiles where status = 'APPROVED'),
+      'partners_pending', (select count(*) from public.partner_profiles where status = 'PENDING_REVIEW'),
+      'partners_online',  (select count(*) from public.partner_profiles where status = 'APPROVED' and is_available),
+      'vendors',          (select count(*) from public.vendors),
+      'vendors_active',   (select count(*) from public.vendors where status = 'ACTIVE'),
+      'vendors_scan',     (select count(*) from public.vendors where can_accept_scans),
+      'suspended',        (select count(*) from public.users where is_suspended)
+    ),
+
+    'system', jsonb_build_object(
+      'webhooks_24h',        (select count(*) from public.webhook_events where received_at >= now() - interval '24 hours'),
+      'webhooks_invalid_24h',(select count(*) from public.webhook_events
+                               where received_at >= now() - interval '24 hours' and not signature_valid),
+      'notifications_24h',   (select count(*) from public.notification_events where created_at >= now() - interval '24 hours'),
+      'notifications_failed_24h', (select count(*) from public.notification_events
+                                    where created_at >= now() - interval '24 hours' and not succeeded),
+      'admin_actions_24h',   (select count(*) from public.admin_actions where created_at >= now() - interval '24 hours'),
+      'scan_fee_configured', (select scan_service_fee_pesewas is not null from public.pricing_config where id)
+    )
+  ) end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_dashboard"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -900,6 +1078,69 @@ $$;
 ALTER FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_exceptions"("p_limit" integer DEFAULT 200) RETURNS TABLE("kind" "text", "order_id" "uuid", "order_number" "text", "order_type" "public"."order_type", "subject" "text", "detail" "text", "amount_pesewas" bigint, "requires_decision" boolean, "since" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  -- Orders whose classification is already a problem.
+  select b.attention,
+         b.order_id, b.order_number, b.order_type,
+         b.customer_name,
+         case b.attention
+           when 'DISPUTED'        then 'The customer disputes this delivery.'
+           when 'SCAN_REFUSED'    then 'The restaurant would not honour the scan. No refund policy exists — decide.'
+           when 'CUSTOMER_ABSENT' then 'The Partner could not hand the order over.'
+           when 'NO_PARTNER'      then 'Nobody accepted the delivery before the search expired.'
+           when 'REFUND_PENDING'  then 'A refund has been marked pending and needs completing at the provider.'
+           when 'PAYMENT_FAILED'  then 'The payment failed.'
+           else b.attention
+         end,
+         b.total_pesewas,
+         -- These four have no automatic resolution anywhere in the system.
+         b.attention in ('DISPUTED','SCAN_REFUSED','CUSTOMER_ABSENT','REFUND_PENDING'),
+         b.created_at
+    from public.admin_order_board(null, 500) b
+   where public.is_admin()
+     and b.attention in ('DISPUTED','SCAN_REFUSED','CUSTOMER_ABSENT','NO_PARTNER',
+                         'REFUND_PENDING','PAYMENT_FAILED')
+
+  union all
+
+  -- Money that tried to leave and did not.
+  select 'FAILED_PAYOUT',
+         null::uuid, null::text, null::public.order_type,
+         coalesce(v.name, u.full_name, 'unknown payee'),
+         'Payout failed: ' || coalesce(po.failure_reason, 'no reason recorded') ||
+           '. Retry only when the cause is understood.',
+         po.amount_pesewas,
+         true,
+         po.created_at
+    from public.payouts po
+    left join public.vendors v on v.id = po.payee_id and po.payee_type = 'VENDOR'
+    left join public.users u on u.id = po.payee_id and po.payee_type = 'PARTNER'
+   where public.is_admin() and po.status = 'FAILED'
+
+  union all
+
+  -- Anything the ledger itself cannot explain.
+  select 'RECONCILIATION',
+         r.order_id, r.order_number, null::public.order_type,
+         r.issue, r.detail, r.total_pesewas, true, r.created_at
+    from public.admin_reconciliation(200) r
+   where public.is_admin()
+
+  -- Ordinal, not a name: across a UNION the output columns take their names
+  -- from the first branch's expressions, not from the RETURNS TABLE list.
+  -- Oldest first — the thing that has been broken longest is the thing that
+  -- has been costing somebody the longest.
+  order by 9 asc
+  limit least(coalesce(p_limit, 200), 500);
+$$;
+
+
+ALTER FUNCTION "public"."admin_exceptions"("p_limit" integer) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_failed_notifications"("p_limit" integer DEFAULT 100) RETURNS TABLE("id" bigint, "event" "text", "audience" "text", "recipient" "text", "order_id" "uuid", "error" "text", "attempts" bigint, "created_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -922,6 +1163,106 @@ $$;
 
 
 ALTER FUNCTION "public"."admin_failed_notifications"("p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_ledger"("p_order_type" "text" DEFAULT NULL::"text", "p_payee_type" "text" DEFAULT NULL::"text", "p_allocation_status" "text" DEFAULT NULL::"text", "p_payout_status" "text" DEFAULT NULL::"text", "p_vendor_id" "uuid" DEFAULT NULL::"uuid", "p_payee_id" "uuid" DEFAULT NULL::"uuid", "p_since" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_until" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_limit" integer DEFAULT 200) RETURNS TABLE("allocation_id" "uuid", "order_id" "uuid", "order_number" "text", "order_type" "public"."order_type", "order_created_at" timestamp with time zone, "vendor_name" "text", "payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "amount_pesewas" bigint, "allocation_status" "public"."allocation_status", "settled_at" timestamp with time zone, "settlement_run_id" "uuid", "payout_id" "uuid", "payout_status" "public"."payout_status", "order_total_pesewas" bigint, "order_subtotal_pesewas" bigint, "order_service_fee_pesewas" bigint, "order_delivery_fee_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select a.id, o.id, o.order_number, o.order_type, o.created_at,
+         v.name,
+         a.payee_type, a.payee_id,
+         case a.payee_type
+           when 'PLATFORM' then 'Campus Dash'
+           when 'VENDOR'   then vp.name
+           else pu.full_name
+         end,
+         a.amount_pesewas, a.status, a.settled_at, a.settlement_run_id,
+         po.id, po.status,
+         o.total_pesewas, o.subtotal_pesewas, o.service_fee_pesewas, o.delivery_fee_pesewas
+    from public.allocations a
+    join public.orders o on o.id = a.order_id
+    join public.vendors v on v.id = o.vendor_id
+    left join public.vendors vp on vp.id = a.payee_id and a.payee_type = 'VENDOR'
+    left join public.users pu on pu.id = a.payee_id and a.payee_type = 'PARTNER'
+    left join public.payouts po on po.settlement_run_id = a.settlement_run_id
+                               and po.payee_type = a.payee_type
+                               and po.payee_id is not distinct from a.payee_id
+   where public.is_admin()
+     and (p_order_type is null        or o.order_type::text = p_order_type)
+     and (p_payee_type is null        or a.payee_type::text = p_payee_type)
+     and (p_allocation_status is null or a.status::text = p_allocation_status)
+     and (p_payout_status is null     or po.status::text = p_payout_status)
+     and (p_vendor_id is null         or o.vendor_id = p_vendor_id)
+     and (p_payee_id is null          or a.payee_id = p_payee_id)
+     and (p_since is null             or o.created_at >= p_since)
+     and (p_until is null             or o.created_at <  p_until)
+   order by o.created_at desc, a.payee_type
+   limit least(coalesce(p_limit, 200), 1000);
+$$;
+
+
+ALTER FUNCTION "public"."admin_ledger"("p_order_type" "text", "p_payee_type" "text", "p_allocation_status" "text", "p_payout_status" "text", "p_vendor_id" "uuid", "p_payee_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_ledger_totals"("p_order_type" "text" DEFAULT NULL::"text", "p_since" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_until" timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  -- GROSS IS SUMMED OVER DISTINCT ORDERS, not over allocation rows. An order
+  -- with three payees would otherwise contribute its total three times and the
+  -- finance page would report revenue that does not exist.
+  with rows as (
+    select a.amount_pesewas, a.payee_type, o.id as order_id, o.total_pesewas,
+           o.service_fee_pesewas
+      from public.allocations a
+      join public.orders o on o.id = a.order_id
+     where a.status <> 'CANCELLED'
+       and (p_order_type is null or o.order_type::text = p_order_type)
+       and (p_since is null or o.created_at >= p_since)
+       and (p_until is null or o.created_at <  p_until)
+  ),
+  orders_once as (select distinct order_id, total_pesewas from rows),
+  -- The PLATFORM row, taken apart. `partner_settled` is decided from the same
+  -- filtered set, which is safe because every filter here is order-level: an
+  -- order's PLATFORM and PARTNER rows are always both in or both out.
+  platform_rows as (
+    select p.amount_pesewas,
+           least(p.service_fee_pesewas, p.amount_pesewas)                as service_component,
+           p.amount_pesewas - least(p.service_fee_pesewas, p.amount_pesewas) as delivery_component,
+           exists (select 1 from rows x
+                    where x.order_id = p.order_id and x.payee_type = 'PARTNER') as partner_settled
+      from rows p
+     where p.payee_type = 'PLATFORM'
+  )
+  select case when not public.is_admin() then null else jsonb_build_object(
+    'orders',            (select count(*) from orders_once),
+    'gross_pesewas',     (select coalesce(sum(total_pesewas),0)::bigint from orders_once),
+    'vendor_pesewas',    (select coalesce(sum(amount_pesewas),0)::bigint from rows where payee_type = 'VENDOR'),
+    'partner_pesewas',   (select coalesce(sum(amount_pesewas),0)::bigint from rows where payee_type = 'PARTNER'),
+
+    -- Platform REVENUE: service fees, plus retained delivery margin on
+    -- deliveries a Partner has already been settled for.
+    'platform_pesewas',  (select coalesce(sum(service_component),0)::bigint
+                            + coalesce(sum(delivery_component) filter (where partner_settled),0)::bigint
+                            from platform_rows),
+    'platform_service_fee_pesewas',     (select coalesce(sum(service_component),0)::bigint from platform_rows),
+    'platform_delivery_margin_pesewas', (select coalesce(sum(delivery_component) filter (where partner_settled),0)::bigint
+                                           from platform_rows),
+    -- Delivery fees parked in the PLATFORM row awaiting Partner settlement.
+    -- Owed, not earned.
+    'delivery_fees_held_pesewas',       (select coalesce(sum(delivery_component) filter (where not partner_settled),0)::bigint
+                                           from platform_rows),
+    -- The unsplit PLATFORM allocation. Kept so the ledger identity is still
+    -- expressible: vendor + partner + platform_allocated = allocated = gross.
+    'platform_allocated_pesewas',       (select coalesce(sum(amount_pesewas),0)::bigint from platform_rows),
+
+    'allocated_pesewas', (select coalesce(sum(amount_pesewas),0)::bigint from rows)
+  ) end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_ledger_totals"("p_order_type" "text", "p_since" timestamp with time zone, "p_until" timestamp with time zone) OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."admin_actions" (
@@ -1061,7 +1402,7 @@ $$;
 ALTER FUNCTION "public"."admin_notification_log"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_order_board"("p_filter" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_name" "text", "customer_name" "text", "partner_name" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "total_pesewas" bigint, "attention" "text", "age_seconds" integer, "disputed" boolean, "created_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_order_board"("p_filter" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100, "p_order_type" "text" DEFAULT NULL::"text", "p_order_status" "text" DEFAULT NULL::"text", "p_payment_status" "text" DEFAULT NULL::"text", "p_partner_state" "text" DEFAULT NULL::"text", "p_vendor_id" "uuid" DEFAULT NULL::"uuid", "p_since" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_until" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_search" "text" DEFAULT NULL::"text") RETURNS TABLE("order_id" "uuid", "order_number" "text", "order_type" "public"."order_type", "vendor_name" "text", "customer_name" "text", "partner_name" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "scan_status" "public"."scan_status", "fulfilment_type" "public"."fulfilment_type", "total_pesewas" bigint, "attention" "text", "age_seconds" integer, "disputed" boolean, "created_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -1072,6 +1413,10 @@ CREATE OR REPLACE FUNCTION "public"."admin_order_board"("p_filter" "text" DEFAUL
            p.full_name as partner_name,
            case
              when o.disputed_at is not null and o.dispute_resolved_at is null then 'DISPUTED'
+             -- NEW. A refused scan is not "in progress": the Partner is standing
+             -- at a counter that will not serve them, and only a person can
+             -- decide what happens to the money.
+             when o.order_type = 'SCAN' and o.scan_status = 'REFUSED'          then 'SCAN_REFUSED'
              when o.delivery_status = 'FAILED_CUSTOMER_ABSENT'                then 'CUSTOMER_ABSENT'
              when o.delivery_status = 'FAILED_NO_PARTNER'                     then 'NO_PARTNER'
              when o.payment_status = 'REFUND_PENDING'                         then 'REFUND_PENDING'
@@ -1090,35 +1435,49 @@ CREATE OR REPLACE FUNCTION "public"."admin_order_board"("p_filter" "text" DEFAUL
       left join public.users p on p.id = o.partner_id
      where public.is_admin() and o.order_status <> 'DRAFT'
   )
-  select s.id, s.order_number, s.vendor_name, s.customer_name, s.partner_name,
-         s.order_status, s.payment_status, s.delivery_status, s.fulfilment_type,
+  select s.id, s.order_number, s.order_type, s.vendor_name, s.customer_name, s.partner_name,
+         s.order_status, s.payment_status, s.delivery_status, s.scan_status, s.fulfilment_type,
          s.total_pesewas, s.attention,
          extract(epoch from (now() - s.created_at))::integer,
          s.disputed_at is not null and s.dispute_resolved_at is null,
          s.created_at
     from scored s
-   where p_filter is null or s.attention = p_filter
+   where (p_filter is null         or s.attention = p_filter)
+     and (p_order_type is null     or s.order_type::text = p_order_type)
+     and (p_order_status is null   or s.order_status::text = p_order_status)
+     and (p_payment_status is null or s.payment_status::text = p_payment_status)
+     and (p_partner_state is null
+          or (p_partner_state = 'ASSIGNED'   and s.partner_id is not null)
+          or (p_partner_state = 'UNASSIGNED' and s.partner_id is null))
+     and (p_vendor_id is null      or s.vendor_id = p_vendor_id)
+     and (p_since is null          or s.created_at >= p_since)
+     and (p_until is null          or s.created_at <  p_until)
+     -- Order number is exact-ish; the customer name is a contains match. Both
+     -- are already visible to an admin on this very board, so searching them
+     -- reveals nothing new.
+     and (p_search is null or btrim(p_search) = ''
+          or s.order_number ilike '%' || btrim(p_search) || '%'
+          or s.customer_name ilike '%' || btrim(p_search) || '%')
    order by
-     -- Problems first, then work in flight, then the settled past.
      case s.attention
        when 'DISPUTED'          then 0
-       when 'CUSTOMER_ABSENT'   then 1
-       when 'NO_PARTNER'        then 2
-       when 'REFUND_PENDING'    then 3
-       when 'PAYMENT_FAILED'    then 4
-       when 'AWAITING_VENDOR'   then 5
-       when 'AWAITING_PAYMENT'  then 6
-       when 'SEARCHING_PARTNER' then 7
-       when 'IN_PROGRESS'       then 8
-       else 9
+       when 'SCAN_REFUSED'      then 1
+       when 'CUSTOMER_ABSENT'   then 2
+       when 'NO_PARTNER'        then 3
+       when 'REFUND_PENDING'    then 4
+       when 'PAYMENT_FAILED'    then 5
+       when 'AWAITING_VENDOR'   then 6
+       when 'AWAITING_PAYMENT'  then 7
+       when 'SEARCHING_PARTNER' then 8
+       when 'IN_PROGRESS'       then 9
+       else 10
      end,
-     -- Oldest first within a problem: it has been broken longest.
      s.created_at asc
    limit least(coalesce(p_limit, 100), 500);
 $$;
 
 
-ALTER FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer, "p_order_type" "text", "p_order_status" "text", "p_payment_status" "text", "p_partner_state" "text", "p_vendor_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_search" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_order_board_summary"() RETURNS TABLE("attention" "text", "count" bigint)
@@ -1192,6 +1551,49 @@ $$;
 ALTER FUNCTION "public"."admin_order_money"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "has_face_image" boolean, "has_student_id" boolean, "deliveries_completed" bigint, "deliveries_failed" bigint, "earned_pesewas" bigint, "owed_pesewas" bigint, "paid_pesewas" bigint, "active_order_id" "uuid", "active_order_number" "text", "recent_deliveries" "jsonb")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select u.id, u.full_name, u.phone, u.email,
+         c.student_id_number, c.class_year,
+         p.status, p.is_available, u.is_suspended,
+         p.applied_at, p.reviewed_at, r.full_name, p.review_notes,
+         p.face_image_path is not null,
+         c.student_id_image_path is not null,
+         (select count(*) from public.orders o
+           where o.partner_id = u.id and o.delivery_status = 'DELIVERED'),
+         (select count(*) from public.orders o
+           where o.partner_id = u.id and o.delivery_status in ('FAILED_CUSTOMER_ABSENT','FAILED_NO_PARTNER')),
+         (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
+           where a.payee_type = 'PARTNER' and a.payee_id = u.id and a.status <> 'CANCELLED'),
+         (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
+           where a.payee_type = 'PARTNER' and a.payee_id = u.id and a.status in ('PENDING','ELIGIBLE')),
+         (select coalesce(sum(po.amount_pesewas),0)::bigint from public.payouts po
+           where po.payee_type = 'PARTNER' and po.payee_id = u.id and po.status = 'PAID'),
+         (select o.id from public.orders o
+           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP') limit 1),
+         (select o.order_number from public.orders o
+           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP') limit 1),
+         coalesce((select jsonb_agg(jsonb_build_object(
+                     'order_id', o.id, 'order_number', o.order_number,
+                     'order_type', o.order_type, 'delivery_status', o.delivery_status,
+                     'earnings_pesewas', o.partner_earnings_pesewas,
+                     'delivered_at', o.delivered_at, 'created_at', o.created_at
+                   ) order by o.created_at desc)
+             from (select * from public.orders o2 where o2.partner_id = u.id
+                    order by o2.created_at desc limit 20) o), '[]'::jsonb)
+    from public.users u
+    join public.partner_profiles p on p.user_id = u.id
+    left join public.customer_profiles c on c.user_id = u.id
+    left join public.users r on r.id = p.reviewed_by
+   where public.is_admin() and u.id = p_user_id;
+$$;
+
+
+ALTER FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_partner_documents_due_for_purge"() RETURNS TABLE("user_id" "uuid", "face_image_path" "text", "status" "public"."partner_application_status", "documents_purge_after" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -1213,6 +1615,29 @@ ALTER FUNCTION "public"."admin_partner_documents_due_for_purge"() OWNER TO "post
 
 
 COMMENT ON FUNCTION "public"."admin_partner_documents_due_for_purge"() IS 'Partner face photographs whose retention window has elapsed. Deliberately does NOT list customer_profiles.student_id_image_path: that document is retained while the account is active, and a delete queue must name only things that may be deleted.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_partners"("p_status" "text" DEFAULT NULL::"text") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "class_year" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "deliveries" bigint, "owed_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select u.id, u.full_name, u.phone, c.class_year, p.status, p.is_available, u.is_suspended,
+         p.applied_at, p.reviewed_at,
+         (select count(*) from public.orders o where o.partner_id = u.id and o.delivery_status = 'DELIVERED'),
+         (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
+           where a.payee_type = 'PARTNER' and a.payee_id = u.id and a.status in ('PENDING','ELIGIBLE'))
+    from public.partner_profiles p
+    join public.users u on u.id = p.user_id
+    left join public.customer_profiles c on c.user_id = u.id
+   where public.is_admin()
+     and (p_status is null or p.status::text = p_status)
+   order by
+     case p.status when 'PENDING_REVIEW' then 0 when 'APPROVED' then 1 else 2 end,
+     p.applied_at desc nulls last;
+$$;
+
+
+ALTER FUNCTION "public"."admin_partners"("p_status" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_payments"("p_limit" integer DEFAULT 100) RETURNS TABLE("payment_id" "uuid", "order_id" "uuid", "order_number" "text", "provider" "text", "provider_transaction_id" "text", "amount_pesewas" bigint, "status" "public"."payment_txn_status", "failure_reason" "text", "created_at" timestamp with time zone, "succeeded_at" timestamp with time zone)
@@ -1990,6 +2415,103 @@ $_$;
 ALTER FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."users" (
+    "id" "uuid" NOT NULL,
+    "phone" "text" NOT NULL,
+    "full_name" "text",
+    "is_admin" boolean DEFAULT false NOT NULL,
+    "is_suspended" boolean DEFAULT false NOT NULL,
+    "student_verified_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "email" "text",
+    CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
+    CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
+);
+
+
+ALTER TABLE "public"."users" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") RETURNS "public"."users"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_before public.users%rowtype;
+  v_after  public.users%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_suspended is null then
+    raise exception 'suspend or unsuspend must be stated explicitly'
+      using errcode = 'check_violation';
+  end if;
+
+  -- admin_actions enforces this too, but failing here names the missing field
+  -- instead of surfacing a constraint violation on a table the operator has
+  -- never heard of.
+  if length(btrim(coalesce(p_reason, ''))) < 3 then
+    raise exception 'a reason is required, and is recorded in the audit log'
+      using errcode = 'check_violation';
+  end if;
+
+  -- SELF-SUSPENSION IS REFUSED, IN SQL.
+  --
+  -- is_admin() is `is_admin and not is_suspended`. An administrator suspending
+  -- their own account therefore revokes, in the same statement, the authority
+  -- needed to reverse it — and if they are the only administrator, the console
+  -- is gone until somebody opens a SQL client against production. The UI hides
+  -- the control; this is what actually stops it.
+  --
+  -- Suspending ANOTHER administrator is allowed and deliberately so: that is a
+  -- real thing an operator may need to do, and the target keeps a colleague who
+  -- can undo it.
+  if p_suspended and p_user_id = auth.uid() then
+    raise exception 'you cannot suspend your own account; ask another administrator'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_before from public.users where id = p_user_id;
+  if not found then
+    raise exception 'no such user' using errcode = 'no_data_found';
+  end if;
+
+  update public.users
+     set is_suspended = p_suspended
+   where id = p_user_id
+  returning * into v_after;
+
+  -- A suspended Partner must also stop being offered deliveries. is_available
+  -- is the dispatch flag, and leaving it true would keep the account in the
+  -- offer pool right up until is_approved_partner() rejected the acceptance —
+  -- a Partner watching offers appear and fail. Reinstatement does NOT set it
+  -- back: going online is the Partner's own decision, not an admin's.
+  if p_suspended then
+    update public.partner_profiles
+       set is_available = false
+     where user_id = p_user_id and is_available;
+  end if;
+
+  perform public.log_admin_action(
+    case when p_suspended then 'USER_SUSPENDED' else 'USER_UNSUSPENDED' end,
+    'user', p_user_id, p_reason,
+    to_jsonb(v_before), to_jsonb(v_after)
+  );
+
+  return v_after;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") RETURNS "public"."vendors"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -2338,6 +2860,26 @@ $$;
 
 
 ALTER FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_vendors"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "phone" "text", "status" "public"."vendor_status", "is_accepting_orders" boolean, "can_accept_scans" boolean, "location_path" "text", "staff_count" bigint, "menu_count" bigint, "order_count" bigint, "owed_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select v.id, v.name, v.phone, v.status, v.is_accepting_orders, v.can_accept_scans,
+         public.location_path(v.location_id),
+         (select count(*) from public.vendor_users vu where vu.vendor_id = v.id),
+         (select count(*) from public.menu_items m where m.vendor_id = v.id),
+         (select count(*) from public.orders o where o.vendor_id = v.id and o.order_status <> 'DRAFT'),
+         (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
+           where a.payee_type = 'VENDOR' and a.payee_id = v.id and a.status in ('PENDING','ELIGIBLE'))
+    from public.vendors v
+   where public.is_admin()
+   order by v.name;
+$$;
+
+
+ALTER FUNCTION "public"."admin_vendors"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_webhook_events"("p_limit" integer DEFAULT 100) RETURNS TABLE("webhook_id" "uuid", "provider" "text", "event_id" "text", "status" "public"."webhook_event_status", "signature_valid" boolean, "error" "text", "received_at" timestamp with time zone, "processed_at" timestamp with time zone)
@@ -5418,27 +5960,6 @@ $$;
 ALTER FUNCTION "public"."scan_restaurants"() OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."users" (
-    "id" "uuid" NOT NULL,
-    "phone" "text" NOT NULL,
-    "full_name" "text",
-    "is_admin" boolean DEFAULT false NOT NULL,
-    "is_suspended" boolean DEFAULT false NOT NULL,
-    "student_verified_at" timestamp with time zone,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "email" "text",
-    CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
-    CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
-);
-
-
-ALTER TABLE "public"."users" OWNER TO "postgres";
-
-
-COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
-
-
 CREATE OR REPLACE FUNCTION "public"."set_my_email"("p_email" "text") RETURNS "public"."users"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -7247,6 +7768,21 @@ GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" 
 GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_dashboard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_dashboard"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_dashboard"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") TO "authenticated";
@@ -7257,9 +7793,24 @@ GRANT ALL ON FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid",
 GRANT ALL ON FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_exceptions"("p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_exceptions"("p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_exceptions"("p_limit" integer) TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_failed_notifications"("p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_failed_notifications"("p_limit" integer) TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_failed_notifications"("p_limit" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_ledger"("p_order_type" "text", "p_payee_type" "text", "p_allocation_status" "text", "p_payout_status" "text", "p_vendor_id" "uuid", "p_payee_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_ledger"("p_order_type" "text", "p_payee_type" "text", "p_allocation_status" "text", "p_payout_status" "text", "p_vendor_id" "uuid", "p_payee_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_ledger"("p_order_type" "text", "p_payee_type" "text", "p_allocation_status" "text", "p_payout_status" "text", "p_vendor_id" "uuid", "p_payee_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_limit" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_ledger_totals"("p_order_type" "text", "p_since" timestamp with time zone, "p_until" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_ledger_totals"("p_order_type" "text", "p_since" timestamp with time zone, "p_until" timestamp with time zone) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_ledger_totals"("p_order_type" "text", "p_since" timestamp with time zone, "p_until" timestamp with time zone) TO "authenticated";
 
 
 GRANT ALL ON TABLE "public"."admin_actions" TO "service_role";
@@ -7288,9 +7839,9 @@ GRANT ALL ON FUNCTION "public"."admin_notification_log"("p_limit" integer) TO "s
 GRANT ALL ON FUNCTION "public"."admin_notification_log"("p_limit" integer) TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer) TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer, "p_order_type" "text", "p_order_status" "text", "p_payment_status" "text", "p_partner_state" "text", "p_vendor_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_search" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer, "p_order_type" "text", "p_order_status" "text", "p_payment_status" "text", "p_partner_state" "text", "p_vendor_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_search" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_order_board"("p_filter" "text", "p_limit" integer, "p_order_type" "text", "p_order_status" "text", "p_payment_status" "text", "p_partner_state" "text", "p_vendor_id" "uuid", "p_since" timestamp with time zone, "p_until" timestamp with time zone, "p_search" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_order_board_summary"() FROM PUBLIC;
@@ -7303,9 +7854,19 @@ GRANT ALL ON FUNCTION "public"."admin_order_money"("p_order_id" "uuid") TO "serv
 GRANT ALL ON FUNCTION "public"."admin_order_money"("p_order_id" "uuid") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_partners"("p_status" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_partners"("p_status" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_partners"("p_status" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_payments"("p_limit" integer) FROM PUBLIC;
@@ -7391,6 +7952,15 @@ GRANT ALL ON FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "pu
 GRANT ALL ON FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") TO "authenticated";
 
 
+GRANT ALL ON TABLE "public"."users" TO "service_role";
+GRANT SELECT ON TABLE "public"."users" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") TO "authenticated";
@@ -7439,6 +8009,11 @@ GRANT ALL ON FUNCTION "public"."admin_update_menu_item"("p_menu_item_id" "uuid",
 REVOKE ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_vendors"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_vendors"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_vendors"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_webhook_events"("p_limit" integer) FROM PUBLIC;
@@ -7851,10 +8426,6 @@ REVOKE ALL ON FUNCTION "public"."scan_restaurants"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "anon";
-
-
-GRANT ALL ON TABLE "public"."users" TO "service_role";
-GRANT SELECT ON TABLE "public"."users" TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."set_my_email"("p_email" "text") FROM PUBLIC;

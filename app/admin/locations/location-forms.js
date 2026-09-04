@@ -8,6 +8,7 @@ import {
   deleteLocationAction,
 } from '../actions';
 import { Panel, Field, Select, ReasonField, Button, ActionResult } from '../ui';
+import { ConfirmButton } from '../confirm';
 
 const KINDS = ['CAMPUS', 'BLOCK', 'FLOOR', 'ROOM', 'FIELD', 'COMMON_AREA'];
 
@@ -138,6 +139,12 @@ export default function LocationForms({ locations }) {
                   </Button>
                 </form>
 
+                {/* Deactivating is the reversible neighbour of this control and
+                    is what an operator almost always means. Deletion is
+                    refused by the database while anything references the row,
+                    so the real risk here is deleting a location nothing has
+                    used YET — a destination somebody added this morning — and
+                    that is exactly the case a confirmation catches. */}
                 <form action={deleteAction} className="flex items-end gap-2">
                   <input type="hidden" name="location_id" value={selected.id} />
                   <Field
@@ -147,9 +154,14 @@ export default function LocationForms({ locations }) {
                     minLength={3}
                     placeholder="Created by mistake"
                   />
-                  <Button variant="danger" disabled={deleting}>
+                  <ConfirmButton
+                    pending={deleting}
+                    pendingLabel="Deleting…"
+                    confirmLabel="Yes, delete it"
+                    question={`Delete “${selected.name}”? To take it out of use without losing it, deactivate it instead — that also deactivates everything beneath it and can be undone.`}
+                  >
                     Delete
-                  </Button>
+                  </ConfirmButton>
                 </form>
               </div>
               <ActionResult state={activeState} />

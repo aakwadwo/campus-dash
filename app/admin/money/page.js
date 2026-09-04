@@ -1,16 +1,27 @@
 import Link from 'next/link';
 import { payments, webhookEvents, reconciliation, notificationLog } from '@/lib/admin';
 import { formatPesewas } from '@/lib/util/money';
-import { Panel, Badge, Empty } from '../ui';
+import { Panel, Badge, Empty, Unavailable } from '../ui';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Four independent reads, caught independently.
+ *
+ * One failing query must not take the other three down with it: an operator
+ * chasing a payment does not care that the notification log is unavailable, and
+ * Promise.all rejecting would have thrown the whole page away for it.
+ *
+ * The reconciliation panel is the one that matters most. Its good outcome is an
+ * EMPTY table, so a failed read rendering as empty would announce "✓ everything
+ * reconciles" on the strength of a question we never managed to ask.
+ */
 export default async function AdminMoneyPage() {
   const [issues, paymentRows, webhooks, notifications] = await Promise.all([
-    reconciliation(100),
-    payments(50),
-    webhookEvents(50),
-    notificationLog(50),
+    reconciliation(100).catch(() => null),
+    payments(50).catch(() => null),
+    webhookEvents(50).catch(() => null),
+    notificationLog(50).catch(() => null),
   ]);
 
   return (
@@ -21,10 +32,15 @@ export default async function AdminMoneyPage() {
       </p>
 
       <Panel
-        title={`Reconciliation (${issues?.length ?? 0})`}
+        title={issues === null ? 'Reconciliation' : `Reconciliation (${issues.length})`}
         description="Only discrepancies. An empty table here is the good outcome."
       >
-        {issues?.length ? (
+        {issues === null ? (
+          <Unavailable>
+            Reconciliation could not be run. That is not a clean bill of health — nothing was
+            checked.
+          </Unavailable>
+        ) : issues.length ? (
           <table className="w-full text-sm">
             <thead className="text-muted text-left text-xs uppercase">
               <tr>
@@ -60,7 +76,9 @@ export default async function AdminMoneyPage() {
       </Panel>
 
       <Panel title="Payments">
-        {paymentRows?.length ? (
+        {paymentRows === null ? (
+          <Unavailable>The payments could not be loaded.</Unavailable>
+        ) : paymentRows.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[42rem] text-sm">
               <thead className="text-muted text-left text-xs uppercase">
@@ -117,7 +135,9 @@ export default async function AdminMoneyPage() {
       </Panel>
 
       <Panel title="Provider events" description="Deduplicated on the provider's own event id.">
-        {webhooks?.length ? (
+        {webhooks === null ? (
+          <Unavailable>The provider events could not be loaded.</Unavailable>
+        ) : webhooks.length ? (
           <table className="w-full text-sm">
             <thead className="text-muted text-left text-xs uppercase">
               <tr>
@@ -164,7 +184,9 @@ export default async function AdminMoneyPage() {
       </Panel>
 
       <Panel title="Notifications" description="What was sent, to whom, and whether it arrived.">
-        {notifications?.length ? (
+        {notifications === null ? (
+          <Unavailable>The notification log could not be loaded.</Unavailable>
+        ) : notifications.length ? (
           <table className="w-full text-sm">
             <thead className="text-muted text-left text-xs uppercase">
               <tr>
