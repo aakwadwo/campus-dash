@@ -34,6 +34,22 @@ export default async function VendorListPage() {
 
       <OrderingGate me={me} />
 
+      {/* The second way in. It is not a vendor, so it does not belong in the
+          list below — and it answers a different question from "what is open?":
+          somebody arriving here with a scan already knows what they want. */}
+      <Link
+        href="/scan"
+        className="border-brand-600/60 bg-brand-50/60 mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-3"
+      >
+        <span>
+          <span className="block text-sm font-semibold">Have a meal scan?</span>
+          <span className="text-muted block text-xs">
+            Send a Partner to redeem it. You pay only for the errand.
+          </span>
+        </span>
+        <span className="text-brand-700 text-sm font-semibold">→</span>
+      </Link>
+
       {vendors.length ? (
         <ul className="space-y-2">
           {vendors.map((vendor) => (

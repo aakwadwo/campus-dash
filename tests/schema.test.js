@@ -223,6 +223,11 @@ describe('schema invariants', () => {
       'location_zone',
       'my_vendor_ids',
       'platform_config',
+      // Which restaurants honour campus meal scans. Anon-readable for the same
+      // reason the vendor list is: the marketplace is browsable signed out, and
+      // this leaks nothing new — `vendors.can_accept_scans` is already on a row
+      // anon may select under vendors_read_active.
+      'scan_restaurants',
     ];
     const AUTHENTICATED = [
       ...ANON,
@@ -313,6 +318,20 @@ describe('schema invariants', () => {
       'vendor_reject_order',
       'vendor_set_accepting_orders',
       'vendor_set_menu_item_available',
+
+      // --- Scan delivery -----------------------------------------------------
+      // Reads and writes for the scan flow. `scan_image_path` is the sensitive
+      // one and is authenticated-only on purpose: it resolves auth.uid() itself
+      // and returns the path only to the customer, the CURRENTLY assigned
+      // Partner, or an admin. Called with no session it returns nothing.
+      'quote_scan_order',
+      'submit_scan_order',
+      'scan_image_path',
+      'my_scan_order',
+      'partner_report_scan_redeemed',
+      'partner_report_scan_refused',
+      'admin_scan_order',
+      'admin_set_vendor_scans',
     ];
 
     for (const [role, allowed] of [

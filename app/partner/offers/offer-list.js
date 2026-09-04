@@ -41,6 +41,15 @@ export default function OfferList({ offers, pollMs = 10000 }) {
       <ul className="mt-4 space-y-3">
         {offers.map((offer) => (
           <li key={offer.order_id} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+            {/* A scan errand is a different job and must not be mistaken for a
+                collection: you carry the customer's prepaid scan, redeem it at
+                the counter yourself, and the food is not waiting for you. */}
+            {offer.order_type === 'SCAN' ? (
+              <p className="text-brand-700 mb-1 text-xs font-semibold tracking-wide uppercase">
+                Scan delivery
+              </p>
+            ) : null}
+
             <div className="flex items-baseline justify-between gap-3">
               <span className="font-semibold">{offer.vendor_name}</span>
               <span className="text-brand-700 font-semibold tabular-nums">
@@ -56,8 +65,14 @@ export default function OfferList({ offers, pollMs = 10000 }) {
                   offer.walk_minutes == null ? 'not measured' : `about ${offer.walk_minutes} min`
                 }
               />
-              <Row label="Items" value={`${offer.item_count}`} />
-              <Row label="Food" value="cooked and waiting" />
+              {offer.order_type === 'SCAN' ? (
+                <Row label="You do" value="redeem the customer’s scan, then deliver" />
+              ) : (
+                <>
+                  <Row label="Items" value={`${offer.item_count}`} />
+                  <Row label="Food" value="cooked and waiting" />
+                </>
+              )}
             </dl>
 
             <form action={accept} className="mt-3">

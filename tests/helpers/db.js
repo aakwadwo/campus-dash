@@ -220,19 +220,29 @@ export async function resetTransactionalState() {
       delete from public.vendors
        where id not in (
          '20000000-0000-4000-8000-000000000001',
-         '20000000-0000-4000-8000-000000000002'
+         '20000000-0000-4000-8000-000000000002',
+         '20000000-0000-4000-8000-000000000003',
+         '20000000-0000-4000-8000-000000000004'
        )
     `);
+    // can_accept_scans is restored here too. Scan tests flip it to prove a
+    // non-scan restaurant is refused, and without a restore that flag leaks
+    // into the next file exactly as a renamed vendor once did.
     await c.query(`
-      insert into public.vendors (id, name, phone, status, is_accepting_orders, location_id, walk_minutes_to_campus)
+      insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, location_id, walk_minutes_to_campus)
       values
-        ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One', '+233200000011', 'ACTIVE', true,
+        ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One', '+233200000011', 'ACTIVE', true, false,
          '10000000-0000-4000-8000-000000000030', 4),
-        ('20000000-0000-4000-8000-000000000002', 'Test Grill Two', '+233200000012', 'ACTIVE', true,
-         '10000000-0000-4000-8000-000000000040', 6)
+        ('20000000-0000-4000-8000-000000000002', 'Test Grill Two', '+233200000012', 'ACTIVE', true, false,
+         '10000000-0000-4000-8000-000000000040', 6),
+        ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000013', 'ACTIVE', true, true,
+         '10000000-0000-4000-8000-000000000030', 3),
+        ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)', '+233200000014', 'ACTIVE', true, true,
+         '10000000-0000-4000-8000-000000000040', 5)
       on conflict (id) do update
          set name = excluded.name, phone = excluded.phone, status = excluded.status,
              is_accepting_orders = excluded.is_accepting_orders,
+             can_accept_scans = excluded.can_accept_scans,
              location_id = excluded.location_id,
              walk_minutes_to_campus = excluded.walk_minutes_to_campus
     `);
@@ -260,7 +270,11 @@ export async function resetTransactionalState() {
         ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, 1),
         ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, 2),
         ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, 3),
-        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4)
+        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4),
+        ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle', 'Waffle, fried chicken, syrup', 3800, true, 1),
+        ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream', 'Two scoops', 2200, true, 2),
+        ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce', 4200, true, 1),
+        ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice', 'Freshly pressed', 1200, true, 2)
       on conflict (id) do update
          set vendor_id = excluded.vendor_id, name = excluded.name,
              description = excluded.description, price_pesewas = excluded.price_pesewas,
@@ -268,13 +282,18 @@ export async function resetTransactionalState() {
     `);
     await c.query(`
       delete from public.menu_items
-       where vendor_id in ('20000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000002')
+       where vendor_id in (
+           '20000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000002',
+           '20000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000004'
+         )
          and id not in (
            '30000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000002',
            '30000000-0000-4000-8000-000000000003','30000000-0000-4000-8000-000000000004',
            '30000000-0000-4000-8000-000000000005','30000000-0000-4000-8000-000000000011',
            '30000000-0000-4000-8000-000000000012','30000000-0000-4000-8000-000000000013',
-           '30000000-0000-4000-8000-000000000014'
+           '30000000-0000-4000-8000-000000000014',
+           '30000000-0000-4000-8000-000000000021','30000000-0000-4000-8000-000000000022',
+           '30000000-0000-4000-8000-000000000031','30000000-0000-4000-8000-000000000032'
          )
     `);
     // Locations: drop anything a test created, then restore the seeded rows'
@@ -355,6 +374,10 @@ export const ACTORS = {
 export const VENDORS = {
   one: '20000000-0000-4000-8000-000000000001',
   two: '20000000-0000-4000-8000-000000000002',
+  // Scan-capable in the seed. `two` deliberately is NOT, so a test can prove a
+  // scan order is refused at a restaurant that does not take scans.
+  wafflemania: '20000000-0000-4000-8000-000000000003',
+  yellowBar: '20000000-0000-4000-8000-000000000004',
 };
 
 export const MENU = {

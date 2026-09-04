@@ -198,6 +198,17 @@ insert into public.vendors (id, name, phone, status, is_accepting_orders, locati
   ('20000000-0000-4000-8000-000000000002', 'Test Grill Two',    '+233200000012', 'ACTIVE', true,
    '10000000-0000-4000-8000-000000000040', 6);
 
+-- Scan-capable restaurants. DEVELOPMENT ONLY — this file is never applied to a
+-- hosted project (`db:install` installs schema.sql alone), so these exist to
+-- make the scan flow walkable locally and nowhere else. The real Wafflemania
+-- and Yellow Bar are created in production by an administrator through
+-- /admin/vendors, against the same vendor model; nothing here is duplicated.
+insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, location_id, walk_minutes_to_campus) values
+  ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000013', 'ACTIVE', true, true,
+   '10000000-0000-4000-8000-000000000030', 3),
+  ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)',  '+233200000014', 'ACTIVE', true, true,
+   '10000000-0000-4000-8000-000000000040', 5);
+
 insert into public.vendor_users (vendor_id, user_id) values
   ('20000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000011'),
   ('20000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000012');
@@ -215,7 +226,14 @@ insert into public.menu_items (id, vendor_id, name, description, price_pesewas, 
   ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma',         'Chicken, salad, garlic sauce',       2500, true, 1),
   ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger',              'Beef patty, cheese, fries',          4500, true, 2),
   ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie',                 'Baked daily',                        1000, true, 3),
-  ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink',               'Assorted 350ml',                      800, true, 4);
+  ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink',               'Assorted 350ml',                      800, true, 4),
+
+  -- The scan restaurants also sell food normally, so they are not empty stalls
+  -- in the ordinary marketplace. Development data only.
+  ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle',           'Waffle, fried chicken, syrup',       3800, true, 1),
+  ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream',     'Two scoops',                         2200, true, 2),
+  ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce',                  4200, true, 1),
+  ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice',              'Freshly pressed',                    1200, true, 2);
 
 -- ---------------------------------------------------------------------------
 -- Pricing — PLACEHOLDER figures pending a commercial decision
@@ -236,7 +254,12 @@ update public.pricing_config
        vendor_response_seconds = 1800,
        partner_search_seconds = 1800,
        customer_absent_wait_seconds = 60,
-       payment_pending_timeout_seconds = 300
+       payment_pending_timeout_seconds = 300,
+       -- SCAN DELIVERY. GH₵2.00 flat per errand — an AGREED price, unlike the
+       -- placeholders above, and the same figure the migration installs into a
+       -- hosted project. Restated here only because this file rewrites the whole
+       -- pricing row; it is not a local-only override.
+       scan_service_fee_pesewas = 200
  where id;
 
 

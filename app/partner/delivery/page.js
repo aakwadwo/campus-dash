@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
 import { getActiveDelivery, getMyPickupCode } from '@/lib/partner';
+import { scanImageUrl } from '@/lib/scan';
 import { formatPesewas } from '@/lib/util/money';
 import DeliveryActions from './delivery-actions';
+import ScanCollection from './scan-collection';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,13 +16,17 @@ export default async function PartnerDeliveryPage() {
   const delivery = await getActiveDelivery();
   if (!delivery) redirect('/partner');
 
-  // Only the assigned Partner can read this, and only while assigned.
-  const pickupCode =
-    delivery.delivery_status === 'ASSIGNED'
-      ? await getMyPickupCode(delivery.order_id).catch(() => null)
-      : null;
-
   const collecting = delivery.delivery_status === 'ASSIGNED';
+  const isScan = delivery.order_type === 'SCAN';
+
+  // Only the assigned Partner can read either of these, and only while
+  // assigned. A scan errand has no pickup code to read to anybody — there is no
+  // vendor handover — so it fetches the scan instead. The URL is short-lived and
+  // is re-derived on every load, which is what makes losing the assignment
+  // revoke access rather than merely hide the link.
+  const pickupCode =
+    collecting && !isScan ? await getMyPickupCode(delivery.order_id).catch(() => null) : null;
+  const scanUrl = collecting && isScan ? await scanImageUrl(delivery.order_id) : null;
 
   return (
     <main className="mx-auto max-w-md px-4 pt-5 pb-16">
@@ -30,15 +36,41 @@ export default async function PartnerDeliveryPage() {
 
       <header className="mt-3 mb-4">
         <p className="font-mono text-sm">{delivery.order_number}</p>
+        {isScan ? (
+          <p className="text-brand-700 text-xs font-semibold tracking-wide uppercase">
+            Scan delivery
+          </p>
+        ) : null}
         <h1 className="text-2xl font-semibold tracking-tight">
-          {collecting ? 'Collect the order' : 'Deliver the order'}
+          {collecting ? (isScan ? 'Redeem the scan' : 'Collect the order') : 'Deliver the order'}
         </h1>
         <p className="text-brand-700 mt-1 text-sm font-semibold">
           You earn {formatPesewas(delivery.earnings_pesewas)}
         </p>
       </header>
 
-      {collecting ? (
+      {collecting && isScan ? (
+        <>
+          <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+            <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>
+            <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
+            <p className="text-muted text-sm">{delivery.vendor_location}</p>
+          </section>
+
+          <div className="mt-3">
+            <ScanCollection
+              orderId={delivery.order_id}
+              scanUrl={scanUrl}
+              restaurantName={delivery.vendor_name}
+            />
+          </div>
+
+          <section className="text-muted mt-3 rounded-lg bg-white p-4 text-sm ring-1 ring-black/5">
+            Delivering to <strong className="text-ink">{delivery.destination_zone}</strong>. The
+            exact room appears once you confirm the scan was redeemed.
+          </section>
+        </>
+      ) : collecting ? (
         <>
           <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
             <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>

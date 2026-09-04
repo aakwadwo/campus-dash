@@ -103,6 +103,29 @@ export async function setVendorStatusAction(_prev, formData) {
   );
 }
 
+/**
+ * Whether this restaurant honours campus meal scans.
+ *
+ * Off for every vendor until somebody says otherwise, because a scan errand
+ * sends a Partner to a counter expecting to be served for free — and being
+ * wrong about that costs the Partner a walk and the customer their lunch.
+ */
+export async function setVendorScansAction(_prev, formData) {
+  return run(
+    () =>
+      admin.setVendorScans({
+        vendorId: str(formData, 'vendor_id'),
+        accepts: str(formData, 'accepts') === 'true',
+        reason: str(formData, 'reason'),
+      }),
+    (v) =>
+      v.can_accept_scans
+        ? 'This restaurant now accepts meal scans.'
+        : 'This restaurant no longer accepts meal scans.',
+    ['/admin/vendors']
+  );
+}
+
 export async function addVendorUserAction(_prev, formData) {
   // public.users.phone is E.164, and admin_add_vendor_user matches it exactly.
   // Without this, an administrator typing the number the way it is written on a

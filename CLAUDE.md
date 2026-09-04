@@ -8,7 +8,8 @@ Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is whe
 most of the safety lives. `docs/HOSTED-SUPABASE.md` covers running against a
 real hosted project. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
 `docs/VENDOR.md` the vendor module, `docs/CUSTOMER.md` customer ordering,
-`docs/PARTNER.md` the Partner system, `docs/MONEY.md` allocation and settlement,
+`docs/PARTNER.md` the Partner system, `docs/SCAN.md` scan delivery,
+`docs/MONEY.md` allocation and settlement,
 `docs/PAYMENTS.md` the Paystack integration,
 `docs/SECURITY.md` the security model, `docs/NOTIFICATIONS.md` messaging and
 `docs/SMS.md` the Arkesel integration,
@@ -22,6 +23,9 @@ around those as if they were settled.
 
 - Delivery people are **Partners**. Never "runners", never "drivers".
 - Money is **integer pesewas**. 1 GHS = 100 pesewas. Never floats, anywhere.
+- A **scan** is a student's prepaid campus meal entitlement. A **scan delivery**
+  is the errand of redeeming one — Campus Dash sells the errand, never the food.
+  See `docs/SCAN.md`.
 
 ## Hard rules
 

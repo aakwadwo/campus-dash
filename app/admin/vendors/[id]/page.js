@@ -5,6 +5,7 @@ import { formatPesewas, cedisInputFromPesewas } from '@/lib/util/money';
 import { Panel, Badge, Empty } from '../../ui';
 import VendorSettingsForm from './vendor-settings-form';
 import VendorStatusForm from './vendor-status-form';
+import VendorScansForm from './vendor-scans-form';
 import VendorStaffForms from './vendor-staff-forms';
 import MenuForms from './menu-forms';
 
@@ -54,6 +55,13 @@ export default async function VendorDetailPage({ params }) {
 
       <Panel title="Details">
         <VendorSettingsForm vendor={vendor} locations={locations ?? []} />
+      </Panel>
+
+      <Panel
+        title="Scan delivery"
+        description="Whether a Partner may bring a customer's prepaid campus meal scan here to redeem. Campus Dash pays this restaurant nothing for a scan order — the meal is settled by the university."
+      >
+        <VendorScansForm vendor={vendor} />
       </Panel>
 
       <Panel

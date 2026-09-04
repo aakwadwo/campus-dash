@@ -6,6 +6,7 @@ import { actionFailure } from '@/lib/errors';
 
 import { revalidatePath } from 'next/cache';
 import * as partner from '@/lib/partner';
+import * as scan from '@/lib/scan';
 
 /**
  * Partner actions.
@@ -121,4 +122,47 @@ export async function confirmAbsentAction(_prev, formData) {
     'Closed as customer absent. Campus Dash support will follow up.',
     ['/partner', '/partner/delivery']
   );
+}
+
+// --- Scan delivery -----------------------------------------------------------
+// Two reports, and they are reports. Campus Dash has no line into the
+// university's scan system, so what a Partner presses here is their account of
+// what the counter did — which is exactly why redeeming is a deliberate act and
+// not a side effect of having accepted the job.
+
+/**
+ * "The restaurant honoured it and I have the food."
+ *
+ * This is also what puts the delivery into PICKED_UP, so it is the only road to
+ * completing a scan errand. A Partner who never presses it cannot deliver.
+ */
+export async function reportScanRedeemedAction(_prev, formData) {
+  return run(
+    () => scan.reportScanRedeemed(str(formData, 'order_id')),
+    'Scan redeemed. Take the food to the customer.',
+    ['/partner', '/partner/delivery']
+  );
+}
+
+/**
+ * "They would not honour it."
+ *
+ * Records the failure and stops there. No refund is issued and no payout is
+ * cancelled, because no policy says what should happen to the money — an
+ * administrator resolves it. See docs/SCAN.md.
+ */
+export async function reportScanRefusedAction(_prev, formData) {
+  const reason = str(formData, 'reason');
+  if (!reason) {
+    return { ok: false, message: 'Say what happened at the restaurant.' };
+  }
+  return run(
+    () => scan.reportScanRefused(str(formData, 'order_id'), reason),
+    'Recorded. Campus Dash will follow this up — do not pay for the food yourself.',
+    ['/partner', '/partner/delivery']
+  );
+}
+
+function str(formData, name) {
+  return String(formData.get(name) ?? '').trim();
 }
