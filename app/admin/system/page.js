@@ -45,7 +45,7 @@ export default async function AdminSystemPage() {
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">System</h1>
       <p className="text-muted mb-6 text-sm">
         What this deployment can see about itself. Nothing here is a claim about a provider being up
-        — only about what has actually reached us.
+        It says nothing about what never arrived.
       </p>
 
       <StatGrid>
@@ -64,7 +64,7 @@ export default async function AdminSystemPage() {
         <Stat label="Admin actions (24h)" value={system.admin_actions_24h ?? 0} />
         <Stat
           label="Ledger discrepancies"
-          value={recon === null ? '—' : recon.length}
+          value={recon === null ? '-' : recon.length}
           tone={recon && recon.length > 0 ? 'bad' : 'good'}
         />
       </StatGrid>
@@ -85,7 +85,7 @@ export default async function AdminSystemPage() {
               label="Scan service fee"
               value={
                 config.scan_service_fee_pesewas == null ? (
-                  <span className="text-red-700">Not configured — scan ordering will refuse</span>
+                  <span className="text-bad">Not configured, so scan ordering will refuse</span>
                 ) : (
                   `GH₵${(Number(config.scan_service_fee_pesewas) / 100).toFixed(2)} flat`
                 )

@@ -33,7 +33,7 @@ export default function PurgeDocumentsForm({ userId, name, hasFaceImage }) {
       <input type="hidden" name="user_id" value={userId} />
       <p className="text-sm">
         Deletes the live face photograph taken at application. The student ID photograph is not
-        touched — it belongs to the Customer record.
+        touched, because it belongs to the Customer record.
       </p>
       <Field
         label="Reason (recorded in the audit log)"

@@ -206,7 +206,7 @@ export default async function AdminFinancePage({ searchParams }) {
           <select
             name="vendor"
             defaultValue={filters.vendorId ?? ''}
-            className="mt-1 block w-48 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+            className="border-line-strong bg-surface mt-1 block w-48 rounded border px-3 py-1.5 text-sm"
           >
             <option value="">Any vendor</option>
             {(vendorList ?? []).map((v) => (
@@ -222,7 +222,7 @@ export default async function AdminFinancePage({ searchParams }) {
             type="date"
             name="since"
             defaultValue={filters.since ?? ''}
-            className="mt-1 block rounded border border-black/15 px-3 py-1.5 text-sm"
+            className="border-line-strong mt-1 block rounded border px-3 py-1.5 text-sm"
           />
         </label>
         <button
@@ -245,7 +245,7 @@ export default async function AdminFinancePage({ searchParams }) {
           <Empty>
             {anyFilter
               ? 'No allocations match these filters.'
-              : 'No money has been allocated yet — allocations are written when a payment is confirmed.'}
+              : 'No money has been allocated yet. Allocations are written when a payment is confirmed.'}
           </Empty>
         ) : (
           <Table
@@ -276,7 +276,7 @@ export default async function AdminFinancePage({ searchParams }) {
                   <Badge tone={r.order_type === 'SCAN' ? 'warn' : 'neutral'}>{r.order_type}</Badge>
                 </Cell>
                 <Cell>{r.payee_type}</Cell>
-                <Cell>{r.payee_name ?? '—'}</Cell>
+                <Cell>{r.payee_name ?? '-'}</Cell>
                 <Cell numeric>
                   <Cedis pesewas={r.amount_pesewas} />
                 </Cell>
@@ -317,24 +317,24 @@ export default async function AdminFinancePage({ searchParams }) {
             <p className="text-muted text-sm leading-relaxed">
               Campus Dash sells only the errand. The meal was already paid for through the campus
               system, so the food is GH₵0 here and{' '}
-              <strong>no vendor allocation row is written at all</strong> — not a zero-value one.
-              The Partner is owed the delivery fee, Campus Dash the flat scan service fee.
+              <strong>no vendor allocation row is written at all</strong>, not even a zero-value
+              one. The Partner is owed the delivery fee, Campus Dash the flat scan service fee.
             </p>
           </div>
         </div>
-        <div className="mt-4 border-t border-black/5 pt-3">
+        <div className="border-line mt-4 border-t pt-3">
           <h3 className="mb-2 text-sm font-semibold">
             Why &ldquo;Campus Dash&rdquo; is smaller than the PLATFORM rows below
           </h3>
           <p className="text-muted text-sm leading-relaxed">
-            At payment time no Partner exists yet — dispatch has not opened — so the ledger writes
+            At payment time no Partner exists yet (dispatch has not opened), so the ledger writes
             two rows, and everything that is not the food goes on the PLATFORM one: the service fee{' '}
             <em>and</em> the delivery fee. When a delivery is completed, the Partner&apos;s share is
             carved out of that row into a PARTNER row naming the person who walked it. Until then
             the delivery fee is sitting in the platform&apos;s allocation as a{' '}
             <strong>liability, not revenue</strong>, and it is reported above as{' '}
-            <strong>Delivery fees held</strong>. The three figures — service fees earned, delivery
-            fees held, and what Partners have already been allocated — are what the PLATFORM and
+            <strong>Delivery fees held</strong>. The three figures (service fees earned, delivery
+            fees held, and what Partners have already been allocated) are what the PLATFORM and
             PARTNER rows below add up to.
           </p>
           <p className="text-muted mt-3 text-sm leading-relaxed">

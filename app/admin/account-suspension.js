@@ -31,9 +31,9 @@ export default function AccountSuspension({ userId, name, isSuspended, isSelf, c
   if (isSelf) {
     return (
       <p className="text-muted text-sm">
-        This is your own account. An administrator cannot suspend themselves — is_admin() requires
-        an unsuspended account, so it would revoke the access needed to undo it. Ask another
-        administrator.
+        This is your own account. An administrator cannot suspend themselves, because is_admin()
+        requires an unsuspended account, so it would revoke the access needed to undo it. Ask
+        another administrator.
       </p>
     );
   }
@@ -68,7 +68,7 @@ export default function AccountSuspension({ userId, name, isSuspended, isSelf, c
           question={
             isSuspended
               ? `Reinstate ${who}? Ordering, delivering and any vendor access come back immediately.`
-              : `Suspend ${who}? They will be signed out of everything they can do — ordering, any delivery in flight, and any stall they staff — until an administrator reinstates them.`
+              : `Suspend ${who}? They will be signed out of everything they can do (ordering, any delivery in flight, and any stall they staff) until an administrator reinstates them.`
           }
         >
           {isSuspended ? 'Reinstate account' : 'Suspend account'}

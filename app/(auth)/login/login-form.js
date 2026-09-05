@@ -2,6 +2,7 @@
 
 import { useActionState } from 'react';
 import { requestOtp, verifyOtp } from './actions';
+import { Button, ErrorNote } from '@/app/ui';
 
 const INITIAL = { step: 'phone' };
 
@@ -20,7 +21,7 @@ export default function LoginForm({ next }) {
   const phone = codeState.phone ?? phoneState.phone ?? '';
 
   return (
-    <div className="mt-8">
+    <div>
       {!onCodeStep ? (
         <form action={submitPhone} className="space-y-4">
           <label className="block">
@@ -33,7 +34,7 @@ export default function LoginForm({ next }) {
               required
               defaultValue={phone}
               placeholder="020 123 4567"
-              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+              className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-4 text-base transition-colors outline-none"
             />
           </label>
           <SubmitButton pending={sendingCode} label="Send code" pendingLabel="Sending…" />
@@ -53,7 +54,7 @@ export default function LoginForm({ next }) {
               required
               autoFocus
               placeholder="123456"
-              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-center text-2xl tracking-[0.4em] tabular-nums outline-none focus:ring-2"
+              className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint mt-1.5 h-14 w-full border px-4 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums transition-colors outline-none"
             />
           </label>
           <SubmitButton pending={verifying} label="Verify" pendingLabel="Checking…" />
@@ -66,26 +67,22 @@ export default function LoginForm({ next }) {
 
 function SubmitButton({ pending, label, pendingLabel }) {
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="bg-brand-500 text-ink w-full rounded-lg px-4 py-2.5 text-sm font-semibold disabled:opacity-60"
-    >
+    <Button type="submit" size="lg" block disabled={pending}>
       {pending ? pendingLabel : label}
-    </button>
+    </Button>
   );
 }
 
 function Message({ state }) {
   if (state.error) {
-    return (
-      <p role="alert" className="text-sm text-red-700">
-        {state.error}
-      </p>
-    );
+    return <ErrorNote>{state.error}</ErrorNote>;
   }
   if (state.notice) {
-    return <p className="text-muted text-sm">{state.notice}</p>;
+    return (
+      <p className="text-muted text-sm leading-relaxed" role="status">
+        {state.notice}
+      </p>
+    );
   }
   return null;
 }

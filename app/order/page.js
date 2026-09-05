@@ -1,8 +1,20 @@
 import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
 import { listVendors } from '@/lib/customer';
+import SiteHeader from '../site-header';
+import SiteFooter from '../site-footer';
+import VendorSearch from './vendor-search';
+import {
+  Container,
+  Callout,
+  EmptyState,
+  ScanIcon,
+  StoreIcon,
+  ChevronRightIcon,
+  TextLink,
+} from '../ui';
 
-export const metadata = { title: 'Order · Campus Dash' };
+export const metadata = { title: 'Browse vendors · Campus Dash' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -13,79 +25,79 @@ export const dynamic = 'force-dynamic';
  * signed out as it does signed in. What an account (and student onboarding)
  * buys is the ability to place an order, and that is enforced in
  * submit_order_for(), not by hiding the menu.
+ *
+ * THE GATE IS AN INVITATION, NOT A WALL, and it sits below the vendors rather
+ * than above them. A visitor who has not seen anything worth buying has no
+ * reason to make an account, so leading with the sign-in prompt was asking for
+ * commitment before showing the goods.
+ *
+ * Filtering happens in the browser over the list already rendered. There is no
+ * vendor search RPC and inventing one to make the page feel richer would be
+ * building backend for a screenshot; with a campus-sized catalogue a client
+ * filter is also simply the right tool.
  */
 export default async function VendorListPage() {
   const me = await getCapabilities();
   const vendors = await listVendors();
 
+  const open = vendors.filter((v) => v.is_accepting_orders);
+  const closed = vendors.filter((v) => !v.is_accepting_orders);
+
   return (
-    <main className="mx-auto max-w-md px-4 pt-5 pb-16">
-      <header className="mb-5 flex items-baseline justify-between gap-3">
-        <div>
-          <p className="text-muted text-xs font-medium tracking-[0.2em] uppercase">Campus Dash</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Order</h1>
-        </div>
-        {me.can_order ? (
-          <Link href="/orders" className="text-brand-700 text-sm underline underline-offset-4">
-            My orders
+    <div className="min-h-dvh">
+      <SiteHeader active="browse" />
+
+      <main className="pb-24 sm:pb-0">
+        <Container size="wide" className="pt-8 sm:pt-12">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+            <h1 className="text-display text-2xl font-semibold sm:text-4xl">Browse food</h1>
+            {me.can_order ? (
+              <Link
+                href="/orders"
+                className="text-muted hover:text-ink press-sm hidden shrink-0 items-center gap-1 rounded-full text-sm font-semibold transition-colors sm:inline-flex"
+              >
+                My orders
+                <ChevronRightIcon className="size-4" />
+              </Link>
+            ) : null}
+          </div>
+
+          {/* The scan route, deliberately quiet. It is not a vendor and it
+              answers a different question from "what is open?", so it gets one
+              compact row rather than a highlighted panel that competes with the
+              food. Somebody arriving with a scan already knows what they want. */}
+          <Link
+            href="/scan"
+            className="press-sm border-line mt-3 flex min-h-12 items-center gap-2 border-b pb-4 text-sm font-medium"
+          >
+            <ScanIcon className="text-brand-700 size-[18px] shrink-0" />
+            <span>Have a meal scan? Redeem it</span>
+            <ChevronRightIcon className="text-faint ml-auto size-4 shrink-0" />
           </Link>
-        ) : null}
-      </header>
 
-      <OrderingGate me={me} />
+          <VendorSearch open={open} closed={closed} />
 
-      {/* The second way in. It is not a vendor, so it does not belong in the
-          list below — and it answers a different question from "what is open?":
-          somebody arriving here with a scan already knows what they want. */}
-      <Link
-        href="/scan"
-        className="border-brand-600/60 bg-brand-50/60 mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-3"
-      >
-        <span>
-          <span className="block text-sm font-semibold">Have a meal scan?</span>
-          <span className="text-muted block text-xs">
-            Send a Partner to redeem it. You pay only for the errand.
-          </span>
-        </span>
-        <span className="text-brand-700 text-sm font-semibold">→</span>
-      </Link>
+          {vendors.length === 0 ? (
+            <EmptyState
+              icon={<StoreIcon className="size-6" />}
+              title="No vendors yet"
+              description="Campus Dash is still signing up stalls around Academic City. Check back shortly."
+            />
+          ) : null}
 
-      {vendors.length ? (
-        <ul className="space-y-2">
-          {vendors.map((vendor) => (
-            <li key={vendor.id}>
-              {vendor.is_accepting_orders ? (
-                <Link
-                  href={`/order/${vendor.id}`}
-                  className="flex items-center justify-between gap-3 rounded-lg bg-white px-4 py-4 ring-1 ring-black/5"
-                >
-                  <span className="font-medium">{vendor.name}</span>
-                  <span className="text-brand-700 text-sm font-semibold">Open</span>
-                </Link>
-              ) : (
-                <div className="flex items-center justify-between gap-3 rounded-lg bg-black/[0.03] px-4 py-4 ring-1 ring-black/5">
-                  <span className="text-muted font-medium">{vendor.name}</span>
-                  <span className="text-muted text-sm">Closed</span>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-muted py-10 text-center text-sm">
-          No vendors are set up yet. Check back soon.
-        </p>
-      )}
-    </main>
+          {/* The gate, after the goods. Two different states, because "sign in"
+              and "finish your student details" are different problems and
+              telling someone the wrong one wastes their time. */}
+          <OrderingGate me={me} className="mt-12" />
+        </Container>
+      </main>
+
+      <SiteFooter />
+    </div>
   );
 }
 
-/**
- * Says what is missing and links to the one thing that fixes it. Two different
- * states, because "sign in" and "finish your student details" are two different
- * problems and telling someone the wrong one wastes their time.
- */
-export function OrderingGate({ me }) {
+export function OrderingGate({ me, className = '' }) {
   if (me.can_order) return null;
 
   const { href, label, body } = !me.authenticated
@@ -101,11 +113,12 @@ export function OrderingGate({ me }) {
       };
 
   return (
-    <div className="border-brand-600/60 bg-brand-50/60 mb-5 rounded-lg border p-4">
-      <p className="text-sm leading-relaxed">{body}</p>
-      <Link href={href} className="text-brand-700 mt-2 inline-block text-sm font-semibold">
-        {label} →
-      </Link>
-    </div>
+    <Callout className={className}>
+      <p className="leading-relaxed">{body}</p>
+      <TextLink href={href} className="mt-1 inline-flex min-h-11 items-center gap-1">
+        {label}
+        <ChevronRightIcon className="size-4" />
+      </TextLink>
+    </Callout>
   );
 }

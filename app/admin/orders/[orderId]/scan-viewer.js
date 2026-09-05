@@ -22,8 +22,8 @@ export default function ScanViewer({ orderId, hasScan }) {
   if (!hasScan) {
     return (
       <p className="text-muted text-sm">
-        No scan is attached to this order. That is itself worth noting — a scan order cannot be
-        created without one.
+        No scan is attached to this order. That is itself worth noting, because a scan order cannot
+        be created without one.
       </p>
     );
   }
@@ -43,7 +43,7 @@ export default function ScanViewer({ orderId, hasScan }) {
       </p>
 
       {state?.message && !state.ok ? (
-        <p className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{state.message}</p>
+        <p className="bg-bad-bg text-bad mt-3 rounded px-3 py-2 text-sm">{state.message}</p>
       ) : null}
 
       {state?.ok && state.url ? (
@@ -63,7 +63,7 @@ export default function ScanViewer({ orderId, hasScan }) {
             <img
               src={state.url}
               alt="The customer's meal scan"
-              className="max-w-md rounded ring-1 ring-black/10"
+              className="ring-line max-w-md rounded ring-1"
             />
           )}
         </div>

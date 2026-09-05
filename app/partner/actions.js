@@ -158,7 +158,7 @@ export async function reportScanRefusedAction(_prev, formData) {
   }
   return run(
     () => scan.reportScanRefused(str(formData, 'order_id'), reason),
-    'Recorded. Campus Dash will follow this up — do not pay for the food yourself.',
+    'Recorded. Campus Dash will follow this up. Do not pay for the food yourself.',
     ['/partner', '/partner/delivery']
   );
 }

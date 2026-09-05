@@ -16,9 +16,9 @@ import { formatPesewas } from '@/lib/util/money';
 const GROUPS = [
   {
     key: 'NEW',
-    title: 'New — needs your answer',
-    tone: 'border-amber-300 bg-amber-50',
-    dot: 'bg-amber-500',
+    title: 'New: needs your answer',
+    tone: 'border-warn/40 bg-warn-bg',
+    dot: 'bg-warn',
   },
   {
     key: 'PREPARING',
@@ -27,7 +27,7 @@ const GROUPS = [
     dot: 'bg-brand-600',
   },
   { key: 'READY', title: 'Ready', tone: 'border-brand-600 bg-brand-100', dot: 'bg-brand-700' },
-  { key: 'CLOSED', title: 'Finished today', tone: 'border-black/10 bg-white', dot: 'bg-black/20' },
+  { key: 'CLOSED', title: 'Finished today', tone: 'border-line bg-surface', dot: 'bg-black/20' },
 ];
 
 export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000 }) {
@@ -49,7 +49,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
           <div>
             <h1 className="text-xl font-semibold tracking-tight">{vendor.name}</h1>
             <p className="text-muted text-sm">
-              {vendor.is_accepting_orders ? 'Open for orders' : 'Closed — no new orders'}
+              {vendor.is_accepting_orders ? 'Open for orders' : 'Closed to new orders'}
             </p>
           </div>
           <form action={toggleOpen}>
@@ -64,7 +64,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               disabled={toggling}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${
                 vendor.is_accepting_orders
-                  ? 'text-ink bg-white ring-1 ring-black/15'
+                  ? 'text-ink bg-surface ring-line-strong ring-1'
                   : 'bg-brand-500 text-ink'
               }`}
             >
@@ -73,7 +73,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
           </form>
         </div>
         {openState.message ? (
-          <p className={`mt-2 text-sm ${openState.ok ? 'text-brand-700' : 'text-red-700'}`}>
+          <p className={`mt-2 text-sm ${openState.ok ? 'text-brand-700' : 'text-bad'}`}>
             {openState.message}
           </p>
         ) : null}
@@ -82,9 +82,9 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
       {pending > 0 ? (
         <p
           role="alert"
-          className="mb-4 rounded-lg bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-900"
+          className="press bg-warn-bg text-warn mb-4 rounded-full px-4 py-3 text-sm font-semibold transition-colors"
         >
-          {pending === 1 ? '1 new order is waiting' : `${pending} new orders are waiting`} — answer
+          {pending === 1 ? '1 new order is waiting' : `${pending} new orders are waiting`}. Answer
           before the countdown runs out.
         </p>
       ) : null}
@@ -107,7 +107,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
                 ))}
               </ul>
             ) : (
-              <p className="text-muted rounded-lg border border-dashed border-black/10 px-4 py-4 text-sm">
+              <p className="text-muted rounded-card border-line border border-dashed px-4 py-4 text-sm">
                 Nothing here.
               </p>
             )}
@@ -146,7 +146,7 @@ function OrderCard({ order, vendorId, tone }) {
       </div>
       {order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
         <p className="text-brand-700 mt-1 text-sm font-medium">
-          {order.partner_assigned ? 'Partner assigned — coming to collect' : 'Finding a Partner…'}
+          {order.partner_assigned ? 'Partner assigned, coming to collect' : 'Finding a Partner…'}
         </p>
       ) : null}
     </Link>
@@ -167,7 +167,7 @@ function PaymentTag({ order }) {
     order.payment_status === 'PAID'
       ? 'text-brand-700'
       : order.payment_status === 'FAILED'
-        ? 'text-red-700'
+        ? 'text-bad'
         : 'text-muted';
 
   return <span className={`font-medium ${tone}`}>{label}</span>;
@@ -194,11 +194,9 @@ function useCountFrom(initial, step) {
 function Countdown({ seconds }) {
   const left = useCountFrom(seconds, -1);
   if (seconds == null) return null;
-  if (left <= 0) return <span className="font-semibold text-red-700">expiring…</span>;
+  if (left <= 0) return <span className="text-bad font-semibold">expiring…</span>;
   return (
-    <span
-      className={`font-semibold tabular-nums ${left <= 15 ? 'text-red-700' : 'text-amber-800'}`}
-    >
+    <span className={`font-semibold tabular-nums ${left <= 15 ? 'text-bad' : 'text-warn'}`}>
       {left}s to answer
     </span>
   );

@@ -33,8 +33,8 @@ export function ConfirmButton({
 
   const styles = {
     primary: 'bg-brand-500 text-ink',
-    secondary: 'bg-white text-ink ring-1 ring-black/15',
-    danger: 'bg-white text-red-700 ring-1 ring-red-200',
+    secondary: 'bg-surface text-ink ring-1 ring-line-strong',
+    danger: 'bg-surface text-bad ring-1 ring-bad/30',
   };
   const base = 'rounded px-3 py-1.5 text-sm font-semibold';
 
@@ -52,8 +52,8 @@ export function ConfirmButton({
   }
 
   return (
-    <div className="rounded border border-red-200 bg-red-50 p-3">
-      <p className="mb-2 text-sm text-red-900">{question}</p>
+    <div className="border-bad/30 bg-bad-bg rounded border p-3">
+      <p className="text-bad mb-2 text-sm">{question}</p>
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="submit"
@@ -65,7 +65,7 @@ export function ConfirmButton({
         <button
           type="button"
           onClick={() => setArmed(false)}
-          className={`${base} text-ink bg-white ring-1 ring-black/15`}
+          className={`${base} text-ink bg-surface ring-line-strong ring-1`}
         >
           Cancel
         </button>

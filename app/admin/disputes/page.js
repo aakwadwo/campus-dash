@@ -27,8 +27,8 @@ export default async function AdminDisputesPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Disputes and exceptions</h1>
       <p className="text-muted mb-6 text-sm">
-        Orders, payouts and ledger discrepancies that a person has to resolve. Oldest first — the
-        thing that has been broken longest has been costing somebody the longest.
+        Orders, payouts and ledger discrepancies that a person has to resolve. Oldest first, because
+        the thing that has been broken longest has been costing somebody the longest.
       </p>
 
       {rows === null ? (
@@ -87,10 +87,10 @@ function Queue({ rows }) {
                 {r.order_number}
               </Link>
             ) : (
-              <span className="text-muted text-xs">—</span>
+              <span className="text-muted text-xs">-</span>
             )}
           </Cell>
-          <Cell>{r.subject ?? '—'}</Cell>
+          <Cell>{r.subject ?? '-'}</Cell>
           <Cell muted>{r.detail}</Cell>
           <Cell numeric>
             <Cedis pesewas={r.amount_pesewas} />

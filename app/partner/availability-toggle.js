@@ -14,7 +14,7 @@ export default function AvailabilityToggle({ available, hasActive }) {
   return (
     <form
       action={(formData) => start(() => setAvailabilityAction(formData))}
-      className="mt-4 flex items-center gap-3 rounded-lg bg-white px-4 py-3 ring-1 ring-black/5"
+      className="rounded-card bg-surface ring-line mt-4 flex items-center gap-3 px-4 py-3 ring-1"
     >
       <input type="hidden" name="available" value={available ? 'false' : 'true'} />
       <span
@@ -25,7 +25,7 @@ export default function AvailabilityToggle({ available, hasActive }) {
       <button
         type="submit"
         disabled={pending || hasActive}
-        className="ml-auto rounded px-3 py-1.5 text-sm font-semibold ring-1 ring-black/15 disabled:opacity-50"
+        className="ring-line-strong ml-auto rounded px-3 py-1.5 text-sm font-semibold ring-1 disabled:opacity-50"
       >
         {available ? 'Go offline' : 'Go online'}
       </button>

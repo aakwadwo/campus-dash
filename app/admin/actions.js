@@ -360,7 +360,7 @@ export async function setUserSuspendedAction(_prev, formData) {
       }),
     (u) =>
       u.is_suspended
-        ? 'Account suspended. Every capability it held — ordering, delivering, vendor staff — is now refused.'
+        ? 'Account suspended. Every capability it held (ordering, delivering, vendor staff) is now refused.'
         : 'Account reinstated. The capabilities it holds are available again; a Partner must go online themselves.',
     ['/admin/customers', '/admin/partners']
   );
@@ -441,7 +441,7 @@ export async function runSettlementAction(_prev, formData) {
     // point of the threshold being visible.
     const deferred = result.deferredPayees
       ? ` ${formatPesewas(result.deferredPesewas)} held for ${result.deferredPayees} ` +
-        `${result.deferredPayees === 1 ? 'payee' : 'payees'} under the minimum — still owed, ` +
+        `${result.deferredPayees === 1 ? 'payee' : 'payees'} under the minimum, still owed, ` +
         `and swept into a later run.`
       : '';
 
@@ -453,7 +453,7 @@ export async function runSettlementAction(_prev, formData) {
             ? 'Nothing was moved.' + deferred
             : 'Nothing was owed for that period.'
           : `${result.accepted} of ${result.attempted} payouts sent to the provider.` +
-            (result.failed ? ` ${result.failed} failed — you can retry them.` : '') +
+            (result.failed ? ` ${result.failed} failed, and you can retry them.` : '') +
             deferred,
     };
   } catch (error) {
@@ -546,7 +546,7 @@ export async function viewScanAction(_prev, formData) {
     }
     // The URL is handed to the browser and never logged: it is a bearer link to
     // a private document for as long as it lives.
-    return { ok: true, message: 'Link ready — it expires shortly.', url };
+    return { ok: true, message: 'Link ready. It expires shortly.', url };
   } catch (error) {
     return actionFailure(error, CONTEXT);
   }

@@ -49,7 +49,7 @@ export default async function LocationsPage() {
       >
         {tree === null ? (
           <Unavailable>
-            The location tree could not be loaded. This is not an empty campus — do not add
+            The location tree could not be loaded. This is not an empty campus, so do not add
             locations from this screen until it loads.
           </Unavailable>
         ) : tree.length ? (
@@ -65,7 +65,7 @@ export default async function LocationsPage() {
             </thead>
             <tbody>
               {tree.map((node) => (
-                <tr key={node.id} className="border-t border-black/5">
+                <tr key={node.id} className="border-line border-t">
                   <td className="py-2" style={{ paddingLeft: `${node.depth * 1.25}rem` }}>
                     {node.depth > 0 ? <span className="text-muted">└ </span> : null}
                     {node.name}
@@ -75,7 +75,7 @@ export default async function LocationsPage() {
                     {node.is_deliverable ? <Badge tone="good">yes</Badge> : <Badge>no</Badge>}
                   </td>
                   <td className="text-muted py-2 tabular-nums">
-                    {node.walk_minutes == null ? '—' : `${node.walk_minutes} min`}
+                    {node.walk_minutes == null ? '-' : `${node.walk_minutes} min`}
                   </td>
                   <td className="py-2">
                     {node.is_active ? (

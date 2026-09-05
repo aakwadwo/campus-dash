@@ -26,7 +26,7 @@ export default async function AdminCustomersPage({ searchParams }) {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Customers</h1>
       <p className="text-muted mb-5 text-sm">
-        Everyone who has completed student onboarding. Identity documents stay private — open a
+        Everyone who has completed student onboarding. Identity documents stay private, so open a
         record to review one.
       </p>
 
@@ -37,7 +37,7 @@ export default async function AdminCustomersPage({ searchParams }) {
             name="q"
             defaultValue={search ?? ''}
             placeholder="Name, phone, email or student ID"
-            className="mt-1 block w-72 rounded border border-black/15 px-3 py-1.5 text-sm"
+            className="border-line-strong mt-1 block w-72 rounded border px-3 py-1.5 text-sm"
           />
         </label>
         <button
@@ -72,7 +72,7 @@ export default async function AdminCustomersPage({ searchParams }) {
                     href={`/admin/customers/${c.user_id}`}
                     className="text-brand-700 underline underline-offset-4"
                   >
-                    {c.full_name ?? '—'}
+                    {c.full_name ?? '-'}
                   </Link>
                 </Cell>
                 <Cell mono>{c.phone}</Cell>

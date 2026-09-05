@@ -28,7 +28,7 @@ export default async function PartnerHome() {
   // Not applied yet.
   if (!application) {
     return (
-      <main className="mx-auto max-w-md px-4 pt-6 pb-16">
+      <main className="mx-auto max-w-2xl px-4 pt-6 pb-16">
         <h1 className="text-2xl font-semibold tracking-tight">Deliver with Campus Dash</h1>
         <p className="text-muted mt-2 text-sm leading-relaxed">
           Pick up orders from stalls around Academic City and bring them to other students. You keep
@@ -41,7 +41,7 @@ export default async function PartnerHome() {
         </ul>
         <Link
           href="/partner/apply"
-          className="bg-brand-500 text-ink mt-6 block rounded-lg py-4 text-center text-base font-semibold"
+          className="press bg-brand-500 text-ink mt-6 block rounded-full py-4 text-center text-base font-semibold transition-colors"
         >
           Apply to be a Partner
         </Link>
@@ -52,18 +52,18 @@ export default async function PartnerHome() {
   if (application.status !== 'APPROVED') {
     const copy = STATUS_COPY[application.status] ?? STATUS_COPY.PENDING_REVIEW;
     return (
-      <main className="mx-auto max-w-md px-4 pt-6 pb-16">
+      <main className="mx-auto max-w-2xl px-4 pt-6 pb-16">
         <h1 className="text-2xl font-semibold tracking-tight">{copy.title}</h1>
         <p className="text-muted mt-2 text-sm leading-relaxed">{copy.body}</p>
         {application.review_notes ? (
-          <p className="mt-3 rounded-lg bg-white px-4 py-3 text-sm ring-1 ring-black/5">
+          <p className="rounded-card bg-surface ring-line mt-3 px-4 py-3 text-sm ring-1">
             {application.review_notes}
           </p>
         ) : null}
         {application.status === 'REJECTED' ? (
           <Link
             href="/partner/apply"
-            className="mt-6 block rounded-lg bg-white py-3 text-center text-sm font-semibold ring-1 ring-black/15"
+            className="press bg-surface ring-line-strong mt-6 block rounded-full py-3 text-center text-sm font-semibold ring-1 transition-colors"
           >
             Apply again
           </Link>
@@ -79,7 +79,7 @@ export default async function PartnerHome() {
   ]);
 
   return (
-    <main className="mx-auto max-w-md px-4 pt-5 pb-16">
+    <main className="mx-auto max-w-2xl px-4 pt-5 pb-16">
       <h1 className="text-xl font-semibold tracking-tight">{me.full_name ?? 'Partner'}</h1>
 
       <AvailabilityToggle available={application.is_available} hasActive={Boolean(active)} />
@@ -87,7 +87,7 @@ export default async function PartnerHome() {
       {active ? (
         <Link
           href="/partner/delivery"
-          className="bg-brand-500 text-ink mt-4 block rounded-lg px-4 py-4"
+          className="bg-brand-500 text-ink rounded-card mt-4 block px-4 py-4"
         >
           <p className="text-sm opacity-90">You are carrying an order</p>
           <p className="mt-0.5 font-mono text-lg font-semibold">{active.order_number}</p>
@@ -100,13 +100,13 @@ export default async function PartnerHome() {
       ) : (
         <Link
           href="/partner/offers"
-          className="mt-4 block rounded-lg bg-white px-4 py-4 text-center font-semibold ring-1 ring-black/5"
+          className="press bg-surface ring-line mt-4 block rounded-full px-4 py-4 text-center font-semibold ring-1 transition-colors"
         >
           See available deliveries
         </Link>
       )}
 
-      <section className="mt-6 rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line mt-6 p-4 ring-1">
         <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Your earnings</h2>
         <dl className="space-y-1 text-sm">
           <Row label="Deliveries completed" value={String(earnings?.delivered_count ?? 0)} />
@@ -118,9 +118,9 @@ export default async function PartnerHome() {
       </section>
 
       {history?.length ? (
-        <section className="mt-4 rounded-lg bg-white p-4 ring-1 ring-black/5">
+        <section className="rounded-card bg-surface ring-line mt-4 p-4 ring-1">
           <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Recent deliveries</h2>
-          <ul className="divide-y divide-black/5 text-sm">
+          <ul className="divide-line divide-y text-sm">
             {history.map((job) => (
               <li key={job.order_id} className="flex items-baseline justify-between gap-3 py-2">
                 <span>

@@ -30,7 +30,7 @@ export default function DeliveryActions({ delivery }) {
     <div className="space-y-3">
       {carrying ? (
         <>
-          <form action={complete} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <form action={complete} className="rounded-card bg-surface ring-line p-4 ring-1">
             {hidden}
             <label className="block text-sm font-medium">
               Delivery code from the customer
@@ -41,13 +41,13 @@ export default function DeliveryActions({ delivery }) {
                 pattern="\d{4}"
                 maxLength={4}
                 placeholder="1234"
-                className="mt-1 w-full rounded border border-black/15 px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
+                className="border-line-strong mt-1 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
               />
             </label>
             <button
               type="submit"
               disabled={completing}
-              className="bg-brand-500 text-ink mt-3 w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
+              className="press bg-brand-500 text-ink mt-3 w-full rounded-full py-4 text-base font-semibold transition-colors disabled:opacity-55"
             >
               {completing ? 'Confirming…' : 'Complete delivery'}
             </button>
@@ -63,7 +63,7 @@ export default function DeliveryActions({ delivery }) {
           />
         </>
       ) : showCancel ? (
-        <form action={cancel} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+        <form action={cancel} className="rounded-card bg-surface ring-line p-4 ring-1">
           {hidden}
           <label className="block text-sm font-medium">
             Why can you not do this one?
@@ -72,25 +72,25 @@ export default function DeliveryActions({ delivery }) {
               required
               minLength={3}
               placeholder="Something came up"
-              className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+              className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
             />
           </label>
           <p className="text-muted mt-2 text-xs">
-            No penalty. The order stays exactly as it is and goes back to other Partners — the
+            No penalty. The order stays exactly as it is and goes back to other Partners, and the
             vendor does not have to do anything.
           </p>
           <div className="mt-3 flex gap-2">
             <button
               type="submit"
               disabled={cancelling}
-              className="flex-1 rounded-lg bg-white py-3 text-sm font-semibold text-red-700 ring-1 ring-red-200"
+              className="press bg-surface text-bad ring-bad/30 flex-1 rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
             >
               {cancelling ? 'Cancelling…' : 'Confirm cancel'}
             </button>
             <button
               type="button"
               onClick={() => setShowCancel(false)}
-              className="rounded-lg px-4 py-3 text-sm font-semibold"
+              className="press rounded-full px-4 py-3 text-sm font-semibold transition-colors"
             >
               Keep it
             </button>
@@ -100,7 +100,7 @@ export default function DeliveryActions({ delivery }) {
         <button
           type="button"
           onClick={() => setShowCancel(true)}
-          className="w-full rounded-lg bg-white py-3 text-sm font-semibold text-red-700 ring-1 ring-red-200"
+          className="press bg-surface text-bad ring-bad/30 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
         >
           I cannot do this delivery
         </button>
@@ -110,7 +110,7 @@ export default function DeliveryActions({ delivery }) {
         <p
           role="status"
           className={`rounded-lg px-4 py-3 text-sm font-medium ${
-            result.ok ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-700'
+            result.ok ? 'bg-brand-50 text-brand-700' : 'bg-bad-bg text-bad'
           }`}
         >
           {result.message}
@@ -137,7 +137,7 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
         <button
           type="submit"
           disabled={reporting}
-          className="w-full rounded-lg bg-white py-3 text-sm font-semibold ring-1 ring-black/15 disabled:opacity-60"
+          className="press bg-surface ring-line-strong w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors disabled:opacity-55"
         >
           {reporting ? 'Recording…' : 'Customer is not responding'}
         </button>
@@ -147,7 +147,7 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
 
   if (waitLeft > 0) {
     return (
-      <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div className="rounded-card bg-warn-bg text-warn px-4 py-3 text-sm">
         <p className="font-semibold">Waiting recorded.</p>
         <p className="mt-1">
           Keep trying to reach them. You can close this in{' '}
@@ -159,16 +159,16 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
   }
 
   return (
-    <form action={confirmAbsent} className="rounded-lg bg-amber-50 p-4">
+    <form action={confirmAbsent} className="rounded-card bg-warn-bg p-4">
       {hidden}
-      <p className="text-sm text-amber-900">
+      <p className="text-warn text-sm">
         You have waited long enough. Closing this records your earning and hands the food question
         to Campus Dash support.
       </p>
       <button
         type="submit"
         disabled={confirming}
-        className="mt-3 w-full rounded-lg bg-amber-800 py-3 text-sm font-semibold text-white disabled:opacity-60"
+        className="press mt-3 w-full rounded-full bg-amber-800 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
       >
         {confirming ? 'Closing…' : 'Close as customer absent'}
       </button>

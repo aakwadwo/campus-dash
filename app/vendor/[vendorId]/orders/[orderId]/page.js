@@ -8,12 +8,12 @@ export const dynamic = 'force-dynamic';
 
 const STATUS_COPY = {
   SUBMITTED: 'Waiting for your answer',
-  ACCEPTED: 'Accepted — waiting for payment',
+  ACCEPTED: 'Accepted, waiting for payment',
   PREPARING: 'Preparing',
   READY: 'Ready',
   COMPLETED: 'Completed',
   REJECTED: 'You rejected this order',
-  EXPIRED: 'Expired — no answer in time',
+  EXPIRED: 'Expired, no answer in time',
   CANCELLED: 'Cancelled',
   CANCELLED_BY_VENDOR: 'You cancelled this order',
 };
@@ -44,9 +44,9 @@ export default async function VendorOrderPage({ params }) {
         ) : null}
       </header>
 
-      <section className="mb-4 rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line mb-4 p-4 ring-1">
         <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Items</h2>
-        <ul className="divide-y divide-black/5">
+        <ul className="divide-line divide-y">
           {order.items.map((item, index) => (
             <li key={index} className="flex items-baseline justify-between gap-3 py-2">
               <span>
@@ -57,7 +57,7 @@ export default async function VendorOrderPage({ params }) {
           ))}
         </ul>
 
-        <dl className="mt-3 space-y-1 border-t border-black/5 pt-3 text-sm">
+        <dl className="border-line mt-3 space-y-1 border-t pt-3 text-sm">
           <Row label="Food" value={formatPesewas(order.subtotal_pesewas)} />
           <Row label="Service fee" value={formatPesewas(order.service_fee_pesewas)} />
           {order.delivery_fee_pesewas > 0 ? (
@@ -71,7 +71,7 @@ export default async function VendorOrderPage({ params }) {
         </p>
       </section>
 
-      <section className="mb-4 rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line mb-4 p-4 ring-1">
         <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Details</h2>
         <dl className="space-y-1 text-sm">
           <Row
@@ -85,7 +85,7 @@ export default async function VendorOrderPage({ params }) {
           {order.fulfilment_type === 'DELIVERY' && order.order_status === 'READY' ? (
             <Row
               label="Partner"
-              value={order.partner_assigned ? 'Assigned — coming to collect' : 'Searching…'}
+              value={order.partner_assigned ? 'Assigned, coming to collect' : 'Searching…'}
             />
           ) : null}
           <Row label="Order age" value={formatAge(order.age_seconds)} />
@@ -118,7 +118,7 @@ function paymentCopy(status) {
 }
 
 function formatAge(seconds) {
-  if (seconds == null) return '—';
+  if (seconds == null) return '-';
   const minutes = Math.floor(seconds / 60);
   if (minutes < 1) return 'just now';
   if (minutes < 60) return `${minutes} min`;

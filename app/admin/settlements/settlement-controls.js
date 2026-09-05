@@ -16,7 +16,7 @@ export default function SettlementControls() {
   return (
     <Panel
       title="Run a settlement"
-      description="Idempotent — pressing twice for the same period pays nobody twice."
+      description="Idempotent: pressing twice for the same period pays nobody twice."
     >
       <div className="flex flex-wrap gap-3">
         <form action={run}>

@@ -45,8 +45,8 @@ export default async function VendorDetailPage({ params }) {
         </p>
         <h1 className="mb-4 text-2xl font-semibold tracking-tight">Vendor</h1>
         <Unavailable>
-          This vendor could not be loaded. That is not the same as it not existing — do not create a
-          replacement from this screen.
+          This vendor could not be loaded. That is not the same as it not existing, so do not create
+          a replacement from this screen.
         </Unavailable>
       </>
     );
@@ -112,14 +112,14 @@ export default async function VendorDetailPage({ params }) {
 
       <Panel
         title="Scan delivery"
-        description="Whether a Partner may bring a customer's prepaid campus meal scan here to redeem. Campus Dash pays this restaurant nothing for a scan order — the meal is settled by the university."
+        description="Whether a Partner may bring a customer's prepaid campus meal scan here to redeem. Campus Dash pays this restaurant nothing for a scan order, because the meal is settled by the university."
       >
         <VendorScansForm vendor={vendor} />
       </Panel>
 
       <Panel
         title="Staff"
-        description="They must have signed in once — we never create an account on someone's behalf."
+        description="They must have signed in once. We never create an account on someone's behalf."
       >
         {staffRows === null ? (
           <Unavailable>The staff list could not be loaded.</Unavailable>
@@ -131,10 +131,10 @@ export default async function VendorDetailPage({ params }) {
       <Panel title="Menu" description="Changing a price never alters an order already placed.">
         {menu === null ? (
           <Unavailable>
-            The menu could not be loaded. This vendor may well have one — do not re-enter it.
+            The menu could not be loaded. This vendor may well have one, so do not re-enter it.
           </Unavailable>
         ) : menu.length ? (
-          <ul className="mb-6 divide-y divide-black/5 text-sm">
+          <ul className="divide-line mb-6 divide-y text-sm">
             {menu.map((item) => (
               <li key={item.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
                 <span className="font-medium">{item.name}</span>

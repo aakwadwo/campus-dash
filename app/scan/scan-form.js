@@ -68,18 +68,18 @@ export default function ScanForm({ restaurants, locations }) {
 
       <ScanUpload scan={scan} onUploaded={setScan} />
 
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line p-4 ring-1">
         <label className="block">
           <span className="text-sm font-medium">Which restaurant?</span>
           <select
             value={vendorId}
             onChange={(event) => setVendorId(event.target.value)}
-            className="mt-2 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-sm"
+            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
           >
             {restaurants.map((r) => (
               <option key={r.id} value={r.id} disabled={!r.is_accepting_orders}>
                 {r.name}
-                {r.is_accepting_orders ? '' : ' — closed'}
+                {r.is_accepting_orders ? '' : ' (closed)'}
               </option>
             ))}
           </select>
@@ -90,7 +90,7 @@ export default function ScanForm({ restaurants, locations }) {
           <select
             value={locationId}
             onChange={(event) => setLocationId(event.target.value)}
-            className="mt-2 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-sm"
+            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
           >
             {locations.map((l) => (
               <option key={l.location_id} value={l.location_id}>
@@ -107,7 +107,7 @@ export default function ScanForm({ restaurants, locations }) {
             value={note}
             onChange={(event) => setNote(event.target.value)}
             placeholder="Call when you reach the gate"
-            className="mt-2 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-sm"
+            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
           />
         </label>
       </section>
@@ -115,13 +115,13 @@ export default function ScanForm({ restaurants, locations }) {
       <MoneyPanel quote={quote} quoting={quoting} error={quoteError} />
 
       {state?.message && !state.ok ? (
-        <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-800">{state.message}</p>
+        <p className="rounded-card bg-bad-bg text-bad px-4 py-3 text-sm">{state.message}</p>
       ) : null}
 
       <button
         type="submit"
         disabled={!ready || submitting}
-        className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
+        className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
       >
         {submitting ? 'Creating…' : 'Continue to payment'}
       </button>
@@ -139,7 +139,7 @@ export default function ScanForm({ restaurants, locations }) {
 function MoneyPanel({ quote, quoting, error }) {
   if (error) {
     return (
-      <section className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+      <section className="rounded-card bg-warn-bg text-warn p-4 text-sm">
         <p className="font-semibold">Scan delivery is unavailable right now.</p>
         <p className="mt-1">{error}</p>
       </section>
@@ -147,7 +147,7 @@ function MoneyPanel({ quote, quoting, error }) {
   }
 
   return (
-    <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+    <section className="rounded-card bg-surface ring-line p-4 ring-1">
       <h2 className="text-muted text-xs font-medium tracking-wide uppercase">What you pay</h2>
 
       <dl className="mt-3 space-y-2 text-sm">
@@ -160,15 +160,15 @@ function MoneyPanel({ quote, quoting, error }) {
         </div>
         <div className="flex justify-between gap-4">
           <dt className="text-muted">Delivery fee</dt>
-          <dd>{quote ? cedis(quote.delivery_fee_pesewas) : '—'}</dd>
+          <dd>{quote ? cedis(quote.delivery_fee_pesewas) : '-'}</dd>
         </div>
         <div className="flex justify-between gap-4">
           <dt className="text-muted">Service fee</dt>
-          <dd>{quote ? cedis(quote.service_fee_pesewas) : '—'}</dd>
+          <dd>{quote ? cedis(quote.service_fee_pesewas) : '-'}</dd>
         </div>
-        <div className="flex justify-between gap-4 border-t border-black/10 pt-2 font-semibold">
+        <div className="border-line flex justify-between gap-4 border-t pt-2 font-semibold">
           <dt>You pay</dt>
-          <dd>{quoting ? '…' : quote ? cedis(quote.total_pesewas) : '—'}</dd>
+          <dd>{quoting ? '…' : quote ? cedis(quote.total_pesewas) : '-'}</dd>
         </div>
       </dl>
 
@@ -186,9 +186,9 @@ function ScanUpload({ scan, onUploaded }) {
   const [preview, setPreview] = usePreview();
 
   return (
-    <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+    <section className="rounded-card bg-surface ring-line p-4 ring-1">
       <h2 className="text-sm font-medium">
-        Your scan <span className="text-red-700">*</span>
+        Your scan <span className="text-bad">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs leading-relaxed">
         A photo, screenshot or PDF of the scan you want redeemed. It is stored privately. Only you
@@ -223,16 +223,16 @@ function ScanUpload({ scan, onUploaded }) {
         <img
           src={preview}
           alt="The scan you selected"
-          className="mt-3 w-full rounded ring-1 ring-black/10"
+          className="ring-line mt-3 w-full rounded ring-1"
         />
       ) : null}
       {scan && !preview ? <p className="text-muted mt-2 text-sm">PDF received.</p> : null}
       {scan ? (
         <p className="text-brand-700 mt-2 text-sm font-medium">
-          ✓ Scan received — check it is readable, and choose another file above if not.
+          ✓ Scan received. Check it is readable, and choose another file above if not.
         </p>
       ) : null}
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </section>
   );
 }

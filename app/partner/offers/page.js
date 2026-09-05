@@ -21,14 +21,14 @@ export default async function PartnerOffersPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-md px-4 pt-5 pb-16">
+    <main className="mx-auto max-w-2xl px-4 pt-5 pb-16">
       <Link href="/partner" className="text-muted text-sm underline underline-offset-4">
         ← Partner
       </Link>
       <h1 className="mt-3 text-xl font-semibold tracking-tight">Available deliveries</h1>
 
       {!application?.is_available ? (
-        <p className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="rounded-card bg-warn-bg text-warn mt-4 px-4 py-3 text-sm">
           You are offline, so no offers are shown. Go online from the Partner home screen.
         </p>
       ) : (
@@ -36,7 +36,7 @@ export default async function PartnerOffersPage() {
       )}
 
       <p className="text-muted mt-6 text-xs leading-relaxed">
-        Every job here has food already cooked and waiting — you are never sent to stand at a stall.
+        Every job here has food already cooked and waiting. You are never sent to stand at a stall.
         The exact room is released once the vendor hands the order to you.
       </p>
     </main>

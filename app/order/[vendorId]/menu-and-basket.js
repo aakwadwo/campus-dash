@@ -2,14 +2,29 @@
 
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import { quoteAction, submitOrderAction } from '../actions';
-import { formatPesewas } from '@/lib/util/money';
+import {
+  Card,
+  Money,
+  ErrorNote,
+  EmptyState,
+  Skeleton,
+  ArrowLeftIcon,
+  BagIcon,
+  CheckIcon,
+} from '../../ui';
 
 /**
- * Menu, basket and checkout on one phone screen.
+ * Menu, basket and checkout.
  *
  * The basket holds ids and quantities. It never holds a total: every figure
  * shown comes back from the server, priced by the same function that will
- * charge the customer.
+ * charge the customer. Nothing about that changed in the redesign — the quote
+ * round-trip, the hidden inputs and the submit path are the originals.
+ *
+ * WHAT DID CHANGE is the shape of the two steps. Choosing is a browsing task
+ * and gets the full width; reviewing is a committing task and narrows to a
+ * single column, which is the composition the references use as an order gets
+ * closer to being paid for.
  */
 export default function MenuAndBasket({ vendor, menu, locations, gate = null }) {
   const [quantities, setQuantities] = useState({});
@@ -87,49 +102,84 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
     );
   }
 
+  if (menu.length === 0) {
+    return (
+      <Card>
+        <EmptyState
+          icon={<BagIcon className="size-6" />}
+          title="Nothing on the menu yet"
+          description={`${vendor.name} has not added any items. Try another vendor for now.`}
+        />
+      </Card>
+    );
+  }
+
   return (
     <>
-      <ul className="mt-5 space-y-2">
-        {menu.map((item) => (
-          <li
-            key={item.id}
-            className={`rounded-lg px-4 py-3 ring-1 ring-black/5 ${
-              item.is_available ? 'bg-white' : 'bg-black/[0.03]'
-            }`}
-          >
-            <div className="flex items-baseline justify-between gap-3">
-              <span className={item.is_available ? 'font-medium' : 'text-muted font-medium'}>
-                {item.name}
-              </span>
-              <span className="tabular-nums">{formatPesewas(item.price_pesewas)}</span>
-            </div>
-            {item.description ? (
-              <p className="text-muted mt-0.5 text-sm">{item.description}</p>
-            ) : null}
+      <h2 className="mb-3 text-base font-semibold tracking-tight sm:mb-4 sm:text-lg">Menu</h2>
 
-            {item.is_available ? (
-              <Stepper
-                value={quantities[item.id] ?? 0}
-                onChange={(next) => setQuantity(item.id, next)}
-                label={item.name}
-              />
-            ) : (
-              <p className="text-muted mt-2 text-sm font-medium">Unavailable today</p>
-            )}
-          </li>
-        ))}
+      {/* Two columns from `md` up. A single long column of short rows wastes
+          most of a laptop screen and makes the menu feel thinner than it is. */}
+      <ul className="grid gap-3 md:grid-cols-2">
+        {menu.map((item) => {
+          const chosen = quantities[item.id] ?? 0;
+          return (
+            <li key={item.id}>
+              <Card
+                className={`h-full p-3.5 transition-colors sm:p-5 ${
+                  item.is_available ? '' : 'bg-surface-2/60'
+                } ${chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''}`}
+              >
+                <div className="flex items-baseline justify-between gap-4">
+                  <h3
+                    className={`font-semibold break-words ${item.is_available ? '' : 'text-muted'}`}
+                  >
+                    {item.name}
+                  </h3>
+                  <span
+                    className={`shrink-0 font-semibold ${item.is_available ? '' : 'text-muted'}`}
+                  >
+                    <Money pesewas={item.price_pesewas} />
+                  </span>
+                </div>
+
+                {item.description ? (
+                  <p className="text-muted mt-1.5 text-sm leading-relaxed">{item.description}</p>
+                ) : null}
+
+                {item.is_available ? (
+                  <Stepper
+                    value={chosen}
+                    onChange={(next) => setQuantity(item.id, next)}
+                    label={item.name}
+                  />
+                ) : (
+                  <p className="text-muted mt-3 text-sm font-medium">Unavailable today</p>
+                )}
+              </Card>
+            </li>
+          );
+        })}
       </ul>
 
+      {/* The sticky basket bar. Sits above the mobile navigation, and only
+          exists once something is in the basket — an always-present empty bar
+          is a permanent reminder that you have not done anything. */}
       {itemCount > 0 ? (
-        <div className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 py-3">
-          <div className="mx-auto flex max-w-md items-center gap-3">
-            <span className="text-sm">
-              {itemCount} item{itemCount === 1 ? '' : 's'}
+        <div className="animate-sheet fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-6">
+          <div className="bg-surface border-line shadow-float mx-auto flex max-w-2xl items-center gap-3 rounded-full border p-2 pl-5">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <span className="bg-brand-500 text-ink grid size-6 shrink-0 place-items-center rounded-full text-xs tabular-nums">
+                {itemCount}
+              </span>
+              <span className="hidden sm:inline">
+                {itemCount === 1 ? 'item' : 'items'} in basket
+              </span>
             </span>
             {gate ? (
               <a
                 href={gate.href}
-                className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold"
+                className="press bg-brand-500 text-ink hover:bg-brand-600 ml-auto rounded-full px-5 py-3 text-sm font-semibold transition-colors"
               >
                 {gate.label}
               </a>
@@ -138,7 +188,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
                 type="button"
                 disabled={!canOrder}
                 onClick={() => setStep('review')}
-                className="bg-brand-500 text-ink ml-auto rounded-lg px-5 py-3 text-sm font-semibold disabled:opacity-60"
+                className="press bg-brand-500 text-ink hover:bg-brand-600 ml-auto rounded-full px-6 py-3 text-sm font-semibold transition-colors disabled:opacity-55"
               >
                 Review order
               </button>
@@ -150,26 +200,48 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
   );
 }
 
+/**
+ * Quantity control.
+ *
+ * Before anything is chosen it is a single "Add" pill — a −/0/+ stepper sitting
+ * at zero on every row is a lot of controls saying nothing. Once there is a
+ * quantity it becomes the stepper. Both are 44px targets.
+ */
 function Stepper({ value, onChange, label }) {
+  if (value === 0) {
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(1)}
+        className="press border-line-strong hover:border-brand-600 hover:bg-brand-50 mt-3 inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition-colors"
+      >
+        Add
+        <span aria-hidden className="text-base leading-none">
+          +
+        </span>
+        <span className="sr-only">{label}</span>
+      </button>
+    );
+  }
+
   return (
-    <div className="mt-2 flex items-center gap-3">
+    <div className="mt-3 flex items-center gap-1">
       <button
         type="button"
         aria-label={`Remove one ${label}`}
         onClick={() => onChange(value - 1)}
-        disabled={value === 0}
-        className="size-10 rounded-lg text-lg font-semibold ring-1 ring-black/15 disabled:opacity-40"
+        className="press bg-surface-2 hover:bg-surface-3 grid size-10 place-items-center rounded-full text-lg font-semibold transition-colors"
       >
         −
       </button>
-      <span className="w-6 text-center tabular-nums" aria-live="polite">
+      <span className="w-9 text-center font-semibold tabular-nums" aria-live="polite">
         {value}
       </span>
       <button
         type="button"
         aria-label={`Add one ${label}`}
         onClick={() => onChange(value + 1)}
-        className="size-10 rounded-lg text-lg font-semibold ring-1 ring-black/15"
+        className="press bg-brand-500 text-ink hover:bg-brand-600 grid size-10 place-items-center rounded-full text-lg font-semibold transition-colors"
       >
         +
       </button>
@@ -200,10 +272,11 @@ function Review({
   const named = items.map((item) => ({
     ...item,
     name: menu.find((m) => m.id === item.menuItemId)?.name ?? 'Item',
+    price: menu.find((m) => m.id === item.menuItemId)?.price_pesewas ?? 0,
   }));
 
   return (
-    <form action={submit} className="mt-5 space-y-5">
+    <form action={submit} className="mx-auto max-w-xl">
       <input type="hidden" name="vendor_id" value={vendor.id} />
       <input type="hidden" name="fulfilment_type" value={fulfilment} />
       <input
@@ -219,47 +292,79 @@ function Review({
         value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
       />
 
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-        <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">Your order</h2>
-        <ul className="divide-y divide-black/5">
+      <button
+        type="button"
+        onClick={onBack}
+        className="text-muted hover:text-ink press-sm mb-5 -ml-1 inline-flex items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
+      >
+        <ArrowLeftIcon className="size-4" />
+        Back to menu
+      </button>
+
+      <h2 className="text-display text-2xl font-semibold sm:text-3xl">Review your order</h2>
+      <p className="text-muted mt-1.5">From {vendor.name}</p>
+
+      {/* --- Items ------------------------------------------------------- */}
+      <Card className="mt-7 p-5">
+        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
+          Your order
+        </h3>
+        <ul className="divide-line divide-y">
           {named.map((item) => (
-            <li key={item.menuItemId} className="flex justify-between gap-3 py-2 text-sm">
-              <span>
-                <span className="font-semibold tabular-nums">{item.quantity}×</span> {item.name}
+            <li key={item.menuItemId} className="flex items-baseline justify-between gap-4 py-2.5">
+              <span className="min-w-0">
+                <span className="bg-surface-2 mr-2 inline-block rounded px-1.5 py-0.5 text-xs font-semibold tabular-nums">
+                  {item.quantity}×
+                </span>
+                {item.name}
+              </span>
+              <span className="text-muted shrink-0 text-sm">
+                <Money pesewas={item.price * item.quantity} />
               </span>
             </li>
           ))}
         </ul>
-      </section>
+      </Card>
 
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-        <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">How do you want it?</h2>
-        <div className="flex gap-2">
+      {/* --- Fulfilment --------------------------------------------------- */}
+      <Card className="mt-4 p-5">
+        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
+          How do you want it?
+        </h3>
+
+        {/* Real radios, so this is keyboard- and screen-reader-native. A row of
+            buttons would have needed roving tabindex and still told a screen
+            reader nothing about what was selected. */}
+        <div role="radiogroup" aria-label="Fulfilment" className="flex gap-2">
           {[
             ['DELIVERY', 'Bring it to me'],
             ['PICKUP', 'I will collect'],
           ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setFulfilment(value)}
-              className={`flex-1 rounded-lg py-3 text-sm font-semibold ${
-                fulfilment === value ? 'bg-brand-500 text-ink' : 'ring-1 ring-black/15'
-              }`}
-            >
-              {label}
-            </button>
+            <label key={value} className="press flex-1 cursor-pointer">
+              <input
+                type="radio"
+                name="fulfilment_choice"
+                value={value}
+                checked={fulfilment === value}
+                onChange={() => setFulfilment(value)}
+                className="peer sr-only"
+              />
+              <span className="border-line-strong peer-checked:bg-brand-500 peer-checked:border-brand-500 peer-focus-visible:outline-brand-600 flex items-center justify-center gap-2 rounded-full border px-4 py-3 text-center text-sm font-semibold transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2">
+                {fulfilment === value ? <CheckIcon className="size-4" /> : null}
+                {label}
+              </span>
+            </label>
           ))}
         </div>
 
         {fulfilment === 'DELIVERY' ? (
-          <div className="mt-4 space-y-3">
+          <div className="mt-5 space-y-4">
             <label className="block">
-              <span className="text-sm font-medium">Where on campus?</span>
+              <span className="mb-1.5 block text-sm font-medium">Where on campus?</span>
               <select
                 value={destination}
                 onChange={(event) => setDestination(event.target.value)}
-                className="mt-1 w-full rounded border border-black/15 bg-white px-3 py-2.5 text-sm"
+                className="rounded-input bg-surface border-line-strong text-ink focus:border-brand-600 h-12 w-full border px-4 text-[15px] outline-none"
               >
                 {locations.map((location) => (
                   <option key={location.location_id} value={location.location_id}>
@@ -269,64 +374,72 @@ function Review({
               </select>
             </label>
             <label className="block">
-              <span className="text-sm font-medium">Anything else? (optional)</span>
+              <span className="mb-1.5 block text-sm font-medium">Anything else? (optional)</span>
               <input
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="Call when you reach the gate"
-                className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-sm"
+                className="rounded-input bg-surface border-line-strong text-ink placeholder:text-faint focus:border-brand-600 h-12 w-full border px-4 text-[15px] outline-none"
               />
             </label>
           </div>
         ) : (
-          <p className="text-muted mt-3 text-sm">
-            You will collect this from {vendor.name} once they mark it ready.
+          <p className="text-muted mt-4 text-sm leading-relaxed">
+            You will collect this from {vendor.name} once they mark it ready. No delivery fee.
           </p>
         )}
-      </section>
+      </Card>
 
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-        <h2 className="mb-2 text-xs font-semibold tracking-wide uppercase">What you pay</h2>
+      {/* --- Money -------------------------------------------------------- */}
+      <Card className="mt-4 p-5">
+        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
+          What you pay
+        </h3>
+
         {quoteError ? (
-          <p className="text-sm text-red-700">{quoteError}</p>
+          <ErrorNote>{quoteError}</ErrorNote>
         ) : quote ? (
-          <dl className={`space-y-1 text-sm ${quoting ? 'opacity-50' : ''}`}>
+          <dl className={`transition-opacity ${quoting ? 'opacity-45' : ''}`}>
             <Line label="Food" value={quote.subtotal_pesewas} />
             <Line label="Service fee" value={quote.service_fee_pesewas} />
             {quote.delivery_fee_pesewas > 0 ? (
               <Line label="Delivery fee" value={quote.delivery_fee_pesewas} />
             ) : null}
-            <div className="flex justify-between border-t border-black/5 pt-2 font-semibold">
-              <dt>Total</dt>
-              <dd className="tabular-nums">{formatPesewas(quote.total_pesewas)}</dd>
+            <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
+              <dt className="font-semibold">Total</dt>
+              <dd className="text-lg font-semibold">
+                <Money pesewas={quote.total_pesewas} />
+              </dd>
             </div>
           </dl>
         ) : (
-          <p className="text-muted text-sm">Working out your total…</p>
+          <div className="space-y-2.5" aria-live="polite" aria-busy="true">
+            <span className="sr-only">Working out your total</span>
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-6 w-1/2" />
+          </div>
         )}
-        <p className="text-muted mt-3 text-xs">
+
+        <p className="text-muted mt-4 text-xs leading-relaxed">
           You will not be charged until {vendor.name} accepts your order.
         </p>
-      </section>
+      </Card>
 
-      {submitState.message ? (
-        <p role="alert" className="text-sm text-red-700">
-          {submitState.message}
-        </p>
-      ) : null}
+      {submitState.message ? <ErrorNote className="mt-4">{submitState.message}</ErrorNote> : null}
 
-      <div className="flex gap-2">
+      <div className="mt-6 flex gap-3">
         <button
           type="button"
           onClick={onBack}
-          className="rounded-lg px-4 py-3 text-sm font-semibold ring-1 ring-black/15"
+          className="press border-line-strong hover:bg-surface-2 rounded-full border px-5 py-3.5 text-sm font-semibold transition-colors"
         >
           Back
         </button>
         <button
           type="submit"
           disabled={submitting || !quote || quoting}
-          className="bg-brand-500 text-ink flex-1 rounded-lg py-3 text-base font-semibold disabled:opacity-60"
+          className="press bg-brand-500 text-ink hover:bg-brand-600 flex-1 rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
         >
           {submitting ? 'Sending…' : 'Send order to vendor'}
         </button>
@@ -337,9 +450,11 @@ function Review({
 
 function Line({ label, value }) {
   return (
-    <div className="flex justify-between">
-      <dt className="text-muted">{label}</dt>
-      <dd className="tabular-nums">{formatPesewas(value)}</dd>
+    <div className="flex items-baseline justify-between gap-4 py-1.5">
+      <dt className="text-muted text-sm">{label}</dt>
+      <dd className="text-sm">
+        <Money pesewas={value} />
+      </dd>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { getCapabilities } from '@/lib/auth/session';
 import { listScanRestaurants } from '@/lib/scan';
 import { listDeliverableLocations } from '@/lib/customer';
 import ScanForm from './scan-form';
+import SiteHeader from '@/app/site-header';
+import { Container } from '@/app/ui';
 
 export const metadata = { title: 'Scan delivery · Campus Dash' };
 export const dynamic = 'force-dynamic';
@@ -36,29 +38,30 @@ export default async function ScanPage() {
   const open = restaurants.filter((r) => r.is_accepting_orders);
 
   return (
-    <main className="mx-auto max-w-md px-4 pt-6 pb-16">
-      <Link href="/order" className="text-muted text-sm underline underline-offset-4">
-        ← Ordering
-      </Link>
+    <div className="min-h-dvh">
+      <SiteHeader active="browse" />
+      <main className="pb-24 sm:pb-16">
+        <Container size="narrow" className="pt-8 sm:pt-12">
+          <h1 className="text-display text-3xl font-semibold sm:text-4xl">Scan delivery</h1>
+          <p className="text-muted mt-2 text-sm leading-relaxed">
+            Already have a meal scan? Send a Partner to redeem it and bring the food to you. You
+            have paid for the food already, so Campus Dash charges only for the errand.
+          </p>
 
-      <h1 className="mt-3 text-2xl font-semibold tracking-tight">Scan delivery</h1>
-      <p className="text-muted mt-2 text-sm leading-relaxed">
-        Already have a meal scan? Send a Partner to redeem it and bring the food to you. You have
-        paid for the food already — Campus Dash charges only for the errand.
-      </p>
-
-      {restaurants.length === 0 ? (
-        <p className="text-muted mt-8 rounded-lg bg-white p-4 text-sm ring-1 ring-black/5">
-          No restaurants are set up for scan delivery yet. Check back soon.
-        </p>
-      ) : open.length === 0 ? (
-        <p className="mt-8 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
-          Every scan restaurant is closed right now, so a Partner cannot redeem anything. Try again
-          when one reopens.
-        </p>
-      ) : (
-        <ScanForm restaurants={open} locations={locations ?? []} />
-      )}
-    </main>
+          {restaurants.length === 0 ? (
+            <p className="text-muted rounded-card bg-surface ring-line mt-8 p-4 text-sm ring-1">
+              No restaurants are set up for scan delivery yet. Check back soon.
+            </p>
+          ) : open.length === 0 ? (
+            <p className="rounded-card bg-warn-bg text-warn mt-8 p-4 text-sm">
+              Every scan restaurant is closed right now, so a Partner cannot redeem anything. Try
+              again when one reopens.
+            </p>
+          ) : (
+            <ScanForm restaurants={open} locations={locations ?? []} />
+          )}
+        </Container>
+      </main>
+    </div>
   );
 }

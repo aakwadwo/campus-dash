@@ -57,7 +57,7 @@ export async function requestOtp(_prevState, formData) {
         phone,
         error: config.isProduction()
           ? 'Sign-in by phone is unavailable right now.'
-          : 'Phone sign-in is disabled on this Supabase project. Enable the Phone provider and the Send SMS Hook — see docs/HOSTED-SUPABASE.md.',
+          : 'Phone sign-in is disabled on this Supabase project. Enable the Phone provider and the Send SMS Hook. See docs/HOSTED-SUPABASE.md.',
       };
     }
 

@@ -16,9 +16,9 @@ export default function VendorStatusForm({ vendor }) {
         required
         defaultValue={vendor.status}
         options={[
-          { value: 'DRAFT', label: 'DRAFT — being set up' },
-          { value: 'ACTIVE', label: 'ACTIVE — can trade' },
-          { value: 'SUSPENDED', label: 'SUSPENDED — cannot trade' },
+          { value: 'DRAFT', label: 'DRAFT (being set up)' },
+          { value: 'ACTIVE', label: 'ACTIVE (can trade)' },
+          { value: 'SUSPENDED', label: 'SUSPENDED (cannot trade)' },
         ]}
         hint="Moving away from ACTIVE also closes them to new orders."
       />

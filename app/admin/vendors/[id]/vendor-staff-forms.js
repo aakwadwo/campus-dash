@@ -11,7 +11,7 @@ export default function VendorStaffForms({ vendorId, staff }) {
   return (
     <>
       {staff.length ? (
-        <ul className="mb-6 divide-y divide-black/5 text-sm">
+        <ul className="divide-line mb-6 divide-y text-sm">
           {staff.map((person) => (
             <li key={person.id} className="flex flex-wrap items-center gap-3 py-2">
               <span className="font-medium">{person.full_name ?? 'Unnamed'}</span>
@@ -24,7 +24,7 @@ export default function VendorStaffForms({ vendorId, staff }) {
                   required
                   minLength={3}
                   placeholder="Reason"
-                  className="w-44 rounded border border-black/15 px-2 py-1 text-xs"
+                  className="border-line-strong w-44 rounded border px-2 py-1 text-xs"
                 />
                 <Button variant="danger" disabled={removing}>
                   Remove

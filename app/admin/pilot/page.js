@@ -25,13 +25,13 @@ export default async function PilotPage() {
   ]);
 
   const by = Object.fromEntries((metrics ?? []).map((m) => [m.metric, Number(m.value)]));
-  const seconds = (value) => (value == null ? '—' : `${Math.round(value)}s`);
+  const seconds = (value) => (value == null ? '-' : `${Math.round(value)}s`);
 
   return (
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Pilot</h1>
       <p className="text-muted mb-6 text-sm">
-        Today so far. These are the numbers the pilot exists to discover — none of them can be
+        Today so far. These are the numbers the pilot exists to discover, and none of them can be
         guessed from a desk.
       </p>
 
@@ -114,11 +114,11 @@ export default async function PilotPage() {
             </thead>
             <tbody>
               {providerIssues.map((issue, i) => (
-                <tr key={i} className="border-t border-black/5">
+                <tr key={i} className="border-line border-t">
                   <td className="py-2">
                     <Badge tone="bad">{issue.issue}</Badge>
                   </td>
-                  <td className="py-2 font-mono text-xs">{issue.provider_transaction_id ?? '—'}</td>
+                  <td className="py-2 font-mono text-xs">{issue.provider_transaction_id ?? '-'}</td>
                   <td className="text-muted py-2">{issue.detail}</td>
                 </tr>
               ))}
@@ -144,7 +144,7 @@ export default async function PilotPage() {
             </thead>
             <tbody>
               {failures.map((failure) => (
-                <tr key={failure.id} className="border-t border-black/5">
+                <tr key={failure.id} className="border-line border-t">
                   <td className="py-2 font-mono text-xs">{failure.event}</td>
                   <td className="py-2 tabular-nums">{failure.recipient}</td>
                   <td className="py-2 tabular-nums">{failure.attempts}</td>
@@ -170,7 +170,7 @@ export default async function PilotPage() {
 
 function Stat({ label, value, detail }) {
   return (
-    <div className="rounded-lg bg-white px-5 py-4 ring-1 ring-black/5">
+    <div className="rounded-card bg-surface ring-line px-5 py-4 ring-1">
       <p className="text-muted text-xs font-medium tracking-wide uppercase">{label}</p>
       <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
       {detail ? <p className="text-muted mt-1 text-sm">{detail}</p> : null}
@@ -182,7 +182,7 @@ function Row({ label, value, alert }) {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-muted">{label}</dt>
-      <dd className={`tabular-nums ${alert ? 'font-semibold text-red-700' : ''}`}>{value}</dd>
+      <dd className={`tabular-nums ${alert ? 'text-bad font-semibold' : ''}`}>{value}</dd>
     </div>
   );
 }

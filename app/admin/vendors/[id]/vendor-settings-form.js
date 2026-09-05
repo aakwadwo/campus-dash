@@ -17,7 +17,7 @@ export default function VendorSettingsForm({ vendor, locations }) {
         name="location_id"
         defaultValue={vendor.location_id ?? ''}
         options={[
-          { value: '', label: '— unchanged —' },
+          { value: '', label: '(unchanged)' },
           ...locations.map((l) => ({ value: l.id, label: `${l.name} (${l.kind})` })),
         ]}
       />

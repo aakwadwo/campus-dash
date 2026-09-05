@@ -23,7 +23,7 @@ export default function CreateVendorForm({ locations }) {
         name="location_id"
         defaultValue=""
         options={[
-          { value: '', label: '— none —' },
+          { value: '', label: '(none)' },
           ...locations
             .filter((l) => l.is_active)
             .map((l) => ({ value: l.id, label: `${l.name} (${l.kind})` })),
@@ -34,7 +34,7 @@ export default function CreateVendorForm({ locations }) {
         name="walk_minutes"
         type="number"
         min="0"
-        hint="Leave blank if unknown — Partner offers omit the estimate rather than guessing."
+        hint="Leave blank if unknown. Partner offers omit the estimate rather than guessing."
       />
       <div className="sm:col-span-2">
         <Field label="Location note" name="location_note" placeholder="Opposite the main gate" />

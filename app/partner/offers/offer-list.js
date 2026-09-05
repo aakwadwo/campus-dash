@@ -24,7 +24,7 @@ export default function OfferList({ offers, pollMs = 10000 }) {
 
   if (offers.length === 0) {
     return (
-      <p className="text-muted mt-4 rounded-lg border border-dashed border-black/15 px-4 py-8 text-center text-sm">
+      <p className="text-muted rounded-input border-line-strong mt-4 border border-dashed px-4 py-8 text-center text-sm transition-colors">
         Nothing waiting right now. This updates on its own.
       </p>
     );
@@ -33,14 +33,14 @@ export default function OfferList({ offers, pollMs = 10000 }) {
   return (
     <>
       {state.message && !state.ok ? (
-        <p role="alert" className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p role="alert" className="rounded-card bg-bad-bg text-bad mt-4 px-4 py-3 text-sm">
           {state.message}
         </p>
       ) : null}
 
       <ul className="mt-4 space-y-3">
         {offers.map((offer) => (
-          <li key={offer.order_id} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <li key={offer.order_id} className="rounded-card bg-surface ring-line p-4 ring-1">
             {/* A scan errand is a different job and must not be mistaken for a
                 collection: you carry the customer's prepaid scan, redeem it at
                 the counter yourself, and the food is not waiting for you. */}
@@ -80,7 +80,7 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               <button
                 type="submit"
                 disabled={accepting}
-                className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
+                className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
               >
                 {accepting ? 'Accepting…' : 'Accept this delivery'}
               </button>

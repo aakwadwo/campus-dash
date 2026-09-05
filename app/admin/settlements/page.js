@@ -37,8 +37,8 @@ export default async function AdminSettlementsPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settlements</h1>
       <p className="text-muted mb-6 text-sm">
-        Vendors are settled daily, Partners weekly. Campus Dash does not hold anyone&apos;s money —
-        a run gathers what is already owed and moves it out.
+        Vendors are settled daily, Partners weekly. Campus Dash does not hold anyone&apos;s money. a
+        run gathers what is already owed and moves it out.
       </p>
 
       <SettlementControls />
@@ -47,7 +47,7 @@ export default async function AdminSettlementsPage() {
 
       <Panel
         title="Owed to vendors"
-        description="Eligible allocations not yet claimed by a run — including anything a run held back for being under the minimum payout."
+        description="Eligible allocations not yet claimed by a run, including anything a run held back for being under the minimum payout."
       >
         <PendingTable rows={vendorPending} />
       </Panel>
@@ -73,7 +73,7 @@ export default async function AdminSettlementsPage() {
               </thead>
               <tbody>
                 {runs.map((run) => (
-                  <tr key={run.run_id} className="border-t border-black/5">
+                  <tr key={run.run_id} className="border-line border-t">
                     <td className="py-2">{run.payee_type}</td>
                     <td className="text-muted py-2 text-xs tabular-nums">
                       {new Date(run.period_start).toLocaleDateString()} →{' '}
@@ -90,7 +90,7 @@ export default async function AdminSettlementsPage() {
                     <td className="py-2 tabular-nums">
                       {run.paid_count}/{run.payout_count}
                       {run.failed_count > 0 ? (
-                        <span className="ml-1 text-red-700">({run.failed_count} failed)</span>
+                        <span className="text-bad ml-1">({run.failed_count} failed)</span>
                       ) : null}
                     </td>
                     <td className="py-2">
@@ -135,7 +135,7 @@ export default async function AdminSettlementsPage() {
               </thead>
               <tbody>
                 {latestPayouts.map((payout) => (
-                  <tr key={payout.payout_id} className="border-t border-black/5">
+                  <tr key={payout.payout_id} className="border-line border-t">
                     <td className="py-2">{payout.payee_name}</td>
                     <td className="py-2 tabular-nums">{formatPesewas(payout.amount_pesewas)}</td>
                     <td className="py-2">
@@ -155,7 +155,7 @@ export default async function AdminSettlementsPage() {
                       ) : null}
                     </td>
                     <td className="text-muted py-2 font-mono text-xs">
-                      {payout.provider_transfer_id ?? '—'}
+                      {payout.provider_transfer_id ?? '-'}
                     </td>
                   </tr>
                 ))}
@@ -185,12 +185,12 @@ function PendingTable({ rows }) {
       </thead>
       <tbody>
         {rows.map((row) => (
-          <tr key={row.payee_id} className="border-t border-black/5">
+          <tr key={row.payee_id} className="border-line border-t">
             <td className="py-2">{row.payee_name ?? row.payee_id?.slice(0, 8)}</td>
             <td className="py-2 tabular-nums">{row.order_count}</td>
             <td className="py-2 tabular-nums">{formatPesewas(row.owed_pesewas)}</td>
             <td className="text-muted py-2 text-xs">
-              {row.oldest_at ? new Date(row.oldest_at).toLocaleDateString() : '—'}
+              {row.oldest_at ? new Date(row.oldest_at).toLocaleDateString() : '-'}
             </td>
           </tr>
         ))}

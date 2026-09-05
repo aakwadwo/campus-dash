@@ -29,8 +29,7 @@ export default async function AdminPaymentsPage() {
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Payments</h1>
       <p className="text-muted mb-6 text-sm">
         What customers have paid, and what the provider told us about it. Nothing here can be marked
-        paid by hand — a payment moves on a verified provider event, never on an admin&apos;s
-        say-so.
+        paid by hand. A payment moves on a verified provider event, never on an admin&apos;s say-so.
       </p>
 
       <Panel title="Payments" description={rows ? `${rows.length} shown` : undefined}>
@@ -63,10 +62,10 @@ export default async function AdminPaymentsPage() {
                       {p.order_number}
                     </Link>
                   ) : (
-                    <span className="font-mono text-xs">{p.order_number ?? '—'}</span>
+                    <span className="font-mono text-xs">{p.order_number ?? '-'}</span>
                   )}
                 </Cell>
-                <Cell>{p.customer_name ?? '—'}</Cell>
+                <Cell>{p.customer_name ?? '-'}</Cell>
                 <Cell muted>{p.provider}</Cell>
                 <Cell numeric>
                   <Cedis pesewas={p.amount_pesewas} />
@@ -75,7 +74,7 @@ export default async function AdminPaymentsPage() {
                   <Badge tone={TXN_TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
                 </Cell>
                 <Cell mono muted>
-                  {p.provider_transaction_id ?? '—'}
+                  {p.provider_transaction_id ?? '-'}
                 </Cell>
                 <Cell muted>{when(p.created_at)}</Cell>
                 <Cell muted>{when(p.succeeded_at)}</Cell>
@@ -117,7 +116,7 @@ export default async function AdminPaymentsPage() {
                   </Badge>
                 </Cell>
                 <Cell muted>{when(h.received_at)}</Cell>
-                <Cell muted>{h.error ?? '—'}</Cell>
+                <Cell muted>{h.error ?? '-'}</Cell>
               </Row>
             ))}
           </Table>

@@ -21,7 +21,7 @@ export default async function VendorIndexPage() {
   if (vendors.length === 0) {
     const home = await myLanding();
     return (
-      <main className="mx-auto max-w-md px-5 py-10">
+      <main className="mx-auto max-w-3xl px-5 py-10">
         <h1 className="text-2xl font-semibold tracking-tight">No stall yet</h1>
         <p className="text-muted mt-3 text-sm">
           This account is not linked to a vendor, so there is no order board to show. An
@@ -35,14 +35,14 @@ export default async function VendorIndexPage() {
   }
 
   return (
-    <main className="mx-auto max-w-md px-5 py-10">
+    <main className="mx-auto max-w-3xl px-5 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Choose a stall</h1>
       <ul className="mt-6 space-y-2">
         {vendors.map((vendor) => (
           <li key={vendor.id}>
             <Link
               href={`/vendor/${vendor.id}`}
-              className="flex items-center justify-between rounded-lg bg-white px-4 py-4 ring-1 ring-black/5"
+              className="rounded-card bg-surface ring-line flex items-center justify-between px-4 py-4 ring-1"
             >
               <span className="font-medium">{vendor.name}</span>
               <span

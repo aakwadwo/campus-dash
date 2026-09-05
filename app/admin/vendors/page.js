@@ -23,7 +23,7 @@ export default async function VendorsPage() {
     <>
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Vendors</h1>
 
-      <Panel title="All vendors" description="Registration is closed — vendors are created here.">
+      <Panel title="All vendors" description="Registration is closed. Vendors are created here.">
         {vendors === null ? (
           <Unavailable>The vendor list could not be loaded.</Unavailable>
         ) : vendors.length === 0 ? (
@@ -42,7 +42,7 @@ export default async function VendorsPage() {
                   >
                     {vendor.name}
                   </Link>
-                  <span className="text-muted block text-xs">{vendor.location_path ?? '—'}</span>
+                  <span className="text-muted block text-xs">{vendor.location_path ?? '-'}</span>
                 </Cell>
                 <Cell mono>{vendor.phone}</Cell>
                 <Cell>

@@ -25,7 +25,7 @@ export default async function AdminNotificationsPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Notifications</h1>
       <p className="text-muted mb-6 text-sm">
-        Provider acceptance is not delivery. A message the provider took can still fail to arrive —
+        Provider acceptance is not delivery. A message the provider took can still fail to arrive.
         the delivery report updates the same row later.
       </p>
 
@@ -46,7 +46,7 @@ export default async function AdminNotificationsPage() {
                 <Cell mono muted>
                   {n.recipient}
                 </Cell>
-                <Cell muted>{n.error ?? '—'}</Cell>
+                <Cell muted>{n.error ?? '-'}</Cell>
                 <Cell muted>{when(n.created_at)}</Cell>
               </Row>
             ))}

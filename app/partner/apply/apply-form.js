@@ -31,7 +31,7 @@ export default function ApplyForm({ profile }) {
   if (state.submitted) {
     return (
       <section className="mt-6 space-y-4">
-        <div className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+        <div className="rounded-card bg-surface ring-line p-4 ring-1">
           <h2 className="text-base font-semibold">Application submitted</h2>
           <p className="text-muted mt-2 text-sm leading-relaxed">
             We&rsquo;ll review your application and notify you when a decision is made. Reviewing is
@@ -50,7 +50,7 @@ export default function ApplyForm({ profile }) {
       {/* Read-only, and shown rather than re-asked: this is the evidence the
           reviewer will compare the selfie against, and seeing it here is how an
           applicant understands that the same account is being upgraded. */}
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line p-4 ring-1">
         <h2 className="text-sm font-medium">Your student details</h2>
         <p className="text-muted mt-1 text-xs">
           Already on your account. A reviewer compares your selfie against this ID.
@@ -73,7 +73,7 @@ export default function ApplyForm({ profile }) {
       {state.message ? (
         <p
           role={state.ok ? 'status' : 'alert'}
-          className={`text-sm ${state.ok ? 'text-brand-700' : 'text-red-700'}`}
+          className={`text-sm ${state.ok ? 'text-brand-700' : 'text-bad'}`}
         >
           {state.message}
         </p>
@@ -82,7 +82,7 @@ export default function ApplyForm({ profile }) {
       <button
         type="submit"
         disabled={submitting || !facePath}
-        className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
+        className="press bg-brand-500 text-ink w-full rounded-full py-4 text-base font-semibold transition-colors disabled:opacity-55"
       >
         {submitting ? 'Submitting…' : 'Submit application'}
       </button>
@@ -97,7 +97,7 @@ function Row({ label, value }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       <dt className="text-muted">{label}</dt>
-      <dd className="font-medium">{value ?? '—'}</dd>
+      <dd className="font-medium">{value ?? '-'}</dd>
     </div>
   );
 }
@@ -109,8 +109,8 @@ function Row({ label, value }) {
  */
 export function ContinueOrdering() {
   return (
-    <div className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-      <p className="text-sm">You can keep ordering while you wait — the same account does both.</p>
+    <div className="rounded-card bg-surface ring-line p-4 ring-1">
+      <p className="text-sm">You can keep ordering while you wait. The same account does both.</p>
       <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-medium">
         Continue to ordering →
       </Link>
@@ -158,7 +158,7 @@ function FaceCapture({ path, onUploaded }) {
       setStreaming(true);
     } catch {
       setError(
-        'Campus Dash could not open your camera. Allow camera access and try again — a saved photo cannot be used for this step.'
+        'Campus Dash could not open your camera. Allow camera access and try again. A saved photo cannot be used for this step.'
       );
     }
   }
@@ -191,9 +191,9 @@ function FaceCapture({ path, onUploaded }) {
   }
 
   return (
-    <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+    <section className="rounded-card bg-surface ring-line p-4 ring-1">
       <h2 className="text-sm font-medium">
-        Live photo of your face <span className="text-red-700">*</span>
+        Live photo of your face <span className="text-bad">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs">
         Taken now, with your camera. You cannot upload a saved picture for this step. It is the only
@@ -202,7 +202,7 @@ function FaceCapture({ path, onUploaded }) {
       {/* Said before the camera opens, not after the photo is taken. Someone
           who would rather not be shown to customers should learn that while it
           is still a choice. */}
-      <p className="mt-2 rounded bg-black/[0.03] p-2 text-xs leading-relaxed">
+      <p className="bg-surface-2 mt-2 rounded p-2 text-xs leading-relaxed">
         This photo will be used as your Partner profile photo and may be shown to customers when you
         accept their deliveries.
       </p>
@@ -213,14 +213,14 @@ function FaceCapture({ path, onUploaded }) {
             ref={videoRef}
             playsInline
             muted
-            className={`mt-3 w-full rounded bg-black/5 ${streaming ? '' : 'hidden'}`}
+            className={`bg-surface-2 mt-3 w-full rounded ${streaming ? '' : 'hidden'}`}
             style={{ aspectRatio: '3 / 4', objectFit: 'cover' }}
           />
           {!streaming ? (
             <button
               type="button"
               onClick={start}
-              className="mt-3 w-full rounded-lg py-3 text-sm font-semibold ring-1 ring-black/15"
+              className="press ring-line-strong mt-3 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
             >
               Open camera
             </button>
@@ -229,7 +229,7 @@ function FaceCapture({ path, onUploaded }) {
               type="button"
               onClick={capture}
               disabled={busy}
-              className="bg-brand-500 text-ink mt-3 w-full rounded-lg py-3 text-sm font-semibold disabled:opacity-60"
+              className="press bg-brand-500 text-ink mt-3 w-full rounded-full py-3 text-sm font-semibold transition-colors disabled:opacity-55"
             >
               {busy ? 'Saving…' : 'Take photo'}
             </button>
@@ -242,7 +242,7 @@ function FaceCapture({ path, onUploaded }) {
             <img
               src={preview}
               alt="The live photograph you just took"
-              className="mt-3 w-full rounded ring-1 ring-black/10"
+              className="ring-line mt-3 w-full rounded ring-1"
               style={{ aspectRatio: '3 / 4', objectFit: 'cover' }}
             />
           ) : null}
@@ -254,14 +254,14 @@ function FaceCapture({ path, onUploaded }) {
               onUploaded('');
               start();
             }}
-            className="mt-2 w-full rounded-lg py-3 text-sm font-semibold ring-1 ring-black/15"
+            className="press ring-line-strong mt-2 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
           >
             Retake photo
           </button>
         </>
       )}
 
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </section>
   );
 }
@@ -274,9 +274,12 @@ function usePreview() {
   const [url, setUrl] = useState(null);
   const current = useRef(null);
 
-  useEffect(() => () => {
-    if (current.current) URL.revokeObjectURL(current.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (current.current) URL.revokeObjectURL(current.current);
+    },
+    []
+  );
 
   const set = (next) => {
     if (current.current) URL.revokeObjectURL(current.current);

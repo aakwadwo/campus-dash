@@ -48,7 +48,7 @@ export default function OrderActions({ order, vendorId }) {
           </form>
 
           {showReject ? (
-            <form action={rejectAction} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+            <form action={rejectAction} className="rounded-card bg-surface ring-line p-4 ring-1">
               {hidden}
               <label className="block text-sm font-medium">
                 Why are you rejecting it?
@@ -57,7 +57,7 @@ export default function OrderActions({ order, vendorId }) {
                   required
                   minLength={3}
                   placeholder="Out of jollof"
-                  className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+                  className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
                 />
               </label>
               <p className="text-muted mt-2 text-xs">
@@ -70,7 +70,7 @@ export default function OrderActions({ order, vendorId }) {
                 <button
                   type="button"
                   onClick={() => setShowReject(false)}
-                  className="rounded-lg px-4 py-3 text-sm font-semibold"
+                  className="press rounded-full px-4 py-3 text-sm font-semibold transition-colors"
                 >
                   Cancel
                 </button>
@@ -80,7 +80,7 @@ export default function OrderActions({ order, vendorId }) {
             <button
               type="button"
               onClick={() => setShowReject(true)}
-              className="w-full rounded-lg bg-white py-3 text-base font-semibold text-red-700 ring-1 ring-red-200"
+              className="press bg-surface text-bad ring-bad/30 w-full rounded-full py-3 text-base font-semibold ring-1 transition-colors"
             >
               Reject order
             </button>
@@ -97,8 +97,8 @@ export default function OrderActions({ order, vendorId }) {
             </BigButton>
           </form>
         ) : (
-          <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
-            Waiting for the customer to pay. <strong>Do not start cooking yet</strong> — you will be
+          <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
+            Waiting for the customer to pay. <strong>Do not start cooking yet.</strong> You will be
             able to start as soon as the payment lands.
           </p>
         )
@@ -129,7 +129,7 @@ export default function OrderActions({ order, vendorId }) {
 
       {order.order_status === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
         order.delivery_status === 'ASSIGNED' ? (
-          <form action={handoffAction} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <form action={handoffAction} className="rounded-card bg-surface ring-line p-4 ring-1">
             {hidden}
             <p className="text-sm font-medium">A Partner is here to collect this order.</p>
             <p className="text-muted mt-1 text-xs">
@@ -143,19 +143,19 @@ export default function OrderActions({ order, vendorId }) {
               pattern="\d{4}"
               maxLength={4}
               placeholder="1234"
-              className="mt-3 w-full rounded border border-black/15 px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
+              className="border-line-strong mt-3 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
             />
             <BigButton disabled={handingOver} tone="ready">
               {handingOver ? 'Checking…' : 'Confirm pickup'}
             </BigButton>
           </form>
         ) : order.delivery_status === 'PICKED_UP' ? (
-          <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
+          <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
             Handed to the Partner. Nothing more for you to do on this order.
           </p>
         ) : (
-          <p className="rounded-lg bg-white px-4 py-4 text-sm ring-1 ring-black/5">
-            Looking for a Partner. Nothing for you to do — the order stays exactly as it is.
+          <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
+            Looking for a Partner. Nothing for you to do: the order stays exactly as it is.
           </p>
         )
       ) : null}
@@ -164,7 +164,7 @@ export default function OrderActions({ order, vendorId }) {
         <p
           role="status"
           className={`rounded-lg px-4 py-3 text-sm font-medium ${
-            result.ok ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-700'
+            result.ok ? 'bg-brand-50 text-brand-700' : 'bg-bad-bg text-bad'
           }`}
         >
           {result.message}

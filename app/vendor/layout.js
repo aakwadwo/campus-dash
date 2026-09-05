@@ -1,5 +1,7 @@
+import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import AreaSwitcher from '@/app/area-switcher';
+import { StoreIcon, UserIcon } from '@/app/ui';
 
 export const metadata = { title: 'Vendor · Campus Dash' };
 
@@ -20,12 +22,36 @@ export const metadata = { title: 'Vendor · Campus Dash' };
 export default async function VendorLayout({ children }) {
   await requireUser('/vendor');
   return (
-    <div className="bg-canvas min-h-dvh">
-      {/* Staffing a stall does not consume the account. Someone who also orders
-          or delivers reaches those areas from here rather than from memory. */}
-      <div className="mx-auto flex max-w-md justify-end px-4 pt-3">
-        <AreaSwitcher current="/vendor" />
-      </div>
+    <div className="min-h-dvh">
+      <header className="border-line bg-canvas sticky top-0 z-40 border-b">
+        <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-3 px-4 sm:px-6">
+          <Link
+            href="/vendor"
+            className="press-sm flex items-center gap-2 font-semibold tracking-tight"
+          >
+            <span className="bg-brand-500 text-ink grid size-8 place-items-center rounded-full">
+              <StoreIcon className="size-4" />
+            </span>
+            <span>
+              Campus Dash <span className="text-muted font-normal">Vendor</span>
+            </span>
+          </Link>
+          {/* Staffing a stall does not consume the account. Someone who also
+              orders or delivers reaches those areas from here, not from memory. */}
+          <div className="ml-auto flex items-center gap-1 sm:gap-2">
+            <div className="hidden sm:block">
+              <AreaSwitcher current="/vendor" />
+            </div>
+            <Link
+              href="/account"
+              className="press-sm hover:bg-surface-2 text-muted grid size-9 place-items-center rounded-full transition-colors"
+              aria-label="Account"
+            >
+              <UserIcon className="size-[18px]" />
+            </Link>
+          </div>
+        </div>
+      </header>
       {children}
     </div>
   );

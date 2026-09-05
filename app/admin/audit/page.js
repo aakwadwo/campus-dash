@@ -14,7 +14,7 @@ export default async function AuditPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Audit log</h1>
       <p className="text-muted mb-6 text-sm">
-        Append-only. Not even a superuser can rewrite or delete a row here — a trigger blocks UPDATE
+        Append-only. Not even a superuser can rewrite or delete a row here: a trigger blocks UPDATE
         and DELETE regardless of privilege.
       </p>
 
@@ -24,7 +24,7 @@ export default async function AuditPage() {
             The audit log could not be read. Do not take this as evidence that nothing has happened.
           </Unavailable>
         ) : actions.length ? (
-          <ul className="divide-y divide-black/5 text-sm">
+          <ul className="divide-line divide-y text-sm">
             {actions.map((action) => (
               <li key={action.id} className="py-3">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">

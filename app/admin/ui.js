@@ -1,12 +1,18 @@
 /**
- * Shared admin building blocks. Deliberately plain: this module has to be
- * correct and legible, not attractive. Polish comes after the vendor flow works.
+ * Shared admin building blocks.
+ *
+ * DENSER THAN THE MARKETPLACE, AND THE SAME PRODUCT. An operations console
+ * earns its density — an operator scanning a settlement run wants rows, not
+ * generous cards — so the spacing here stays tight. Everything else is shared
+ * with app/ui.js: the same tokens, the same radii, the same pill buttons, the
+ * same status colours, the same focus ring. The rule is that admin may be
+ * compact, never foreign.
  */
 
 export function Panel({ title, description, children, actions }) {
   return (
-    <section className="mb-8 rounded-lg bg-white ring-1 ring-black/5">
-      <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-black/5 px-5 py-3">
+    <section className="rounded-card bg-surface ring-line mb-6 ring-1">
+      <header className="border-line flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b px-5 py-3">
         <h2 className="font-semibold">{title}</h2>
         {description ? <p className="text-muted text-sm">{description}</p> : null}
         {actions ? <div className="ml-auto">{actions}</div> : null}
@@ -30,7 +36,7 @@ export function Field({
     <label className="block">
       <span className="text-sm font-medium">
         {label}
-        {required ? <span className="text-red-700"> *</span> : null}
+        {required ? <span className="text-bad"> *</span> : null}
       </span>
       <input
         name={name}
@@ -38,7 +44,7 @@ export function Field({
         required={required}
         defaultValue={defaultValue ?? ''}
         placeholder={placeholder}
-        className="focus:border-brand-600 mt-1 w-full rounded border border-black/15 px-3 py-2 text-sm outline-none"
+        className="focus:border-brand-600 rounded-input border-line-strong bg-surface text-ink placeholder:text-faint mt-1 w-full border px-3 py-2 text-sm transition-colors outline-none"
         {...rest}
       />
       {hint ? <span className="text-muted mt-1 block text-xs">{hint}</span> : null}
@@ -51,13 +57,13 @@ export function Select({ label, name, options, defaultValue, required, hint }) {
     <label className="block">
       <span className="text-sm font-medium">
         {label}
-        {required ? <span className="text-red-700"> *</span> : null}
+        {required ? <span className="text-bad"> *</span> : null}
       </span>
       <select
         name={name}
         required={required}
         defaultValue={defaultValue ?? ''}
-        className="focus:border-brand-600 mt-1 w-full rounded border border-black/15 bg-white px-3 py-2 text-sm outline-none"
+        className="focus:border-brand-600 rounded-input border-line-strong bg-surface text-ink mt-1 w-full border px-3 py-2 text-sm transition-colors outline-none"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -88,14 +94,14 @@ export function ReasonField({ placeholder = 'Why are you doing this?' }) {
 
 export function Button({ children, variant = 'primary', ...rest }) {
   const styles = {
-    primary: 'bg-brand-500 text-ink',
-    secondary: 'bg-white text-ink ring-1 ring-black/15',
-    danger: 'bg-white text-red-700 ring-1 ring-red-200',
+    primary: 'bg-brand-500 text-ink hover:bg-brand-600',
+    secondary: 'bg-surface text-ink ring-1 ring-line-strong hover:bg-surface-2',
+    danger: 'bg-surface text-bad ring-1 ring-bad/30 hover:bg-bad-bg',
   };
   return (
     <button
       type="submit"
-      className={`rounded px-3 py-1.5 text-sm font-semibold ${styles[variant]}`}
+      className={`press rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-55 ${styles[variant]}`}
       {...rest}
     >
       {children}
@@ -105,10 +111,10 @@ export function Button({ children, variant = 'primary', ...rest }) {
 
 export function Badge({ children, tone = 'neutral' }) {
   const tones = {
-    neutral: 'bg-black/5 text-muted',
-    good: 'bg-brand-50 text-brand-700',
-    warn: 'bg-amber-50 text-amber-800',
-    bad: 'bg-red-50 text-red-700',
+    neutral: 'bg-surface-2 text-muted',
+    good: 'bg-good-bg text-good',
+    warn: 'bg-warn-bg text-warn',
+    bad: 'bg-bad-bg text-bad',
   };
   return (
     <span className={`rounded px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>{children}</span>
@@ -123,7 +129,7 @@ export function Empty({ children }) {
 export function ActionResult({ state }) {
   if (!state?.message) return null;
   return (
-    <p role="status" className={`mt-3 text-sm ${state.ok ? 'text-brand-700' : 'text-red-700'}`}>
+    <p role="status" className={`mt-3 text-sm ${state.ok ? 'text-brand-700' : 'text-bad'}`}>
       {state.message}
     </p>
   );
@@ -142,8 +148,8 @@ export function Stat({ label, value, hint, tone = 'neutral', href }) {
   const tones = {
     neutral: 'text-ink',
     good: 'text-brand-700',
-    warn: 'text-amber-800',
-    bad: 'text-red-700',
+    warn: 'text-warn',
+    bad: 'text-bad',
   };
   const body = (
     <>
@@ -152,9 +158,9 @@ export function Stat({ label, value, hint, tone = 'neutral', href }) {
       {hint ? <p className="text-muted mt-0.5 text-xs">{hint}</p> : null}
     </>
   );
-  const className = 'block rounded-lg bg-white p-4 ring-1 ring-black/5';
+  const className = 'block rounded-card bg-surface p-4 ring-1 ring-line transition-colors';
   return href ? (
-    <a href={href} className={`${className} hover:ring-brand-600/40`}>
+    <a href={href} className={`${className} press hover:ring-brand-600/50`}>
       {body}
     </a>
   ) : (
@@ -187,7 +193,7 @@ export function Table({ head, children, minWidth = '46rem' }) {
 }
 
 export function Row({ children }) {
-  return <tr className="border-t border-black/5">{children}</tr>;
+  return <tr className="border-line border-t">{children}</tr>;
 }
 
 export function Cell({ children, mono = false, numeric = false, muted = false }) {
@@ -213,8 +219,8 @@ export function FilterChip({ active, href, label }) {
   return (
     <a
       href={href}
-      className={`rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
-        active ? 'bg-brand-500 text-ink' : 'bg-white ring-1 ring-black/10 hover:ring-black/25'
+      className={`press-sm rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+        active ? 'bg-brand-500 text-ink' : 'bg-surface ring-line hover:ring-line-strong ring-1'
       }`}
     >
       {label}
@@ -240,9 +246,9 @@ export function Facts({ children }) {
 
 export function Fact({ label, value }) {
   return (
-    <div className="flex justify-between gap-4 border-b border-black/5 py-1.5">
+    <div className="border-line flex justify-between gap-4 border-b py-1.5">
       <dt className="text-muted text-sm">{label}</dt>
-      <dd className="text-right text-sm">{value ?? '—'}</dd>
+      <dd className="text-right text-sm">{value ?? '-'}</dd>
     </div>
   );
 }
@@ -256,7 +262,7 @@ export function Fact({ label, value }) {
  */
 export function Unavailable({ children }) {
   return (
-    <p className="rounded bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <p className="rounded-input bg-warn-bg text-warn px-4 py-3 text-sm leading-relaxed">
       {children ?? 'This information could not be loaded.'}
     </p>
   );
@@ -265,12 +271,12 @@ export function Unavailable({ children }) {
 /** Money, always from integer pesewas. Never a float, never a client calculation. */
 export function Cedis({ pesewas, zero = 'GH₵0.00' }) {
   const n = Number(pesewas ?? 0);
-  if (!Number.isFinite(n)) return <span className="text-muted">—</span>;
+  if (!Number.isFinite(n)) return <span className="text-muted">-</span>;
   return <span className="tabular-nums">{n === 0 ? zero : `GH₵${(n / 100).toFixed(2)}`}</span>;
 }
 
 export function age(seconds) {
-  if (seconds == null) return '—';
+  if (seconds == null) return '-';
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -279,7 +285,7 @@ export function age(seconds) {
 }
 
 export function when(value) {
-  if (!value) return '—';
+  if (!value) return '-';
   return new Date(value).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 }
 

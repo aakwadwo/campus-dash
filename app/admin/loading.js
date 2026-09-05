@@ -17,24 +17,24 @@ export default function AdminLoading() {
     <div aria-busy="true" aria-live="polite">
       <p className="text-muted mb-6 text-sm">Loading…</p>
 
-      <div className="mb-6 h-8 w-56 animate-pulse rounded bg-black/5" />
+      <div className="bg-surface-2 mb-6 h-8 w-56 animate-pulse rounded" />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="rounded-lg bg-white p-4 ring-1 ring-black/5">
-            <div className="h-3 w-20 animate-pulse rounded bg-black/5" />
+          <div key={i} className="rounded-card bg-surface ring-line p-4 ring-1">
+            <div className="bg-surface-2 h-3 w-20 animate-pulse rounded" />
             <div className="mt-3 h-6 w-16 animate-pulse rounded bg-black/10" />
           </div>
         ))}
       </div>
 
-      <section className="rounded-lg bg-white ring-1 ring-black/5">
-        <header className="border-b border-black/5 px-5 py-3">
+      <section className="rounded-card bg-surface ring-line ring-1">
+        <header className="border-line border-b px-5 py-3">
           <div className="h-4 w-32 animate-pulse rounded bg-black/10" />
         </header>
         <div className="space-y-3 px-5 py-4">
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-4 animate-pulse rounded bg-black/5" />
+            <div key={i} className="bg-surface-2 h-4 animate-pulse rounded" />
           ))}
         </div>
       </section>

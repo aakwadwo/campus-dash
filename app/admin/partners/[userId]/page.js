@@ -58,7 +58,7 @@ export default async function AdminPartnerPage({ params }) {
       </div>
 
       {p.active_order_id ? (
-        <p className="mb-6 rounded bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="bg-warn-bg text-warn mb-6 rounded px-4 py-3 text-sm">
           Currently carrying{' '}
           <Link
             href={`/admin/orders/${p.active_order_id}`}
@@ -83,7 +83,7 @@ export default async function AdminPartnerPage({ params }) {
               p.has_face_image ? (
                 <span className="text-brand-700">On file (private)</span>
               ) : (
-                <span className="text-red-700">Missing</span>
+                <span className="text-bad">Missing</span>
               )
             }
           />
@@ -93,7 +93,7 @@ export default async function AdminPartnerPage({ params }) {
               p.has_student_id ? (
                 <span className="text-brand-700">On file (private)</span>
               ) : (
-                <span className="text-red-700">Missing</span>
+                <span className="text-bad">Missing</span>
               )
             }
           />

@@ -14,7 +14,7 @@ export default function ConfigForm({ config }) {
   return (
     <form action={save} className="grid gap-4 sm:grid-cols-2">
       <p className="text-muted text-xs sm:col-span-2">
-        Leave a field blank to leave it unchanged. Fee changes apply to the NEXT order — an order
+        Leave a field blank to leave it unchanged. Fee changes apply to the NEXT order. An order
         already placed keeps the price it was quoted.
       </p>
 
@@ -24,7 +24,7 @@ export default function ConfigForm({ config }) {
           functions, and price_scan_order() never looks at service_fee_bps. */}
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Food orders</h3>
       <Field
-        label="Food service fee (basis points — 500 = 5% of the food subtotal)"
+        label="Food service fee (basis points, 500 = 5% of the food subtotal)"
         name="service_fee_bps"
         type="number"
         placeholder={String(config?.service_fee_bps ?? '')}
@@ -33,11 +33,11 @@ export default function ConfigForm({ config }) {
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Scan delivery</h3>
       <Field
-        label="Scan service fee (pesewas — 200 = GH₵2.00, flat)"
+        label="Scan service fee (pesewas, 200 = GH₵2.00, flat)"
         name="scan_service_fee_pesewas"
         type="number"
         placeholder={String(config?.scan_service_fee_pesewas ?? 'not configured')}
-        hint="A flat amount per errand, never a percentage — a scan order has no food value to take a percentage of. Clearing it stops scan ordering rather than making it free."
+        hint="A flat amount per errand, never a percentage: a scan order has no food value to take a percentage of. Clearing it stops scan ordering rather than making it free."
       />
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Both order types</h3>

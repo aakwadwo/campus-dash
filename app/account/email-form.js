@@ -26,20 +26,20 @@ export default function EmailForm({ email }) {
           required
           defaultValue={email ?? ''}
           placeholder="you@example.com"
-          className="focus:border-brand-600 focus:ring-brand-600/50 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+          className="focus:border-brand-600 focus:ring-brand-600/50 rounded-input border-line-strong bg-surface w-full border px-3 py-2.5 text-base transition-colors outline-none focus:ring-2"
         />
       </label>
       <button
         type="submit"
         disabled={saving}
-        className="rounded-lg border border-black/15 bg-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+        className="press border-line-strong bg-surface rounded-full border px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-55"
       >
         {saving ? 'Saving…' : email ? 'Update email' : 'Add email'}
       </button>
       {state.message ? (
         <p
           role={state.ok ? undefined : 'alert'}
-          className={state.ok ? 'text-muted text-sm' : 'text-sm text-red-700'}
+          className={state.ok ? 'text-muted text-sm' : 'text-bad text-sm'}
         >
           {state.message}
         </p>

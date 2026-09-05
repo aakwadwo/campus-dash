@@ -29,7 +29,7 @@ export default async function PartnerDeliveryPage() {
   const scanUrl = collecting && isScan ? await scanImageUrl(delivery.order_id) : null;
 
   return (
-    <main className="mx-auto max-w-md px-4 pt-5 pb-16">
+    <main className="mx-auto max-w-2xl px-4 pt-5 pb-16">
       <Link href="/partner" className="text-muted text-sm underline underline-offset-4">
         ← Partner
       </Link>
@@ -51,7 +51,7 @@ export default async function PartnerDeliveryPage() {
 
       {collecting && isScan ? (
         <>
-          <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <section className="rounded-card bg-surface ring-line p-4 ring-1">
             <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>
             <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
             <p className="text-muted text-sm">{delivery.vendor_location}</p>
@@ -65,14 +65,14 @@ export default async function PartnerDeliveryPage() {
             />
           </div>
 
-          <section className="text-muted mt-3 rounded-lg bg-white p-4 text-sm ring-1 ring-black/5">
+          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
             Delivering to <strong className="text-ink">{delivery.destination_zone}</strong>. The
             exact room appears once you confirm the scan was redeemed.
           </section>
         </>
       ) : collecting ? (
         <>
-          <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <section className="rounded-card bg-surface ring-line p-4 ring-1">
             <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>
             <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
             <p className="text-muted text-sm">{delivery.vendor_location}</p>
@@ -84,7 +84,7 @@ export default async function PartnerDeliveryPage() {
             </a>
           </section>
 
-          <section className="bg-brand-500 text-ink mt-3 rounded-lg p-4">
+          <section className="bg-brand-500 text-ink rounded-card mt-3 p-4">
             <h2 className="text-xs font-semibold tracking-wide uppercase opacity-90">
               Read this to the vendor
             </h2>
@@ -96,14 +96,14 @@ export default async function PartnerDeliveryPage() {
             </p>
           </section>
 
-          <section className="text-muted mt-3 rounded-lg bg-white p-4 text-sm ring-1 ring-black/5">
+          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
             Delivering to <strong className="text-ink">{delivery.destination_zone}</strong>. The
             exact room appears once the vendor confirms the handoff.
           </section>
         </>
       ) : (
         <>
-          <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+          <section className="rounded-card bg-surface ring-line p-4 ring-1">
             <h2 className="text-xs font-semibold tracking-wide uppercase">Take it to</h2>
             <p className="mt-1 text-lg font-semibold">{delivery.destination}</p>
             {delivery.destination_note ? (
@@ -118,7 +118,7 @@ export default async function PartnerDeliveryPage() {
             </a>
           </section>
 
-          <section className="text-muted mt-3 rounded-lg bg-white p-4 text-sm ring-1 ring-black/5">
+          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
             Ask the customer for their <strong className="text-ink">4-digit delivery code</strong>{' '}
             and enter it below. That is what completes the job and records your earning.
           </section>

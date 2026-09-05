@@ -21,7 +21,7 @@ export default function LocationForms({ locations }) {
   const [selectedId, setSelectedId] = useState(locations[0]?.id ?? '');
   const selected = locations.find((l) => l.id === selectedId);
 
-  const indent = (l) => `${'— '.repeat(l.depth)}${l.name}`;
+  const indent = (l) => `${'\u00A0\u00A0'.repeat(l.depth)}${l.name}`;
 
   return (
     <>
@@ -40,7 +40,7 @@ export default function LocationForms({ locations }) {
             name="parent_id"
             defaultValue=""
             options={[
-              { value: '', label: '— none (only for a CAMPUS) —' },
+              { value: '', label: '(none, only for a CAMPUS)' },
               ...locations.map((l) => ({ value: l.id, label: indent(l) })),
             ]}
           />
@@ -73,7 +73,7 @@ export default function LocationForms({ locations }) {
             <select
               value={selectedId}
               onChange={(event) => setSelectedId(event.target.value)}
-              className="focus:border-brand-600 mt-1 w-full rounded border border-black/15 bg-white px-3 py-2 text-sm outline-none"
+              className="focus:border-brand-600 border-line-strong bg-surface mt-1 w-full rounded border px-3 py-2 text-sm outline-none"
             >
               {locations.map((l) => (
                 <option key={l.id} value={l.id}>
@@ -119,7 +119,7 @@ export default function LocationForms({ locations }) {
                 </div>
               </form>
 
-              <div className="mt-6 flex flex-wrap gap-6 border-t border-black/5 pt-6">
+              <div className="border-line mt-6 flex flex-wrap gap-6 border-t pt-6">
                 <form action={activeAction} className="flex items-end gap-2">
                   <input type="hidden" name="location_id" value={selected.id} />
                   <input
@@ -158,7 +158,7 @@ export default function LocationForms({ locations }) {
                     pending={deleting}
                     pendingLabel="Deleting…"
                     confirmLabel="Yes, delete it"
-                    question={`Delete “${selected.name}”? To take it out of use without losing it, deactivate it instead — that also deactivates everything beneath it and can be undone.`}
+                    question={`Delete “${selected.name}”? To take it out of use without losing it, deactivate it instead. That also deactivates everything beneath it and can be undone.`}
                   >
                     Delete
                   </ConfirmButton>

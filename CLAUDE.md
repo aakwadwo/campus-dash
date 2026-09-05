@@ -141,11 +141,23 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
 - Customers, vendors and Partners sign in by phone OTP; administrators sign in
   with email and password at `/login/admin`. Ordering additionally requires
   student onboarding at `/onboarding`.
-- Brand colours are white, pastel yellow (`#F7E7A1`) and soft charcoal
-  (`#242424`) — never pure black. `brand-500` is the pastel fill for primary
-  buttons and always carries `text-ink`; `brand-700` is the darkened ochre for
-  links, status text and small marks ON white. They are not interchangeable.
-  Amber and red are the only other colours, and only for warning and failure.
+- The design system lives in `app/globals.css` (tokens) and `app/ui.js` (the
+  component kit); the admin console's denser kit is `app/admin/ui.js` and draws
+  from the same tokens. Never write a raw hex, a `bg-white` or a `border-black/10`
+  in a component — every colour is a semantic token so that dark mode works
+  without a second copy of the markup.
+- `brand-500` (`#FFC233`, warm golden yellow) is the Campus Dash accent and the
+  only filled yellow on a screen: primary buttons, active states. It always
+  carries `text-ink`. It is NOT legible as text on a light ground — that is
+  `brand-700`, the deep ochre for links, status text and small marks. The two
+  are not interchangeable. In dark mode `brand-700` re-points to a pale gold,
+  keeping its meaning (the accent mark) on a ground where the accent must come
+  up rather than down. Amber and red are the only other colours, and only for
+  warning and failure; `good` is a green that is deliberately not the brand
+  yellow, so a success mark never reads as a call to action.
+- Surfaces are `canvas` (page), `surface` (cards), `surface-2`/`surface-3`
+  (inputs, muted fills, hover). Lines are `line` / `line-strong` hairlines.
+  Radii are `input` / `card` / `panel` / `sheet`, and buttons are pills.
 - Sign-in destination is derived from capabilities in `lib/auth/landing.js`,
   never chosen by the client. Admin → /admin, vendor → /vendor, approved
   Partner → /partner, applicant → /partner/apply, customer → /order, otherwise

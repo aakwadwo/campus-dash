@@ -28,7 +28,7 @@ export default async function AdminOverviewPage() {
       <>
         <h1 className="mb-4 text-2xl font-semibold tracking-tight">Dashboard</h1>
         <Unavailable>
-          The dashboard could not be loaded. This is not the same as there being no activity — do
+          The dashboard could not be loaded. This is not the same as there being no activity, so do
           not treat it as an empty day.
         </Unavailable>
       </>
@@ -49,7 +49,7 @@ export default async function AdminOverviewPage() {
         {attention > 0 ? (
           <Link
             href="/admin/disputes"
-            className="rounded-lg bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 ring-1 ring-red-200"
+            className="press bg-bad-bg text-bad ring-bad/30 rounded-full px-4 py-2 text-sm font-semibold ring-1 transition-colors"
           >
             {attention} {attention === 1 ? 'order needs' : 'orders need'} a decision →
           </Link>
@@ -137,7 +137,7 @@ export default async function AdminOverviewPage() {
         <Stat
           label="Delivery fees held"
           value={<Cedis pesewas={money.delivery_fees_held} />}
-          hint="Owed to Partners on deliveries not yet completed — not ours"
+          hint="Owed to Partners on deliveries not yet completed, not ours"
           tone={Number(money.delivery_fees_held) > 0 ? 'warn' : 'neutral'}
           href="/admin/finance?payee=PLATFORM"
         />
@@ -247,7 +247,7 @@ export default async function AdminOverviewPage() {
                   {job.schedule}
                 </Cell>
                 <Cell muted>
-                  {job.last_run_at ? new Date(job.last_run_at).toLocaleTimeString('en-GB') : '—'}
+                  {job.last_run_at ? new Date(job.last_run_at).toLocaleTimeString('en-GB') : '-'}
                 </Cell>
                 <Cell>
                   <Badge tone={job.last_status === 'succeeded' ? 'good' : 'bad'}>

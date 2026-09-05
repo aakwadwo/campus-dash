@@ -46,7 +46,7 @@ export default async function PartnerApplyPage() {
   const showForm = !application || application.status === 'REJECTED';
 
   return (
-    <main className="mx-auto max-w-md px-4 pt-6 pb-16">
+    <main className="mx-auto max-w-2xl px-4 pt-6 pb-16">
       <h1 className="text-2xl font-semibold tracking-tight">
         {state ? state.title : 'Become a Partner'}
       </h1>
@@ -55,7 +55,7 @@ export default async function PartnerApplyPage() {
         <>
           <p className="text-muted mt-2 text-sm leading-relaxed">{state.body}</p>
           {application.review_notes ? (
-            <p className="mt-3 rounded-lg bg-white p-3 text-sm ring-1 ring-black/5">
+            <p className="rounded-card bg-surface ring-line mt-3 p-3 text-sm ring-1">
               {application.review_notes}
             </p>
           ) : null}
@@ -65,7 +65,7 @@ export default async function PartnerApplyPage() {
         </>
       ) : (
         <p className="text-muted mt-2 text-sm leading-relaxed">
-          You already have a Campus Dash account, and this adds delivering to it — same login, same
+          You already have a Campus Dash account, and this adds delivering to it: same login, same
           details, same order history. All we need is a live photo so an admin can compare your face
           with your student ID.
         </p>

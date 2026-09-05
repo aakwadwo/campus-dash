@@ -23,12 +23,12 @@ export default function PayoutDestinations({ destinations }) {
   return (
     <Panel
       title="Payout destinations"
-      description="Mobile money accounts settlement transfers are sent to. Server-only — no client role can read this table."
+      description="Mobile money accounts settlement transfers are sent to. Server-only: no client role can read this table."
     >
       {destinations === null ? (
         <div className="mb-6">
           <Unavailable>
-            The payout destinations could not be loaded. This is not the same as there being none —
+            The payout destinations could not be loaded. This is not the same as there being none.
             do not conclude a payee is unregistered from this screen.
           </Unavailable>
         </div>
@@ -46,7 +46,7 @@ export default function PayoutDestinations({ destinations }) {
             </thead>
             <tbody>
               {destinations.map((row) => (
-                <tr key={`${row.payee_type}:${row.payee_id}`} className="border-t border-black/5">
+                <tr key={`${row.payee_type}:${row.payee_id}`} className="border-line border-t">
                   <td className="py-2">
                     {row.payee_name}
                     <span className="text-muted ml-2 text-xs">{row.payee_type}</span>
@@ -104,7 +104,7 @@ export default function PayoutDestinations({ destinations }) {
 }
 
 const INPUT =
-  'mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/50';
+  'mt-1 w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/50';
 
 function Field({ label, children }) {
   return (

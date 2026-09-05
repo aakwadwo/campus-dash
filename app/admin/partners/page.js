@@ -70,11 +70,11 @@ export default async function PartnersPage() {
                     href={`/admin/partners/${p.user_id}`}
                     className="text-brand-700 underline underline-offset-4"
                   >
-                    {p.full_name ?? '—'}
+                    {p.full_name ?? '-'}
                   </Link>
                 </Cell>
                 <Cell mono>{p.phone}</Cell>
-                <Cell muted>{p.class_year ?? '—'}</Cell>
+                <Cell muted>{p.class_year ?? '-'}</Cell>
                 <Cell>
                   <Badge tone={TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
                   {p.is_suspended ? <Badge tone="bad">account suspended</Badge> : null}
@@ -120,7 +120,7 @@ export default async function PartnersPage() {
 
 function Application({ application }) {
   return (
-    <article className="border-t border-black/5 pt-5 first:border-0 first:pt-0">
+    <article className="border-line border-t pt-5 first:border-0 first:pt-0">
       <header className="mb-3 flex flex-wrap items-baseline gap-3">
         <h3 className="font-semibold">{application.full_name ?? 'Unnamed'}</h3>
         <Badge tone={TONE[application.status]}>{application.status}</Badge>
@@ -153,7 +153,7 @@ function Application({ application }) {
         <p className="text-muted mb-3 text-xs">
           Reviewed {new Date(application.reviewed_at).toLocaleString()}
           {application.reviewed_by_name ? ` by ${application.reviewed_by_name}` : ''}
-          {application.review_notes ? ` — ${application.review_notes}` : ''}
+          {application.review_notes ? `: ${application.review_notes}` : ''}
         </p>
       ) : null}
 
@@ -168,13 +168,9 @@ function Document({ label, url, path }) {
       <p className="mb-1 text-xs font-medium tracking-wide uppercase">{label}</p>
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={url}
-          alt={label}
-          className="max-h-64 rounded border border-black/10 object-contain"
-        />
+        <img src={url} alt={label} className="border-line max-h-64 rounded border object-contain" />
       ) : (
-        <p className="text-muted rounded border border-dashed border-black/15 px-3 py-6 text-center text-xs">
+        <p className="text-muted border-line-strong rounded border border-dashed px-3 py-6 text-center text-xs">
           {path ? 'File missing from storage' : 'Not uploaded yet'}
         </p>
       )}

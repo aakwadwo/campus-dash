@@ -1,119 +1,176 @@
 import Link from 'next/link';
+import SiteHeader from './site-header';
+import SiteFooter from './site-footer';
+import { listVendors } from '@/lib/customer';
+import { ButtonLink, Container, ImagePlaceholder, ChevronRightIcon } from './ui';
 
 export const metadata = {
-  title: 'Campus Dash',
+  title: 'Campus Dash: order food around Academic City',
   description:
-    'Get what you need from trusted vendors around Academic City. Collect it yourself, or have a verified student Partner bring it to you.',
+    'Order from vendors around Academic City. Collect it yourself, or have a student Partner bring it to you.',
 };
 
+export const dynamic = 'force-dynamic';
+
 /**
- * The public landing page.
+ * The landing page.
  *
- * Three audiences, two of them primary. Customers and vendors get the two
- * buttons; Partners get a quieter route further down, because recruiting
- * Partners is a smaller and more deliberate act than taking an order.
+ * ONE ACTION. A student opening this on a phone between lectures wants food,
+ * not an explanation of the product. So the mobile composition is: what this
+ * is, one line of how, one button. Everything else is below it and quieter.
  *
- * The wording stays broader than food on purpose. Food is where Campus Dash
- * starts, not what it is — describing it as a food app now would make every
- * later category look like a bolt-on.
+ * The copy was cut hard in this pass. The previous version led with three
+ * sentences before the first button; a food app that needs a paragraph to
+ * explain itself has already lost the person who was hungry.
+ *
+ * WHAT IS DELIBERATELY ABSENT. No eyebrow label, no gradient, no illustration,
+ * no statistics, no testimonials. Campus Dash has one campus and a handful of
+ * stalls; the vendor strip below is real data from the same anon-readable query
+ * the marketplace uses, and when the pilot is empty it simply does not render.
  */
 
 const HOW_IT_WORKS = [
-  {
-    title: 'Choose a vendor',
-    body: 'Approved vendors around Academic City, with what they actually have available right now.',
-  },
-  {
-    title: 'Collect it, or have it brought',
-    body: 'Pick it up yourself for no delivery fee, or send it to a campus room, block or common area.',
-  },
-  {
-    title: 'Pay once, in the app',
-    body: 'One payment covers the vendor, the delivery and the Campus Dash fee. Prices are set by the vendor.',
-  },
+  ['Pick a vendor', 'Stalls around campus, with what they have right now.'],
+  ['Collect or get it brought', 'Pick it up free, or send it to your block.'],
+  ['Pay once', 'One payment covers the food, the delivery and our fee.'],
 ];
 
-export default function Home() {
+export default async function Home() {
+  // Never let a slow or failing marketplace query take the landing page down.
+  const vendors = await listVendors().catch(() => []);
+  const open = (vendors ?? []).filter((v) => v.is_accepting_orders).slice(0, 4);
+
   return (
     <div className="min-h-dvh">
-      <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-        <p className="text-muted text-xs font-medium tracking-[0.2em] uppercase">
-          Academic City University
-        </p>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Campus Dash</h1>
-        <p className="mt-4 max-w-xl text-lg leading-relaxed text-balance">
-          Get what you need from trusted vendors around campus. Collect it yourself, or have a
-          verified student Partner bring it to you.
-        </p>
+      <SiteHeader active="browse" />
 
-        {/* The two primary paths. Everything else on this page is secondary.
-            Customer is the filled one because it is the larger audience by far;
-            Vendor is the same shape in outline, which reads as equal in rank
-            without competing for the eye. Neither is a black slab. */}
-        <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-          <Link
-            href="/order"
-            className="bg-brand-500 hover:bg-brand-600 text-ink grow rounded-xl px-6 py-4 text-center text-base font-semibold transition-colors"
-          >
-            Customer
-            <span className="mt-0.5 block text-sm font-normal opacity-75">
-              Browse vendors and order
-            </span>
-          </Link>
-          <Link
-            href="/vendor"
-            className="text-ink hover:border-brand-600 hover:bg-brand-50 grow rounded-xl border border-black/12 bg-white px-6 py-4 text-center text-base font-semibold transition-colors"
-          >
-            Vendor
-            <span className="text-muted mt-0.5 block text-sm font-normal">
-              Receive and manage orders
-            </span>
-          </Link>
-        </div>
+      <main className="pb-16">
+        {/* ----------------------------------------------------------------
+            The whole pitch, above the fold on a 360px screen. */}
+        <Container size="wide" className="pt-10 pb-8 sm:pt-20 sm:pb-14">
+          {/* CENTRED ON A PHONE, LEFT-ALIGNED ON A LAPTOP. A 40px headline set
+              flush left runs almost to both edges of a 360px screen, which
+              reads as cramped however much padding sits outside it. Centring it
+              inside a deliberately narrow measure gives the type room to
+              breathe and lands the wrap in a sensible place; from `sm` up the
+              original left-aligned composition returns unchanged. */}
+          <h1 className="text-display mx-auto max-w-[19rem] text-center text-[2.5rem] font-semibold text-balance sm:mx-0 sm:max-w-3xl sm:text-left sm:text-6xl">
+            Campus food brought to you.
+          </h1>
+          <p className="text-muted mx-auto mt-4 max-w-xs text-center text-base leading-relaxed text-balance sm:mx-0 sm:max-w-md sm:text-left sm:text-lg">
+            Order from vendors around Academic City.
+          </p>
 
-        <section className="mt-16">
-          <h2 className="text-sm font-semibold tracking-wide uppercase">How it works</h2>
-          <ol className="mt-5 grid gap-4 sm:grid-cols-3">
-            {HOW_IT_WORKS.map((step, index) => (
-              <li key={step.title} className="rounded-xl bg-white p-5 ring-1 ring-black/5">
-                <span className="bg-brand-500 text-ink grid size-7 place-items-center rounded-full text-xs font-semibold">
-                  {index + 1}
+          {/* `items-start` matters: in a flex column, children stretch to the
+              full width by default, which is how a single CTA turns into a
+              full-bleed button bar on a phone. The button is sized to its
+              label instead. */}
+          <div className="mt-7 flex flex-col items-center gap-4 sm:items-start">
+            <ButtonLink href="/order" size="lg" className="px-7">
+              Browse food
+            </ButtonLink>
+
+            {/* The scan route is secondary and reads as a link, not a rival
+                button. It matters to the few people who arrive with a scan
+                already in hand, and to nobody else. */}
+            <Link
+              href="/scan"
+              className="text-muted hover:text-ink press-sm -ml-1 inline-flex min-h-11 items-center gap-1 rounded-full px-1 text-sm font-medium transition-colors"
+            >
+              Have a meal scan? Redeem it
+              <ChevronRightIcon className="size-4" />
+            </Link>
+          </div>
+        </Container>
+
+        {/* ----------------------------------------------------------------
+            Real stalls, or nothing at all. */}
+        {open.length ? (
+          <Container size="wide" className="border-line border-t pt-8 sm:pt-9">
+            <div className="mb-4 flex items-end justify-between gap-4">
+              <h2 className="text-lg font-semibold tracking-tight sm:text-2xl">Open right now</h2>
+              <Link
+                href="/order"
+                className="text-muted hover:text-ink press-sm inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full text-sm font-semibold transition-colors"
+              >
+                See all
+                <ChevronRightIcon className="size-4" />
+              </Link>
+            </div>
+            <ul className="stagger grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-4">
+              {open.map((vendor) => (
+                <li key={vendor.id}>
+                  <Link href={`/order/${vendor.id}`} className="press block rounded-[16px]">
+                    <ImagePlaceholder name={vendor.name} />
+                    <p className="mt-2.5 px-0.5 leading-snug font-semibold break-words">
+                      {vendor.name}
+                    </p>
+                    <p className="text-good mt-1 flex items-center gap-1.5 px-0.5 text-sm font-medium">
+                      <span className="bg-good size-1.5 rounded-full" />
+                      Open
+                    </p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Container>
+        ) : null}
+
+        {/* ----------------------------------------------------------------
+            How it works: three short lines, not three cards with icons in
+            circles. One sentence each is the whole budget. */}
+        <Container size="wide" className="border-line mt-8 border-t pt-8 sm:mt-11 sm:pt-9">
+          <h2 className="text-lg font-semibold tracking-tight sm:text-2xl">How it works</h2>
+          <ol className="mt-5 grid gap-x-10 gap-y-5 sm:grid-cols-3">
+            {HOW_IT_WORKS.map(([title, body], index) => (
+              <li key={title} className="flex gap-3.5 sm:block">
+                <span className="text-brand-700 shrink-0 text-sm font-semibold tabular-nums sm:mb-1.5 sm:block">
+                  {String(index + 1).padStart(2, '0')}
                 </span>
-                <h3 className="mt-3 font-semibold">{step.title}</h3>
-                <p className="text-muted mt-1.5 text-sm leading-relaxed">{step.body}</p>
+                <div className="min-w-0">
+                  <h3 className="font-semibold">{title}</h3>
+                  <p className="text-muted mt-1 text-sm leading-relaxed">{body}</p>
+                </div>
               </li>
             ))}
           </ol>
-        </section>
+        </Container>
 
-        {/* Partner recruitment — the secondary pathway. */}
-        <section className="border-brand-600/60 bg-brand-50/60 mt-12 rounded-xl border p-6">
-          <h2 className="text-lg font-semibold">Want to deliver with Campus Dash?</h2>
-          <p className="text-muted mt-1.5 max-w-lg text-sm leading-relaxed">
-            Campus Dash Partners are Academic City students who bring orders to a campus destination
-            and are paid for each delivery. You choose when you are available, and you carry one
-            delivery at a time.
-          </p>
-          <Link
-            href="/partner/apply"
-            className="text-brand-700 mt-4 inline-block text-sm font-semibold underline underline-offset-4"
-          >
-            Join us as a Partner
-          </Link>
-        </section>
+        {/* ----------------------------------------------------------------
+            The two secondary audiences, as quiet rows. Signposts, not
+            pitches. */}
+        <Container size="wide" className="border-line mt-8 border-t pt-2 sm:mt-11 sm:pt-3">
+          <ul className="divide-line divide-y">
+            <li>
+              <Link
+                href="/partner/apply"
+                className="press-sm group flex min-h-16 items-center gap-4 py-5"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">Deliver with Campus Dash</span>
+                  <span className="text-muted mt-1 block text-sm leading-relaxed">
+                    Students bring orders across campus and are paid per delivery.
+                  </span>
+                </span>
+                <ChevronRightIcon className="text-faint size-5 shrink-0" />
+              </Link>
+            </li>
+            <li>
+              <Link href="/vendor" className="press-sm flex min-h-16 items-center gap-4 py-5">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">Sell on Campus Dash</span>
+                  <span className="text-muted mt-1 block text-sm leading-relaxed">
+                    Already a vendor? Sign in to your order board.
+                  </span>
+                </span>
+                <ChevronRightIcon className="text-faint size-5 shrink-0" />
+              </Link>
+            </li>
+          </ul>
+        </Container>
       </main>
 
-      <footer className="border-t border-black/10">
-        <div className="text-muted mx-auto flex max-w-3xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-6 text-sm">
-          <span>Campus Dash · Academic City University, Ghana</span>
-          <Link href="/terms" className="ml-auto underline underline-offset-4">
-            Terms
-          </Link>
-          <Link href="/login" className="underline underline-offset-4">
-            Sign in
-          </Link>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

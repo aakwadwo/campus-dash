@@ -23,7 +23,7 @@ export default function OnboardingForm({ terms, next, defaultName }) {
 
       <label className="block">
         <span className="text-sm font-medium">
-          Full name <span className="text-red-700">*</span>
+          Full name <span className="text-bad">*</span>
         </span>
         <input
           name="full_name"
@@ -31,37 +31,37 @@ export default function OnboardingForm({ terms, next, defaultName }) {
           defaultValue={defaultName}
           autoComplete="name"
           placeholder="As it appears on your student ID"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+          className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
         />
       </label>
 
       <label className="block">
         <span className="text-sm font-medium">
-          Student ID number <span className="text-red-700">*</span>
+          Student ID number <span className="text-bad">*</span>
         </span>
         <input
           name="student_id_number"
           required
           placeholder="e.g. 10012345"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+          className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
         />
       </label>
 
       <label className="block">
         <span className="text-sm font-medium">
-          Class year <span className="text-red-700">*</span>
+          Class year <span className="text-bad">*</span>
         </span>
         <input
           name="class_year"
           required
           placeholder="e.g. Class of 2029"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+          className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
         />
       </label>
 
       <label className="block">
         <span className="text-sm font-medium">
-          Email address <span className="text-red-700">*</span>
+          Email address <span className="text-bad">*</span>
         </span>
         <input
           name="email"
@@ -69,7 +69,7 @@ export default function OnboardingForm({ terms, next, defaultName }) {
           required
           autoComplete="email"
           placeholder="you@example.com"
-          className="mt-1 w-full rounded border border-black/15 px-3 py-2.5 text-base"
+          className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
         />
         <span className="text-muted mt-1 block text-xs">
           Any working address, and it must not already be on another Campus Dash account. Your
@@ -79,7 +79,7 @@ export default function OnboardingForm({ terms, next, defaultName }) {
 
       <StudentIdCapture path={idPath} onUploaded={setIdPath} />
 
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line p-4 ring-1">
         <h2 className="text-sm font-medium">{terms.title}</h2>
         <div className="text-muted mt-2 max-h-44 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap">
           {terms.body}
@@ -90,13 +90,13 @@ export default function OnboardingForm({ terms, next, defaultName }) {
           <input type="checkbox" name="accept" required className="mt-0.5 size-4 shrink-0" />
           <span>
             I have read and accept these terms (version {terms.version}).{' '}
-            <span className="text-red-700">*</span>
+            <span className="text-bad">*</span>
           </span>
         </label>
       </section>
 
       {state.message ? (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-bad text-sm">
           {state.message}
         </p>
       ) : null}
@@ -104,7 +104,7 @@ export default function OnboardingForm({ terms, next, defaultName }) {
       <button
         type="submit"
         disabled={submitting || !idPath}
-        className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
+        className="press bg-brand-500 text-ink w-full rounded-full py-4 text-base font-semibold transition-colors disabled:opacity-55"
       >
         {submitting ? 'Saving…' : 'Finish and start ordering'}
       </button>
@@ -119,9 +119,9 @@ function StudentIdCapture({ path, onUploaded }) {
   const [preview, setPreview] = usePreview();
 
   return (
-    <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+    <section className="rounded-card bg-surface ring-line p-4 ring-1">
       <h2 className="text-sm font-medium">
-        Photo of your student ID <span className="text-red-700">*</span>
+        Photo of your student ID <span className="text-bad">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs">
         Make sure the name, photo and ID number are readable. It is stored privately and is seen
@@ -158,16 +158,16 @@ function StudentIdCapture({ path, onUploaded }) {
         <img
           src={preview}
           alt="The student ID photograph you selected"
-          className="mt-3 w-full rounded ring-1 ring-black/10"
+          className="ring-line mt-3 w-full rounded ring-1"
         />
       ) : null}
       {path ? (
         <p className="text-brand-700 mt-2 text-sm font-medium">
-          ✓ Student ID received — check the name, photo and number are readable, and choose another
+          ✓ Student ID received. Check the name, photo and number are readable, and choose another
           file above if not.
         </p>
       ) : null}
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </section>
   );
 }
@@ -191,9 +191,12 @@ function usePreview() {
   const [url, setUrl] = useState(null);
   const current = useRef(null);
 
-  useEffect(() => () => {
-    if (current.current) URL.revokeObjectURL(current.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (current.current) URL.revokeObjectURL(current.current);
+    },
+    []
+  );
 
   const set = (next) => {
     if (current.current) URL.revokeObjectURL(current.current);

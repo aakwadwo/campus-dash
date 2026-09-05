@@ -21,11 +21,11 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
 
   return (
     <>
-      <section className="rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line p-4 ring-1">
         <h2 className="text-xs font-semibold tracking-wide uppercase">The customer’s scan</h2>
         <p className="text-muted mt-1 text-sm leading-relaxed">
-          Show this at {restaurantName} to collect the order. The food is already paid for — do not
-          pay for it yourself.
+          Show this at {restaurantName} to collect the order. The food is already paid for, so do
+          not pay for it yourself.
         </p>
 
         {scanUrl ? (
@@ -43,18 +43,18 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
             <img
               src={scanUrl}
               alt="The customer’s meal scan"
-              className="mt-3 w-full rounded ring-1 ring-black/10"
+              className="ring-line mt-3 w-full rounded ring-1"
             />
           )
         ) : (
-          <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <p className="bg-warn-bg text-warn mt-3 rounded px-3 py-2 text-sm">
             The scan could not be loaded. Reload the page; if it still will not show, do not pay for
             the food and contact Campus Dash.
           </p>
         )}
       </section>
 
-      <section className="mt-3 rounded-lg bg-white p-4 ring-1 ring-black/5">
+      <section className="rounded-card bg-surface ring-line mt-3 p-4 ring-1">
         <h2 className="text-sm font-semibold">What happened at the counter?</h2>
 
         <form action={redeem} className="mt-3">
@@ -62,9 +62,9 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
           <button
             type="submit"
             disabled={busy}
-            className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
+            className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
           >
-            {redeeming ? 'Recording…' : 'They accepted it — I have the food'}
+            {redeeming ? 'Recording…' : 'They accepted it, I have the food'}
           </button>
         </form>
         <p className="text-muted mt-2 text-xs">
@@ -72,19 +72,19 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
           customer’s room number.
         </p>
 
-        <form action={refuse} className="mt-5 border-t border-black/10 pt-4">
+        <form action={refuse} className="border-line mt-5 border-t pt-4">
           <input type="hidden" name="order_id" value={orderId} />
           <label className="block text-sm font-medium">They would not accept it</label>
           <input
             name="reason"
             required
             placeholder="e.g. the counter said it was already used"
-            className="mt-2 w-full rounded-lg border border-black/15 px-3 py-2.5 text-sm"
+            className="rounded-input border-line-strong mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
           />
           <button
             type="submit"
             disabled={busy}
-            className="mt-2 w-full rounded-lg border border-black/15 py-2.5 text-sm font-semibold disabled:opacity-60"
+            className="press border-line-strong mt-2 w-full rounded-full border py-2.5 text-sm font-semibold transition-colors disabled:opacity-55"
           >
             {refusing ? 'Recording…' : 'Report that the scan was refused'}
           </button>
@@ -102,7 +102,7 @@ function Result({ state }) {
   return (
     <p
       className={`mt-3 rounded-lg px-3 py-2 text-sm ${
-        state.ok ? 'bg-brand-50 text-ink' : 'bg-red-50 text-red-800'
+        state.ok ? 'bg-brand-50 text-ink' : 'bg-bad-bg text-bad'
       }`}
     >
       {state.message}

@@ -50,13 +50,13 @@ export default function MenuForms({ vendorId, items }) {
 
       {items.length ? (
         <>
-          <div className="border-t border-black/5 pt-6">
+          <div className="border-line border-t pt-6">
             <label className="block">
               <span className="text-sm font-medium">Item to edit</span>
               <select
                 value={selectedId}
                 onChange={(event) => setSelectedId(event.target.value)}
-                className="focus:border-brand-600 mt-1 w-full rounded border border-black/15 bg-white px-3 py-2 text-sm outline-none"
+                className="focus:border-brand-600 border-line-strong bg-surface mt-1 w-full rounded border px-3 py-2 text-sm outline-none"
               >
                 {items.map((i) => (
                   <option key={i.id} value={i.id}>
@@ -102,7 +102,7 @@ export default function MenuForms({ vendorId, items }) {
                 </div>
               </form>
 
-              <div className="flex flex-wrap gap-6 border-t border-black/5 pt-6">
+              <div className="border-line flex flex-wrap gap-6 border-t pt-6">
                 <form action={availAction} className="flex items-end gap-2">
                   <input type="hidden" name="menu_item_id" value={selected.id} />
                   <input
@@ -141,7 +141,7 @@ export default function MenuForms({ vendorId, items }) {
                     pending={deleting}
                     pendingLabel="Deleting…"
                     confirmLabel="Yes, delete it"
-                    question={`Delete “${selected.name}” from the menu? If you only need it off the menu for now, disable it instead — that is reversible.`}
+                    question={`Delete “${selected.name}” from the menu? If you only need it off the menu for now, disable it instead, which is reversible.`}
                   >
                     Delete item
                   </ConfirmButton>

@@ -102,7 +102,7 @@ export default function OrderOverrides({ order }) {
             </Button>
           </div>
           <p className="text-muted text-xs sm:col-span-2">
-            Records that the refund happened. It does not move money — the provider does that, and
+            Records that the refund happened. It does not move money: the provider does that, and
             which provider is still an open question.
           </p>
         </form>

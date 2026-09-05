@@ -37,7 +37,7 @@ export default function AdminError({ error, reset }) {
         Something failed while building this page. Nothing was changed by the attempt.
       </p>
 
-      <div className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900 ring-1 ring-amber-200">
+      <div className="rounded-card bg-warn-bg text-warn ring-warn/30 px-5 py-4 text-sm ring-1">
         <p className="font-medium">Do not read this as an empty result.</p>
         <p className="mt-1">
           The console could not ask the database, which is not the same as the answer being zero. Do
@@ -56,7 +56,7 @@ export default function AdminError({ error, reset }) {
         </button>
         <a
           href="/admin"
-          className="rounded bg-white px-4 py-2 text-sm font-semibold ring-1 ring-black/15"
+          className="bg-surface ring-line-strong rounded px-4 py-2 text-sm font-semibold ring-1"
         >
           Back to the dashboard
         </a>
@@ -67,7 +67,7 @@ export default function AdminError({ error, reset }) {
           quote it and somebody can find the real error. */}
       {error?.digest ? (
         <p className="text-muted mt-6 text-xs">
-          Reference <span className="font-mono">{error.digest}</span> — quote this if you report it.
+          Reference <span className="font-mono">{error.digest}</span>. Quote this if you report it.
         </p>
       ) : null}
     </div>

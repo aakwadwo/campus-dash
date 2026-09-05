@@ -10,6 +10,7 @@ import {
   saveEmailAction,
 } from '@/app/order/actions';
 import { formatPesewas } from '@/lib/util/money';
+import { Callout, CodeDisplay, ErrorNote, Button } from '@/app/ui';
 
 /**
  * The live part of the order screen: the countdown while the vendor decides,
@@ -69,9 +70,9 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
 
   if (waiting) {
     return (
-      <div className="rounded-lg bg-amber-50 px-4 py-4">
+      <Callout tone="warn">
         <Countdown seconds={order.seconds_to_deadline} />
-      </div>
+      </Callout>
     );
   }
 
@@ -92,24 +93,18 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
               required
               defaultValue={email ?? ''}
               placeholder="you@example.com"
-              className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+              className="rounded-input bg-surface border-line-strong focus:border-brand-600 mt-1 h-12 w-full border px-4 text-base outline-none"
             />
           </label>
           <p className="text-muted text-xs">
             The payment page needs it, and your receipt goes there. We do not send anything else to
             it.
           </p>
-          <button
-            type="submit"
-            disabled={savingEmail}
-            className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
-          >
+          <Button type="submit" size="lg" block disabled={savingEmail}>
             {savingEmail ? 'Saving…' : 'Save and continue'}
-          </button>
+          </Button>
           {emailState.message && !emailState.ok ? (
-            <p role="alert" className="text-sm text-red-700">
-              {emailState.message}
-            </p>
+            <ErrorNote>{emailState.message}</ErrorNote>
           ) : null}
         </form>
       );
@@ -118,17 +113,11 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
     return (
       <form action={pay}>
         <input type="hidden" name="order_id" value={order.order_id} />
-        <button
-          type="submit"
-          disabled={paying || leaving}
-          className="bg-brand-500 text-ink w-full rounded-lg py-4 text-base font-semibold disabled:opacity-60"
-        >
+        <Button type="submit" size="lg" block disabled={paying || leaving}>
           {paying || leaving ? 'Starting…' : `Pay ${formatPesewas(order.total_pesewas)}`}
-        </button>
+        </Button>
         {payState.message && !payState.ok ? (
-          <p role="alert" className="mt-2 text-sm text-red-700">
-            {payState.message}
-          </p>
+          <ErrorNote className="mt-3">{payState.message}</ErrorNote>
         ) : null}
         <p className="text-muted mt-2 text-center text-xs">
           You will be taken to the payment page to finish.
@@ -139,13 +128,13 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
 
   if (processing) {
     return (
-      <div className="rounded-lg bg-amber-50 px-4 py-4 text-sm text-amber-900">
+      <Callout tone="warn">
         <p className="font-semibold">Confirming your payment…</p>
         <p className="mt-1">
-          This usually takes a couple of seconds. Do not pay again — if it fails you will be told,
+          This usually takes a couple of seconds. Do not pay again. If it fails you will be told,
           and nothing will have been taken.
         </p>
-      </div>
+      </Callout>
     );
   }
 
@@ -153,18 +142,20 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
   // is shown as soon as a Partner is assigned and nowhere else.
   if (order.delivery_code) {
     return (
-      <div className="bg-brand-500 text-ink rounded-lg px-4 py-4">
-        <p className="text-xs font-semibold tracking-wide uppercase opacity-90">
-          Give this to the Partner
-        </p>
-        <p className="mt-1 font-mono text-4xl font-bold tracking-[0.2em] tabular-nums">
-          {order.delivery_code}
-        </p>
+      <div>
+        <CodeDisplay
+          label="Delivery code"
+          hint="Give this to the Partner"
+          code={order.delivery_code}
+        />
         {order.partner_name ? (
-          <p className="mt-2 text-sm opacity-90">
+          <p className="text-muted mt-3 text-sm leading-relaxed">
             {order.partner_name} is bringing your order.{' '}
             {order.partner_phone ? (
-              <a href={`tel:${order.partner_phone}`} className="underline underline-offset-4">
+              <a
+                href={`tel:${order.partner_phone}`}
+                className="text-brand-700 font-semibold underline-offset-4 hover:underline"
+              >
                 Call them
               </a>
             ) : null}
@@ -181,34 +172,24 @@ export default function OrderStatus({ order, email = null, pollMs = 6000 }) {
       <div className="space-y-2">
         <form action={keepWaiting}>
           <input type="hidden" name="order_id" value={order.order_id} />
-          <button
-            type="submit"
-            disabled={waitingAgain}
-            className="bg-brand-500 text-ink w-full rounded-lg py-3.5 text-base font-semibold disabled:opacity-60"
-          >
+          <Button type="submit" size="lg" block disabled={waitingAgain}>
             {waitingAgain ? 'Looking…' : 'Keep looking for a Partner'}
-          </button>
+          </Button>
         </form>
         <form action={collectInstead}>
           <input type="hidden" name="order_id" value={order.order_id} />
-          <button
-            type="submit"
-            disabled={collecting}
-            className="w-full rounded-lg bg-white py-3.5 text-base font-semibold ring-1 ring-black/15 disabled:opacity-60"
-          >
+          <Button type="submit" variant="secondary" size="lg" block disabled={collecting}>
             {collecting ? 'Updating…' : 'I will collect it myself'}
-          </button>
+          </Button>
         </form>
         <p className="text-muted text-center text-xs">
-          Collecting it yourself does not automatically refund the delivery fee — contact support
-          and we will sort it out.
+          Collecting it yourself does not automatically refund the delivery fee. Contact support and
+          we will sort it out.
         </p>
         {[waitState, collectState]
           .filter((s) => s.message && !s.ok)
           .map((s, i) => (
-            <p key={i} role="alert" className="text-sm text-red-700">
-              {s.message}
-            </p>
+            <ErrorNote key={i}>{s.message}</ErrorNote>
           ))}
       </div>
     );
@@ -227,13 +208,13 @@ function Countdown({ seconds }) {
   }, []);
 
   return (
-    <p className="text-sm text-amber-900">
+    <p className="text-sm">
       {left > 0 ? (
         <>
           <span className="font-semibold tabular-nums">{left}s</span> left for the vendor to answer.
         </>
       ) : (
-        <span className="font-semibold">Time is up — checking with the vendor…</span>
+        <span className="font-semibold">Time is up. Checking with the vendor…</span>
       )}
     </p>
   );

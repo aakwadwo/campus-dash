@@ -72,7 +72,7 @@ export default async function AdminCustomerPage({ params }) {
               c.has_student_id ? (
                 <span className="text-brand-700">On file (private)</span>
               ) : (
-                <span className="text-red-700">Missing</span>
+                <span className="text-bad">Missing</span>
               )
             }
           />

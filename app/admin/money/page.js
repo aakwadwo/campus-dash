@@ -37,7 +37,7 @@ export default async function AdminMoneyPage() {
       >
         {issues === null ? (
           <Unavailable>
-            Reconciliation could not be run. That is not a clean bill of health — nothing was
+            Reconciliation could not be run. That is not a clean bill of health: nothing was
             checked.
           </Unavailable>
         ) : issues.length ? (
@@ -51,7 +51,7 @@ export default async function AdminMoneyPage() {
             </thead>
             <tbody>
               {issues.map((issue, i) => (
-                <tr key={i} className="border-t border-black/5">
+                <tr key={i} className="border-line border-t">
                   <td className="py-2">
                     <Link
                       href={`/admin/orders/${issue.order_id}`}
@@ -92,7 +92,7 @@ export default async function AdminMoneyPage() {
               </thead>
               <tbody>
                 {paymentRows.map((payment) => (
-                  <tr key={payment.payment_id} className="border-t border-black/5">
+                  <tr key={payment.payment_id} className="border-line border-t">
                     <td className="py-2">
                       <Link
                         href={`/admin/orders/${payment.order_id}`}
@@ -119,7 +119,7 @@ export default async function AdminMoneyPage() {
                       ) : null}
                     </td>
                     <td className="text-muted py-2 font-mono text-xs">
-                      {payment.provider_transaction_id ?? '—'}
+                      {payment.provider_transaction_id ?? '-'}
                     </td>
                     <td className="text-muted py-2 text-xs tabular-nums">
                       {new Date(payment.created_at).toLocaleString()}
@@ -149,7 +149,7 @@ export default async function AdminMoneyPage() {
             </thead>
             <tbody>
               {webhooks.map((event) => (
-                <tr key={event.webhook_id} className="border-t border-black/5">
+                <tr key={event.webhook_id} className="border-line border-t">
                   <td className="py-2 font-mono text-xs">{event.event_id}</td>
                   <td className="py-2">
                     <Badge
@@ -198,7 +198,7 @@ export default async function AdminMoneyPage() {
             </thead>
             <tbody>
               {notifications.map((notification) => (
-                <tr key={notification.id} className="border-t border-black/5">
+                <tr key={notification.id} className="border-line border-t">
                   <td className="py-2 font-mono text-xs">
                     {notification.event}
                     <span className="text-muted"> · {notification.audience}</span>

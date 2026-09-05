@@ -40,14 +40,18 @@ export default async function AdminLayout({ children }) {
 
   return (
     <div className="min-h-dvh">
-      <header className="border-b border-black/10 bg-white">
+      <header className="border-line bg-canvas sticky top-0 z-40 border-b">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3">
           <Link href="/admin" className="font-semibold tracking-tight">
             Campus Dash <span className="text-muted font-normal">admin</span>
           </Link>
           <nav className="flex flex-wrap gap-4 text-sm">
             {NAV.map((item) => (
-              <Link key={item.href} href={item.href} className="hover:text-brand-700">
+              <Link
+                key={item.href}
+                href={item.href}
+                className="hover:text-brand-700 text-muted transition-colors"
+              >
                 {item.label}
               </Link>
             ))}
@@ -59,7 +63,7 @@ export default async function AdminLayout({ children }) {
             <AreaSwitcher current="/admin" />
           </div>
           <form action={signOut}>
-            <button type="submit" className="text-muted text-sm hover:text-red-700">
+            <button type="submit" className="text-muted hover:text-bad text-sm">
               Sign out ({me.full_name ?? me.phone})
             </button>
           </form>

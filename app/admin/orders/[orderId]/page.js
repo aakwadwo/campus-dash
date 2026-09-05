@@ -115,7 +115,7 @@ export default async function AdminOrderPage({ params }) {
                   {customer.full_name ?? customer.phone}
                 </Link>
               ) : (
-                '—'
+                '-'
               )
             }
           />
@@ -125,7 +125,7 @@ export default async function AdminOrderPage({ params }) {
           <Fact
             label="Destination"
             value={
-              destination ?? (order.fulfilment_type === 'PICKUP' ? 'Collected in person' : '—')
+              destination ?? (order.fulfilment_type === 'PICKUP' ? 'Collected in person' : '-')
             }
           />
           <Fact label="Destination note" value={order.destination_note} />
@@ -173,7 +173,7 @@ export default async function AdminOrderPage({ params }) {
               </Facts>
 
               {scan.scan_status === 'REFUSED' ? (
-                <p className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-800">
+                <p className="bg-bad-bg text-bad mt-4 rounded px-4 py-3 text-sm">
                   <strong>Requires admin decision.</strong> The restaurant would not honour this
                   scan. Campus Dash has no refund policy for this case, so nothing has moved
                   automatically: the customer is still charged and the Partner is still owed the
@@ -181,7 +181,7 @@ export default async function AdminOrderPage({ params }) {
                 </p>
               ) : null}
 
-              <div className="mt-5 border-t border-black/5 pt-4">
+              <div className="border-line mt-5 border-t pt-4">
                 <h3 className="mb-2 text-sm font-semibold">The scan itself</h3>
                 <ScanViewer orderId={orderId} hasScan={Boolean(scan.has_scan_image)} />
               </div>
@@ -238,7 +238,7 @@ export default async function AdminOrderPage({ params }) {
             label={`Vendor · ${money.vendor_name}`}
             value={
               isScan ? (
-                <span className="text-muted">No vendor liability — the meal was prepaid</span>
+                <span className="text-muted">No vendor liability, the meal was prepaid</span>
               ) : (
                 <Cedis pesewas={money.vendor_allocation} />
               )
@@ -252,22 +252,20 @@ export default async function AdminOrderPage({ params }) {
           <Fact label="Allocated in total" value={<Cedis pesewas={money.allocated_pesewas} />} />
         </Facts>
 
-        <p
-          className={`mt-3 text-sm font-medium ${money.balances ? 'text-brand-700' : 'text-red-700'}`}
-        >
+        <p className={`mt-3 text-sm font-medium ${money.balances ? 'text-brand-700' : 'text-bad'}`}>
           {money.balances
             ? '✓ Allocations balance against the order total.'
-            : '✗ Allocations do NOT balance — this order needs investigating.'}
+            : '✗ Allocations do NOT balance. This order needs investigating.'}
         </p>
 
         <p className="text-muted mt-2 text-xs">
           Paystack&apos;s processing fee is a platform expense and is not recorded anywhere in this
-          ledger — it is never deducted from what a vendor or a Partner is owed.
+          ledger, and it is never deducted from what a vendor or a Partner is owed.
         </p>
 
         <p className="text-muted mt-3 text-xs">
-          Provider: {money.payment_provider ?? '—'} · txn{' '}
-          <span className="font-mono">{money.provider_transaction_id ?? '—'}</span> ·{' '}
+          Provider: {money.payment_provider ?? '-'} · txn{' '}
+          <span className="font-mono">{money.provider_transaction_id ?? '-'}</span> ·{' '}
           {money.payment_txn_status ?? 'no payment'}
         </p>
 
@@ -296,20 +294,20 @@ export default async function AdminOrderPage({ params }) {
 
       <Panel title="History" description="Every attempted transition, accepted or rejected.">
         {events?.length ? (
-          <ul className="divide-y divide-black/5 text-sm">
+          <ul className="divide-line divide-y text-sm">
             {events.map((event, i) => (
               <li key={i} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
-                <span className={`font-mono text-xs ${event.accepted ? '' : 'text-red-700'}`}>
+                <span className={`font-mono text-xs ${event.accepted ? '' : 'text-bad'}`}>
                   {event.accepted ? '' : '✗ '}
                   {event.event}
                 </span>
                 <span className="text-muted text-xs">{event.actor_role}</span>
                 {event.dimension ? (
                   <span className="text-muted text-xs">
-                    {event.dimension}: {event.from_state ?? '—'} → {event.to_state ?? '—'}
+                    {event.dimension}: {event.from_state ?? '-'} → {event.to_state ?? '-'}
                   </span>
                 ) : null}
-                {event.reason ? <span className="text-muted text-xs">— {event.reason}</span> : null}
+                {event.reason ? <span className="text-muted text-xs">{event.reason}</span> : null}
                 <span className="text-muted ml-auto text-xs tabular-nums">
                   {when(event.created_at)}
                 </span>

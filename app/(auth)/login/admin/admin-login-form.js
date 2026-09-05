@@ -16,7 +16,7 @@ export default function AdminLoginForm() {
           autoComplete="username"
           required
           autoFocus
-          className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+          className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-4 text-base transition-colors outline-none"
         />
       </label>
 
@@ -27,20 +27,20 @@ export default function AdminLoginForm() {
           type="password"
           autoComplete="current-password"
           required
-          className="focus:border-brand-600 focus:ring-brand-600/50 mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2.5 text-base outline-none focus:ring-2"
+          className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-4 text-base transition-colors outline-none"
         />
       </label>
 
       <button
         type="submit"
         disabled={pending}
-        className="bg-brand-500 text-ink w-full rounded-lg px-4 py-2.5 text-sm font-semibold disabled:opacity-60"
+        className="press bg-brand-500 text-ink hover:bg-brand-600 h-12 w-full rounded-full text-sm font-semibold transition-colors disabled:opacity-55"
       >
         {pending ? 'Signing in…' : 'Sign in'}
       </button>
 
       {state.error && (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-bad text-sm">
           {state.error}
         </p>
       )}

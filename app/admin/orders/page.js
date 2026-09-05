@@ -164,7 +164,7 @@ export default async function AdminOrdersPage({ searchParams }) {
             name="q"
             defaultValue={filters.search ?? ''}
             placeholder="Order number or customer"
-            className="mt-1 block w-56 rounded border border-black/15 px-3 py-1.5 text-sm"
+            className="border-line-strong mt-1 block w-56 rounded border px-3 py-1.5 text-sm"
           />
         </label>
 
@@ -173,7 +173,7 @@ export default async function AdminOrdersPage({ searchParams }) {
           <select
             name="vendor"
             defaultValue={filters.vendorId ?? ''}
-            className="mt-1 block w-48 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+            className="border-line-strong bg-surface mt-1 block w-48 rounded border px-3 py-1.5 text-sm"
           >
             <option value="">Any vendor</option>
             {(vendorList ?? []).map((v) => (
@@ -189,7 +189,7 @@ export default async function AdminOrdersPage({ searchParams }) {
           <select
             name="status"
             defaultValue={filters.orderStatus ?? ''}
-            className="mt-1 block w-40 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+            className="border-line-strong bg-surface mt-1 block w-40 rounded border px-3 py-1.5 text-sm"
           >
             <option value="">Any</option>
             {ORDER_STATUSES.map((s) => (
@@ -205,7 +205,7 @@ export default async function AdminOrdersPage({ searchParams }) {
           <select
             name="payment"
             defaultValue={filters.paymentStatus ?? ''}
-            className="mt-1 block w-40 rounded border border-black/15 bg-white px-3 py-1.5 text-sm"
+            className="border-line-strong bg-surface mt-1 block w-40 rounded border px-3 py-1.5 text-sm"
           >
             <option value="">Any</option>
             {PAYMENT_STATUSES.map((s) => (
@@ -222,7 +222,7 @@ export default async function AdminOrdersPage({ searchParams }) {
             type="date"
             name="since"
             defaultValue={filters.since ?? ''}
-            className="mt-1 block rounded border border-black/15 px-3 py-1.5 text-sm"
+            className="border-line-strong mt-1 block rounded border px-3 py-1.5 text-sm"
           />
         </label>
 
@@ -283,14 +283,14 @@ export default async function AdminOrdersPage({ searchParams }) {
                   </Badge>
                 </Cell>
                 <Cell>{o.vendor_name}</Cell>
-                <Cell>{o.customer_name ?? '—'}</Cell>
-                <Cell>{o.partner_name ?? '—'}</Cell>
+                <Cell>{o.customer_name ?? '-'}</Cell>
+                <Cell>{o.partner_name ?? '-'}</Cell>
                 <Cell mono muted>
                   {o.order_status}/{o.payment_status}/{o.delivery_status}
                   {o.scan_status ? (
                     <>
                       {' '}
-                      <span className="text-amber-800">scan:{o.scan_status}</span>
+                      <span className="text-warn">scan:{o.scan_status}</span>
                     </>
                   ) : null}
                 </Cell>
@@ -309,7 +309,7 @@ export default async function AdminOrdersPage({ searchParams }) {
       {filters.orderType === 'SCAN' ? (
         <p className="text-muted text-xs">
           Scan lifecycle: UPLOADED → RELEASED (Partner assigned) → REDEEMED or REFUSED. Redemption
-          is a separate act from delivery completion — see{' '}
+          is a separate act from delivery completion. See{' '}
           {Object.entries(SCAN_STATUS)
             .map(([k]) => k)
             .join(' · ')}

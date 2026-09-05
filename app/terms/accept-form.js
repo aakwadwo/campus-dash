@@ -12,12 +12,12 @@ export default function AcceptForm({ termsId }) {
       <button
         type="submit"
         disabled={accepting || state.ok}
-        className="bg-brand-500 text-ink w-full rounded-lg py-3 text-sm font-semibold disabled:opacity-60"
+        className="press bg-brand-500 text-ink w-full rounded-full py-3 text-sm font-semibold transition-colors disabled:opacity-55"
       >
         {state.ok ? 'Accepted' : accepting ? 'Recording…' : 'I accept these terms'}
       </button>
       {state.message && !state.ok ? (
-        <p role="alert" className="mt-2 text-sm text-red-700">
+        <p role="alert" className="text-bad mt-2 text-sm">
           {state.message}
         </p>
       ) : null}
