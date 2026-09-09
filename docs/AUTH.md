@@ -375,6 +375,13 @@ decides where somebody _useful_ lands, never what they may do.
 `requirePartner` and `requireVendorStaff`. These stop a page forgetting to check
 — they are **not** the security boundary.
 
+`requireAdmin` is the one guard that does not go through `requireUser`. Everyone
+else who is signed out is sent to `/login`, the customer screen, which asks for
+an `@acity.edu.gh` address and emails a code; an administrator's credential is a
+password and the row may hold no school address at all, so that door offered a
+proof they could not give. It redirects to `/login/admin` instead, carrying the
+destination in `next`.
+
 `requireCustomer` is one of two that do not simply bounce to `landingFor()`: it
 sends people to `/signup`, because "you wanted to order something" is answered
 by acquiring the capability, not by being returned to `/admin`. The other is

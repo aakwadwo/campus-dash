@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { safeNext } from '@/lib/auth/landing';
 import AdminLoginForm from './admin-login-form';
 
 export const metadata = { title: 'Administrator sign-in · Campus Dash' };
@@ -8,7 +9,11 @@ export const metadata = { title: 'Administrator sign-in · Campus Dash' };
  * security is the password and the is_admin check behind it — but the public
  * page has three audiences and this is not one of them.
  */
-export default function AdminLoginPage() {
+export default async function AdminLoginPage({ searchParams }) {
+  // Where the guard was headed before it found no session. Only ever honoured
+  // as a path on this application — see safeNext.
+  const next = safeNext((await searchParams)?.next);
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-12">
       <p className="text-muted text-xs font-medium tracking-[0.2em] uppercase">Campus Dash</p>
@@ -18,12 +23,12 @@ export default function AdminLoginPage() {
         channel is the thing that is broken.
       </p>
 
-      <AdminLoginForm />
+      <AdminLoginForm next={next} />
 
       <p className="text-muted mt-8 text-xs leading-relaxed">
-        Ordering, vendor and Partner accounts sign in by phone instead.{' '}
+        Ordering and Partner accounts sign in with a code sent to their school address.{' '}
         <Link href="/login" className="underline underline-offset-4">
-          go to the phone sign-in
+          go to the student sign-in
         </Link>
         .
       </p>

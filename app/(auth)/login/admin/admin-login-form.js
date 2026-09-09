@@ -3,11 +3,13 @@
 import { useActionState } from 'react';
 import { adminSignIn } from '../actions';
 
-export default function AdminLoginForm() {
+export default function AdminLoginForm({ next }) {
   const [state, submit, pending] = useActionState(adminSignIn, {});
 
   return (
     <form action={submit} className="mt-8 space-y-4">
+      {next ? <input type="hidden" name="next" value={next} /> : null}
+
       <label className="block">
         <span className="text-sm font-medium">Email address</span>
         <input

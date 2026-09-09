@@ -299,16 +299,54 @@ describe('route health', { skip: running ? false : `dev server not running at ${
     });
   });
 
-  test('no admin route is reachable without a session', async () => {
+  test('no admin route is reachable without a session, and it sends them to the ADMIN door', async () => {
     // The layout guard, asserted once rather than in every case above. It is
     // a convenience, not the boundary: every admin_* function re-checks
     // is_admin() in SQL, which the schema suite proves.
+    //
+    // THE BUG THIS CATCHES. "It redirected" was the whole assertion, and the
+    // guard redirected to /login — the CUSTOMER screen, which asks for an
+    // @acity.edu.gh address and emails a code. An administrator's credential
+    // is a password and the row may have no school address at all, so the
+    // console was unreachable while this test stayed green. Where it lands is
+    // the assertion.
     for (const path of ['/admin', '/admin/settlements', '/admin/pilot']) {
       const res = await fetch(`${APP}${path}`, { redirect: 'manual' });
       assert.ok(
         res.status >= 300 && res.status < 400,
         `${path} answered ${res.status} to a signed-out request; it must redirect`
       );
+
+      const location = res.headers.get('location') ?? '';
+      const target = new URL(location, APP);
+      assert.equal(
+        target.pathname,
+        '/login/admin',
+        `${path} sent a signed-out visitor to ${location}; administrators sign in with a password`
+      );
+      // The console's guard lives in the admin LAYOUT, which is a server
+      // component and does not know which of its pages was asked for, so the
+      // destination it carries is the console itself rather than the deep
+      // link. What matters is that it carries one, and that it is a path
+      // inside the console.
+      assert.match(
+        target.searchParams.get('next') ?? '',
+        /^\/admin/,
+        `${path} lost the destination on the way to sign-in`
+      );
     }
+  });
+
+  test('the admin door asks for a password, and never for a code', async () => {
+    const { body } = await check('/login/admin');
+    assert.ok(body.includes('name="email"'), 'the administrator is identified by email');
+    assert.ok(
+      /type=\\?"password\\?"/i.test(body),
+      'the administrator credential is a password, not a code'
+    );
+    assert.ok(
+      !body.includes('name="token"'),
+      'the admin door must not turn into the customer OTP screen'
+    );
   });
 });

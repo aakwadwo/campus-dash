@@ -255,6 +255,7 @@ export async function adminSignIn(_prevState, formData) {
     .trim()
     .toLowerCase();
   const password = String(formData.get('password') ?? '');
+  const requested = safeNext(formData.get('next'));
 
   if (!email || !password) {
     return { error: 'Enter your email address and password.' };
@@ -281,5 +282,8 @@ export async function adminSignIn(_prevState, formData) {
     return { error: 'That account does not have administrator access.' };
   }
 
-  redirect('/admin');
+  // A deep link into the console survives the sign-in. It is honoured only
+  // AFTER the database has confirmed is_admin, and only as a path on this
+  // application, so it can carry someone to a page they already had.
+  redirect(requested ?? '/admin');
 }
