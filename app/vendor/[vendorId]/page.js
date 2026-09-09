@@ -8,10 +8,10 @@ export const dynamic = 'force-dynamic';
 export default async function VendorBoardPage({ params }) {
   const { vendorId } = await params;
 
-  // getMyVendors is already narrowed to stalls this user staffs, so an id they
+  // getMyVendors is already narrowed to stores this user owns, so an id they
   // do not work for simply is not here.
   const vendors = await getMyVendors();
-  const vendor = vendors.find((v) => v.id === vendorId);
+  const vendor = vendors.find((v) => v.vendor_id === vendorId);
   if (!vendor) notFound();
 
   const [rows, pending, intervals] = await Promise.all([

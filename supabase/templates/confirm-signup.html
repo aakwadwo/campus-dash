@@ -1,0 +1,28 @@
+<!--
+  The email a customer gets the FIRST time their address is used.
+
+  IT MUST CONTAIN {{ .Token }}. Supabase's default Confirm Signup template
+  offers only a confirmation LINK, and Campus Dash asks for a six-digit code
+  instead: a link opens in whichever browser the mail app chooses, which on a
+  phone is routinely not the one holding the half-filled sign-up form. A code
+  can be typed into the tab that is already open.
+
+  WHY THERE ARE TWO TEMPLATES. Supabase sends this one when signInWithOtp()
+  creates the address, and the Magic Link one on every sign-in afterwards. They
+  are different templates for the same six digits, so both need the token or
+  half the flow silently breaks — first-time sign-up, which is the half nobody
+  notices until a real student tries it.
+
+  A hosted project needs the same content under Authentication → Email
+  Templates → Confirm signup. See docs/AUTH.md.
+-->
+<h2>Your Campus Dash code</h2>
+
+<p style="font-size: 32px; font-weight: 700; letter-spacing: 0.3em; margin: 24px 0">{{ .Token }}</p>
+
+<p>Enter it on the Campus Dash tab you already have open to finish creating your account.</p>
+
+<p style="color: #666; font-size: 13px">
+  If you did not ask for this code, ignore this email. Somebody typed your address by mistake; no
+  account has been created.
+</p>

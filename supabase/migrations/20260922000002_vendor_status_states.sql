@@ -1,0 +1,37 @@
+-- ============================================================================
+-- Vendor becomes a first-class authenticated capability
+-- ============================================================================
+-- Until now a vendor was a row an administrator typed in, plus a `vendor_users`
+-- join table saying which phone numbers were allowed to operate it. That is a
+-- staffing model, and it was solving a problem the pilot does not have: nobody
+-- staffs a campus stall in shifts. What it cost was the thing that matters —
+-- a vendor could not sign up. Recruitment was a conversation, a phone call to
+-- an administrator, and a hand-typed row.
+--
+-- A vendor is now an IDENTITY that owns a business:
+--
+--   vendors.owner_user_id  →  public.users.id  →  auth.users.id
+--
+-- One column, one foreign key, unique. Not a second identity, not a second
+-- login: the same auth.users.id that could also hold CUSTOMER and PARTNER.
+-- Everything that asked `is_vendor_staff(vendor_id)` still asks exactly that
+-- and still gets the right answer; only what it reads underneath changed.
+--
+-- owner_user_id is NULLABLE, and that is deliberate rather than sloppy. A scan
+-- restaurant is listed by Campus Dash so students can have a meal fetched from
+-- it; the restaurant itself operates no dashboard, has signed up for nothing,
+-- and must not be invented an account. A vendor with no owner is a CATALOGUE
+-- ENTRY: orderable, never operable. `my_vendor_ids()` returns nothing for it,
+-- so there is no path by which a NULL owner becomes an accidental grant.
+--
+-- Also here: a fixed-but-manageable category system, a store image gallery, and
+-- the approve / reject-with-reason / resubmit loop.
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Application states
+-- ---------------------------------------------------------------------------
+-- DRAFT survives as the state an admin-created catalogue entry starts in.
+-- PENDING_APPROVAL and REJECTED are what a self-registered vendor moves through.
+alter type public.vendor_status add value if not exists 'PENDING_APPROVAL' before 'ACTIVE';
+alter type public.vendor_status add value if not exists 'REJECTED' after 'SUSPENDED';

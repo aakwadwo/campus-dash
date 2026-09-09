@@ -35,7 +35,9 @@ try {
   if (!vendors.length) throw new Error('no open vendor — is the database seeded?');
   const vendor = vendors[0];
 
-  const { rows: staff } = await client.query('select user_id from public.vendor_users');
+  const { rows: staff } = await client.query(
+    'select owner_user_id as user_id from public.vendors where owner_user_id is not null'
+  );
   const excluded = new Set(staff.map((row) => row.user_id));
   const { rows: users } = await client.query(
     'select id, full_name from public.users where not is_admin order by created_at'
@@ -52,24 +54,27 @@ try {
     `select id from public.locations where is_deliverable and is_active order by sort_order limit 1`
   );
 
+  // An order is SUBMITTED with no fulfilment: the customer chooses pickup or
+  // delivery after the vendor accepts. Seeding the choice as well would put
+  // these rows in a state the real flow cannot produce, so the `fulfilment`
+  // argument is only used once the order exists — and only for orders a script
+  // deliberately walks further along.
   for (let i = 0; i < count; i += 1) {
     const { rows } = await client.query(
-      'select * from public.submit_order_for($1, $2, $3, $4::jsonb, $5, $6)',
+      'select * from public.submit_order_for($1, $2, $3::jsonb)',
       [
         customer.id,
         vendor.id,
-        fulfilment,
         JSON.stringify(
           items.map((item, index) => ({ menu_item_id: item.id, quantity: index + 1 }))
         ),
-        fulfilment === 'DELIVERY' ? locations[0]?.id : null,
-        null,
       ]
     );
     const order = rows[0];
     console.log(
-      `${order.order_number}  ${vendor.name}  ${fulfilment}  ` +
-        `GH₵${(order.total_pesewas / 100).toFixed(2)}  for ${customer.full_name}`
+      `${order.order_number}  ${vendor.name}  awaiting vendor  ` +
+        `GH₵${(order.total_pesewas / 100).toFixed(2)}  for ${customer.full_name}` +
+        `  (${fulfilment} once accepted${fulfilment === 'DELIVERY' && locations[0] ? '' : ''})`
     );
   }
 } finally {

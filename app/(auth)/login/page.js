@@ -3,6 +3,7 @@ import Link from 'next/link';
 import LoginForm from './login-form';
 import { safeNext } from '@/lib/auth/landing';
 import { Card, TextLink, ArrowLeftIcon } from '@/app/ui';
+import { CampusDashMark } from '@/app/brand';
 
 export const metadata = { title: 'Sign in · Campus Dash' };
 
@@ -36,12 +37,11 @@ export default async function LoginPage({ searchParams }) {
       <div className="flex flex-1 flex-col justify-center">
         <div className="animate-fade-up mx-auto w-full max-w-sm">
           <div className="mb-8 text-center">
-            <span className="bg-brand-500 text-ink mx-auto mb-5 grid size-12 place-items-center rounded-full text-base font-bold">
-              CD
-            </span>
+            <CampusDashMark height={44} className="mx-auto mb-5" alt="Campus Dash" />
             <h1 className="text-display text-3xl font-semibold">Sign in</h1>
             <p className="text-muted mx-auto mt-2.5 max-w-xs text-sm leading-relaxed">
-              We&apos;ll text you a code. One account works for both ordering and delivering.
+              We&apos;ll email a code to your school address. One account orders, delivers, and
+              sells.
             </p>
           </div>
 
@@ -51,17 +51,30 @@ export default async function LoginPage({ searchParams }) {
             </Suspense>
           </Card>
 
-          <p className="text-muted mt-6 text-center text-xs leading-relaxed">
-            Administrators sign in with{' '}
-            <TextLink href="/login/admin" className="font-medium">
-              an email and password
-            </TextLink>{' '}
-            instead, because operational access must not depend on an SMS arriving.
+          <p className="text-muted mt-6 text-center text-sm leading-relaxed">
+            New here?{' '}
+            <TextLink href="/signup" className="font-medium">
+              Create an account
+            </TextLink>
           </p>
 
-          <p className="text-faint mt-4 text-center text-xs leading-relaxed">
-            In development the code is printed to the server console by the fake SMS provider, and
-            shown at <code className="font-mono">/dev/inbox</code>.
+          {/*
+            Vendors sign in by phone, because a store owner has a number and may
+            well not have a school address. Administrators are not linked from
+            anywhere public — /admin is typed, not advertised. That is not the
+            security control (is_admin() in every admin function is); there is
+            simply no reason to put the door on the map.
+          */}
+          <p className="text-muted mt-3 text-center text-sm leading-relaxed">
+            Run a store?{' '}
+            <TextLink href="/login/vendor" className="font-medium">
+              Sign in with your phone
+            </TextLink>
+          </p>
+
+          <p className="text-faint mt-5 text-center text-xs leading-relaxed">
+            In development the verification email is delivered to Mailpit at{' '}
+            <code className="font-mono">127.0.0.1:54324</code>.
           </p>
         </div>
       </div>

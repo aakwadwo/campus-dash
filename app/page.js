@@ -25,13 +25,13 @@ export const dynamic = 'force-dynamic';
  *
  * WHAT IS DELIBERATELY ABSENT. No eyebrow label, no gradient, no illustration,
  * no statistics, no testimonials. Campus Dash has one campus and a handful of
- * stalls; the vendor strip below is real data from the same anon-readable query
+ * stores; the vendor strip below is real data from the same anon-readable query
  * the marketplace uses, and when the pilot is empty it simply does not render.
  */
 
 const HOW_IT_WORKS = [
-  ['Pick a vendor', 'Stalls around campus, with what they have right now.'],
-  ['Collect or get it brought', 'Pick it up free, or send it to your block.'],
+  ['Pick a vendor', 'Stores around campus, with what they have right now.'],
+  ['Collect it, or have it brought', 'Pick it up free, or send it to your block.'],
   ['Pay once', 'One payment covers the food, the delivery and our fee.'],
 ];
 
@@ -84,7 +84,7 @@ export default async function Home() {
         </Container>
 
         {/* ----------------------------------------------------------------
-            Real stalls, or nothing at all. */}
+            Real stores, or nothing at all. */}
         {open.length ? (
           <Container size="wide" className="border-line border-t pt-8 sm:pt-9">
             <div className="mb-4 flex items-end justify-between gap-4">
@@ -97,10 +97,10 @@ export default async function Home() {
                 <ChevronRightIcon className="size-4" />
               </Link>
             </div>
-            <ul className="stagger grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-4">
+            <ul className="grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-4">
               {open.map((vendor) => (
-                <li key={vendor.id}>
-                  <Link href={`/order/${vendor.id}`} className="press block rounded-[16px]">
+                <li key={vendor.vendor_id}>
+                  <Link href={`/order/${vendor.vendor_id}`} className="press block rounded-[16px]">
                     <ImagePlaceholder name={vendor.name} />
                     <p className="mt-2.5 px-0.5 leading-snug font-semibold break-words">
                       {vendor.name}
@@ -147,20 +147,24 @@ export default async function Home() {
                 className="press-sm group flex min-h-16 items-center gap-4 py-5"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block font-semibold">Deliver with Campus Dash</span>
+                  <span className="block font-semibold">Become a Campus Dash Partner</span>
                   <span className="text-muted mt-1 block text-sm leading-relaxed">
-                    Students bring orders across campus and are paid per delivery.
+                    Help other students get what they need across campus, and earn on every order.
                   </span>
                 </span>
                 <ChevronRightIcon className="text-faint size-5 shrink-0" />
               </Link>
             </li>
             <li>
-              <Link href="/vendor" className="press-sm flex min-h-16 items-center gap-4 py-5">
+              <Link
+                href="/vendor/signup"
+                className="press-sm flex min-h-16 items-center gap-4 py-5"
+              >
                 <span className="min-w-0 flex-1">
                   <span className="block font-semibold">Sell on Campus Dash</span>
                   <span className="text-muted mt-1 block text-sm leading-relaxed">
-                    Already a vendor? Sign in to your order board.
+                    Register your store. We text a code to your phone, and you are in. No email
+                    needed.
                   </span>
                 </span>
                 <ChevronRightIcon className="text-faint size-5 shrink-0" />

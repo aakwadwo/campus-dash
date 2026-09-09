@@ -9,16 +9,23 @@
 -- ---------------------------------------------------------------------------
 -- auth.users → public.users provisioning
 -- ---------------------------------------------------------------------------
--- A profile row is created by a trigger the moment a phone number is
+-- A profile row is created by a trigger the moment a contact detail is
 -- CONFIRMED, never when a code is merely requested. GoTrue inserts the
--- auth.users row as soon as someone asks for an OTP, before the number is
--- proven; provisioning then would let anyone claim a phone number they do not
--- own just by asking for a code.
+-- auth.users row as soon as somebody asks for a code, before anything is
+-- proven; provisioning then would let anyone claim a phone number or an address
+-- they do not own just by asking.
 --
 -- Doing it in a trigger rather than in application code means an account can
 -- never exist without a profile: there is no window, and no code path that
 -- forgets. Both trigger functions live in `public` (above) and are granted to
 -- nobody.
+--
+-- THE COLUMN LIST IS THE FIRING CONDITION, not documentation. This trigger was
+-- once declared `AFTER UPDATE OF phone_confirmed_at` alone, and when customers
+-- moved to email sign-in it silently stopped firing for them: GoTrue confirms
+-- an address by updating `email_confirmed_at`, so no profile was ever created
+-- and every customer sign-up died one step after the code was accepted. Both
+-- columns, always.
 
 DROP TRIGGER IF EXISTS "on_auth_user_created" ON "auth"."users";
 CREATE TRIGGER "on_auth_user_created"
@@ -26,16 +33,18 @@ CREATE TRIGGER "on_auth_user_created"
   FOR EACH ROW EXECUTE FUNCTION "public"."handle_new_auth_user"();
 
 DROP TRIGGER IF EXISTS "on_auth_user_phone_confirmed" ON "auth"."users";
-CREATE TRIGGER "on_auth_user_phone_confirmed"
-  AFTER UPDATE OF "phone_confirmed_at" ON "auth"."users"
+DROP TRIGGER IF EXISTS "on_auth_user_confirmed" ON "auth"."users";
+CREATE TRIGGER "on_auth_user_confirmed"
+  AFTER UPDATE OF "phone_confirmed_at", "email_confirmed_at" ON "auth"."users"
   FOR EACH ROW EXECUTE FUNCTION "public"."handle_auth_user_phone_confirmed"();
 
 
 -- ---------------------------------------------------------------------------
 -- Private storage for Partner verification documents
 -- ---------------------------------------------------------------------------
--- Holds the student ID photograph and the live face photograph an admin
--- compares during approval.
+-- Holds the student ID photograph and the live face photograph an admin holds
+-- next to each other during approval. Both belong to the PARTNER application;
+-- a customer holds no verification document at all.
 --
 -- The bucket is PRIVATE and deliberately has NO policies on storage.objects.
 -- Without a policy, RLS denies every client read and write — which is exactly
@@ -53,6 +62,64 @@ VALUES (
 )
 ON CONFLICT ("id") DO UPDATE
    SET "public"             = false,
+       "file_size_limit"    = EXCLUDED."file_size_limit",
+       "allowed_mime_types" = EXCLUDED."allowed_mime_types";
+
+
+-- ---------------------------------------------------------------------------
+-- Private storage for campus meal scans
+-- ---------------------------------------------------------------------------
+-- A different bucket from the verification documents, because it is a different
+-- subject with a different retention and a different set of readers: a
+-- verification document is looked at once by an administrator, whereas a scan is
+-- released to one assigned Partner for the length of one errand. Keeping them
+-- apart means a policy change to one can never widen the other.
+--
+-- Also NO policies on storage.objects, for the same reason as the other private
+-- bucket. PDF is allowed alongside images because the university issues some
+-- entitlements that way, and a student should not have to screenshot a PDF.
+--
+-- This was missing from this file, which meant a hosted project installed from
+-- schema.sql had no bucket to put a scan in and scan delivery failed there for
+-- a reason nothing in the application would name.
+
+INSERT INTO "storage"."buckets" ("id", "name", "public", "file_size_limit", "allowed_mime_types")
+VALUES (
+  'scan-documents',
+  'scan-documents',
+  false,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
+)
+ON CONFLICT ("id") DO UPDATE
+   SET "public"             = false,
+       "file_size_limit"    = EXCLUDED."file_size_limit",
+       "allowed_mime_types" = EXCLUDED."allowed_mime_types";
+
+
+-- ---------------------------------------------------------------------------
+-- PUBLIC storage for vendor storefront photographs
+-- ---------------------------------------------------------------------------
+-- The one public bucket, and deliberately so. An unauthenticated visitor
+-- browsing the marketplace has to see these, and minting a signed URL per photo
+-- per page load would be real cost for no secret: a picture of a plate of jollof
+-- is advertising.
+--
+-- What stays locked down is WRITING. Like the private buckets it has NO policies
+-- on storage.objects, so RLS denies every client write; reads on a public bucket
+-- are served without one. Every object in it went through
+-- lib/verification/documents.js, which checks who is asking before it uploads.
+
+INSERT INTO "storage"."buckets" ("id", "name", "public", "file_size_limit", "allowed_mime_types")
+VALUES (
+  'vendor-images',
+  'vendor-images',
+  true,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp']
+)
+ON CONFLICT ("id") DO UPDATE
+   SET "public"             = true,
        "file_size_limit"    = EXCLUDED."file_size_limit",
        "allowed_mime_types" = EXCLUDED."allowed_mime_types";
 

@@ -127,7 +127,8 @@ const EXPECTED_TABLES = [
   'terms_acceptances',
   'terms_documents',
   'users',
-  'vendor_users',
+  'vendor_categories',
+  'vendor_images',
   'vendors',
   'webhook_events',
 ];

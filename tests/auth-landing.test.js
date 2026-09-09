@@ -37,8 +37,22 @@ describe('where a signed-in account lands', () => {
     );
   });
 
-  test('an approved Partner goes to the Partner area', () => {
-    assert.equal(landingFor({ ...base, is_partner: true, partner_status: 'APPROVED' }), '/partner');
+  test('an approved Partner who is also a customer lands on ordering', () => {
+    // PARTNER ⇒ CUSTOMER, so this account always holds both — and carrying a
+    // delivery is something you go and look for, not something you are doing
+    // when you happen to open the app. The Partner area is one tap away in the
+    // area switcher, which is why precedence here is not exclusion.
+    assert.equal(landingFor({ ...base, is_partner: true, partner_status: 'APPROVED' }), '/order');
+  });
+
+  test('a Partner with no Customer capability still lands on the Partner area', () => {
+    // Not reachable in practice — the foreign key makes PARTNER ⇒ CUSTOMER —
+    // but the precedence has to be total, or an account in an unexpected state
+    // lands nowhere.
+    assert.equal(
+      landingFor({ ...base, can_order: false, is_partner: true, partner_status: 'APPROVED' }),
+      '/partner'
+    );
   });
 
   test('an admin goes to admin', () => {
@@ -47,31 +61,60 @@ describe('where a signed-in account lands', () => {
 
   test('an applicant awaiting review goes to their application, not the Partner area', () => {
     // /partner would show them nothing they can act on, and /admin/partners is
-    // somebody else's screen.
-    assert.equal(landingFor({ ...base, partner_status: 'PENDING_REVIEW' }), '/partner/apply');
+    // somebody else's screen. A Partner applicant is by definition already a
+    // customer, so this only shows once ordering is not the answer either.
+    assert.equal(
+      landingFor({ ...base, can_order: false, partner_status: 'PENDING_REVIEW' }),
+      '/partner/apply'
+    );
   });
 
   test('a rejected or suspended applicant also sees their application', () => {
-    assert.equal(landingFor({ ...base, partner_status: 'REJECTED' }), '/partner/apply');
-    assert.equal(landingFor({ ...base, partner_status: 'SUSPENDED' }), '/partner/apply');
+    for (const status of ['REJECTED', 'SUSPENDED']) {
+      assert.equal(
+        landingFor({ ...base, can_order: false, partner_status: status }),
+        '/partner/apply'
+      );
+    }
+  });
+
+  test('an applicant who can still order lands on ordering, and finds the rest from there', () => {
+    // The one thing this must NOT do is strand somebody: every area they hold
+    // is in the switcher, so landing on /order never means losing sight of an
+    // application under review.
+    assert.equal(landingFor({ ...base, partner_status: 'PENDING_REVIEW' }), '/order');
   });
 
   test('one account holding several capabilities lands by precedence', () => {
+    // ADMIN → VENDOR → CUSTOMER → PARTNER. A vendor signs in to run the stall:
+    // there is money and a 60-second answer window on that side and neither on
+    // the other.
     const both = { ...base, is_partner: true, partner_status: 'APPROVED', vendor_ids: ['v'] };
-    assert.equal(landingFor(both), '/vendor', 'vendor work outranks Partner work');
+    assert.equal(landingFor(both), '/vendor', 'vendor work outranks everything but admin');
     assert.equal(landingFor({ ...both, is_admin: true }), '/admin', 'admin outranks everything');
   });
 
-  test('an account with no Customer capability goes to onboarding', () => {
-    // A verified phone is an identity. Ordering is a capability, and this is
-    // where it is acquired — so someone who holds none of the other
-    // capabilities is sent to the one thing that unlocks the rest.
-    assert.equal(landingFor({ ...base, can_order: false }), '/onboarding');
+  test('a vendor whose application is still under review sees its status', () => {
+    // /vendor would show them a dashboard with no store behind it, and for a
+    // REJECTED application the status page is the only place the reason exists.
+    for (const status of ['PENDING_APPROVAL', 'REJECTED', 'DRAFT']) {
+      assert.equal(
+        landingFor({ ...base, can_order: false, vendor_status: status }),
+        '/vendor/application'
+      );
+    }
   });
 
-  test('onboarding never outranks a capability the account already holds', () => {
+  test('an account with no capability at all goes to sign-up', () => {
+    // A verified identity is an identity. Ordering is a capability, and this is
+    // where it is acquired — so someone who holds none of the others is sent to
+    // the one thing that unlocks the rest.
+    assert.equal(landingFor({ ...base, can_order: false }), '/signup');
+  });
+
+  test('sign-up never outranks a capability the account already holds', () => {
     // An administrator or vendor with no student profile still lands in their
-    // own area. Sending them to onboarding would imply their account is
+    // own area. Sending them to sign-up would imply their account is
     // incomplete, when it is complete for what it does.
     assert.equal(landingFor({ ...base, can_order: false, is_admin: true }), '/admin');
     assert.equal(landingFor({ ...base, can_order: false, vendor_ids: ['v'] }), '/vendor');
@@ -143,7 +186,7 @@ describe('the areas an account may enter', () => {
     };
     assert.deepEqual(
       areasFor(everything).map((a) => a.href),
-      ['/admin', '/vendor', '/partner', '/order', '/account']
+      ['/admin', '/vendor', '/order', '/partner', '/account']
     );
   });
 

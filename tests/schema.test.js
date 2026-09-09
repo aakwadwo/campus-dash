@@ -157,7 +157,11 @@ describe('schema invariants', () => {
 
   test('the money-safety constraints and indexes all exist', async () => {
     const required = [
-      'orders_one_active_delivery_per_partner',
+      // TWO active deliveries per Partner, and the index is what makes that a
+      // guarantee. "At most one" could be a unique index on partner_id; "at
+      // most two" cannot, so an active delivery holds a numbered SLOT and the
+      // slot is what is unique.
+      'orders_partner_active_slot_unique',
       'payments_one_pending_per_order',
       'payments_one_succeeded_per_order',
       'payments_idempotency_key_unique',
@@ -166,7 +170,13 @@ describe('schema invariants', () => {
       'webhook_events_provider_event_unique',
       'allocations_order_payee_unique',
       'settlement_runs_period_unique',
+      // A phone number is unique when present, and NULLABLE — an administrator
+      // has none at all, because operational access must not depend on an SMS.
       'users_phone_key',
+      // One identity owns at most one store, so every vendor screen can be
+      // about "your store" rather than carrying a picker nobody in the pilot
+      // would use.
+      'vendors_owner_unique',
       // One student ID backs one CUSTOMER identity. The index moved here with
       // the column it guards when Customer became a capability.
       'customer_profiles_student_id_unique',
@@ -209,79 +219,123 @@ describe('schema invariants', () => {
     //
     // This asserts the WHOLE surface, so adding a function without deciding who
     // may call it fails here rather than shipping quietly.
+    // Everything an anonymous visitor may call. The marketplace is browsable
+    // signed out, so the storefront is here on purpose — and the vendor's phone
+    // number is deliberately not among the columns any of it returns.
     const ANON = [
       'current_terms',
       'current_user_id',
       'deliverable_locations',
+      // A pure text helper: given a first name and a legacy full name, it
+      // returns the one to show. It reads nothing and can leak nothing.
+      'given_name',
       'is_admin',
-      // Readable by anon for the same reason is_admin is: the marketplace is
-      // browsable signed out, and the page needs to know whether the viewer
-      // may actually order before it offers a checkout button.
       'is_customer',
       'is_vendor_staff',
       'location_path',
       'location_zone',
       'my_vendor_ids',
       'platform_config',
-      // Which restaurants honour campus meal scans. Anon-readable for the same
-      // reason the vendor list is: the marketplace is browsable signed out, and
-      // this leaks nothing new — `vendors.can_accept_scans` is already on a row
-      // anon may select under vendors_read_active.
       'scan_restaurants',
+      'storefront_vendor',
+      'storefront_vendors',
+      'active_vendor_categories',
     ];
+
+    // Everything a signed-in account may call. Reachability, NOT authorisation:
+    // every admin_* function re-checks is_admin() in its own body, so a
+    // non-admin who calls one directly gets an empty result or a raised
+    // exception, never data.
+    //
+    // ABSENT ON PURPOSE, and each absence is a rule:
+    //
+    //   vendor_confirm_pickup       the handoff reversed direction — the VENDOR
+    //                               holds the code and the PARTNER types it in,
+    //                               so a Partner has no way to read one
+    //   partners_to_notify_of_offer service-only: it returns other people's
+    //   vendor_owner_contact        phone numbers to a caller who is not them
+    //   payout_recipient_contact
+    //   price_order                 reachable only through quote_order and
+    //                               submit_order_for, so a client cannot probe
+    //                               pricing for a vendor or item it cannot see
     const AUTHENTICATED = [
       ...ANON,
       'accept_terms',
-      'admin_add_vendor_user',
       'admin_cancel_order',
       'admin_clear_partner_documents',
       'admin_complete_order',
       'admin_create_location',
       'admin_create_menu_item',
       'admin_create_vendor',
+      'admin_create_vendor_category',
+      'admin_customer_detail',
+      'admin_customer_rewards',
+      'admin_customers',
+      'admin_dashboard',
       'admin_delete_location',
       'admin_delete_menu_item',
+      'admin_exceptions',
       'admin_failed_notifications',
+      'admin_ledger',
+      'admin_ledger_totals',
       'admin_list_actions',
+      'admin_list_partner_applications',
+      'admin_mark_refunded',
       'admin_notification_log',
       'admin_order_board',
       'admin_order_board_summary',
       'admin_order_money',
-      'admin_list_partner_applications',
-      'admin_mark_refunded',
+      'admin_partner_detail',
       'admin_partner_documents_due_for_purge',
+      'admin_partner_balances',
+      'admin_partner_ratings',
+      'admin_partners',
       'admin_payments',
       'admin_payout_destinations',
+      'admin_payout_readiness',
+      'admin_payout_history',
+      'admin_pending_settlement',
       'admin_pilot_metrics',
       'admin_provider_transaction_ids',
-      'admin_pending_settlement',
       'admin_reassign_delivery',
       'admin_reconcile_against_provider',
       'admin_reconciliation',
-      'admin_remove_vendor_user',
       'admin_resolve_dispute',
       'admin_review_partner',
+      'admin_review_vendor',
+      'admin_scan_order',
       'admin_scheduled_job_status',
-      'admin_undelivered_notifications',
-      'admin_set_payout_destination',
-      'admin_settlement_payouts',
-      'admin_settlement_runs',
       'admin_set_location_active',
       'admin_set_menu_item_available',
+      'admin_set_payout_destination',
+      'admin_set_user_suspended',
+      'admin_set_vendor_scans',
       'admin_set_vendor_status',
+      'admin_settle_customer_reward',
+      'admin_settlement_overview',
+      'admin_settlement_payouts',
+      'admin_settlement_runs',
+      'admin_undelivered_notifications',
       'admin_update_config',
       'admin_update_location',
       'admin_update_menu_item',
       'admin_update_vendor',
+      'admin_update_vendor_category',
+      'admin_vendor_categories',
+      'admin_vendors',
       'admin_webhook_events',
       'complete_customer_onboarding',
       'customer_abandon_stuck_payment',
+      'customer_choose_fulfilment',
       'customer_collect_instead',
       'customer_dispute_delivery',
       'customer_keep_waiting',
       'customer_order_detail',
       'customer_order_list',
       'customer_order_stage',
+      'customer_rate_partner',
+      'customer_reward_milestones',
+      'fulfilment_options',
       'get_delivery_offers',
       'get_my_delivery_code',
       'get_my_pickup_code',
@@ -289,25 +343,42 @@ describe('schema invariants', () => {
       'my_customer_profile',
       'my_outstanding_terms',
       'my_partner_application',
+      'my_partner_payouts',
+      'my_partner_rating',
       'my_payout_destination',
+      'my_reward_progress',
+      'my_scan_order',
+      'my_vendor_application',
       'partner_accept_delivery',
       'partner_active_delivery',
       'partner_apply',
       'partner_cancel_delivery',
+      'partner_capacity',
       'partner_complete_delivery',
       'partner_confirm_customer_absent',
+      'partner_confirm_pickup',
       'partner_delivery_history',
       'partner_earnings_summary',
       'partner_report_customer_absent',
+      'partner_report_scan_redeemed',
+      'partner_report_scan_refused',
+      'partner_scan_brief',
+      // A pure read of one configured number. It leaks nothing: the threshold
+      // is a published product policy, shown on the Partner dashboard.
+      'payout_threshold_for',
       'partner_set_availability',
       'partner_set_payout_destination',
       'quote_order',
+      'quote_scan_order',
+      'scan_image_path',
       'set_my_email',
       'submit_order',
+      'submit_scan_order',
       'update_my_profile',
       'vendor_accept_order',
+      'vendor_add_image',
       'vendor_complete_pickup_order',
-      'vendor_confirm_pickup',
+      'vendor_delete_image',
       'vendor_earnings_summary',
       'vendor_mark_preparing',
       'vendor_mark_ready',
@@ -315,43 +386,13 @@ describe('schema invariants', () => {
       'vendor_order_bucket',
       'vendor_order_detail',
       'vendor_pending_count',
+      'vendor_pickup_code',
       'vendor_reject_order',
       'vendor_set_accepting_orders',
       'vendor_set_menu_item_available',
-
-      // --- Admin operating console -------------------------------------------
-      // Read models only. Every one re-checks is_admin() itself, so the grant is
-      // reachability and the check is authorisation — a non-admin who calls one
-      // directly gets an empty result or null, never data. None is anon-callable.
-      'admin_dashboard',
-      'admin_customers',
-      'admin_customer_detail',
-      'admin_partners',
-      'admin_partner_detail',
-      'admin_vendors',
-      'admin_ledger',
-      'admin_ledger_totals',
-      'admin_exceptions',
-      // The one WRITE in the console additions. Same shape as every other admin
-      // write: is_admin(), a mandatory reason, an admin_actions row in the same
-      // transaction — and it refuses self-suspension, because is_admin() reads
-      // `not is_suspended` and an admin suspending themselves would revoke the
-      // authority to undo it.
-      'admin_set_user_suspended',
-
-      // --- Scan delivery -----------------------------------------------------
-      // Reads and writes for the scan flow. `scan_image_path` is the sensitive
-      // one and is authenticated-only on purpose: it resolves auth.uid() itself
-      // and returns the path only to the customer, the CURRENTLY assigned
-      // Partner, or an admin. Called with no session it returns nothing.
-      'quote_scan_order',
-      'submit_scan_order',
-      'scan_image_path',
-      'my_scan_order',
-      'partner_report_scan_redeemed',
-      'partner_report_scan_refused',
-      'admin_scan_order',
-      'admin_set_vendor_scans',
+      'vendor_set_payout_destination',
+      'vendor_signup',
+      'vendor_update_profile',
     ];
 
     for (const [role, allowed] of [

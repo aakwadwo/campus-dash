@@ -2,16 +2,7 @@
 
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import { quoteAction, submitOrderAction } from '../actions';
-import {
-  Card,
-  Money,
-  ErrorNote,
-  EmptyState,
-  Skeleton,
-  ArrowLeftIcon,
-  BagIcon,
-  CheckIcon,
-} from '../../ui';
+import { Card, Money, ErrorNote, EmptyState, Skeleton, ArrowLeftIcon, BagIcon } from '../../ui';
 
 /**
  * Menu, basket and checkout.
@@ -25,13 +16,14 @@ import {
  * and gets the full width; reviewing is a committing task and narrows to a
  * single column, which is the composition the references use as an order gets
  * closer to being paid for.
+ *
+ * PICKUP OR DELIVERY IS NOT ASKED HERE any more. It is asked after the vendor
+ * has accepted, on the order screen, because until then there may be no order
+ * to make the decision about — and it is the decision that costs GH₵5.
  */
-export default function MenuAndBasket({ vendor, menu, locations, gate = null }) {
+export default function MenuAndBasket({ vendor, menu, gate = null }) {
   const [quantities, setQuantities] = useState({});
   const [step, setStep] = useState('menu');
-  const [fulfilment, setFulfilment] = useState('DELIVERY');
-  const [destination, setDestination] = useState(locations[0]?.location_id ?? '');
-  const [note, setNote] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
   const [quoting, startQuoting] = useTransition();
@@ -47,18 +39,13 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
   // basket; the checkout step becomes a link to whatever they are missing.
   const canOrder = vendor.is_accepting_orders && itemCount > 0 && !gate;
 
-  // Re-price whenever anything that affects the total changes.
+  // Re-price whenever the basket changes.
   useEffect(() => {
     if (step !== 'review' || items.length === 0) return;
 
     let cancelled = false;
     startQuoting(async () => {
-      const result = await quoteAction({
-        vendorId: vendor.id,
-        fulfilmentType: fulfilment,
-        items,
-        destinationLocationId: fulfilment === 'DELIVERY' ? destination : null,
-      });
+      const result = await quoteAction({ vendorId: vendor.vendor_id, items });
       if (cancelled) return;
       if (result.ok) {
         setQuote(result.quote);
@@ -72,7 +59,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, fulfilment, destination, JSON.stringify(items), vendor.id]);
+  }, [step, JSON.stringify(items), vendor.vendor_id]);
 
   const setQuantity = (id, next) =>
     setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
@@ -82,15 +69,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
       <Review
         vendor={vendor}
         menu={menu}
-        quantities={quantities}
         items={items}
-        fulfilment={fulfilment}
-        setFulfilment={setFulfilment}
-        locations={locations}
-        destination={destination}
-        setDestination={setDestination}
-        note={note}
-        setNote={setNote}
         quote={quote}
         quoting={quoting}
         quoteError={quoteError}
@@ -169,7 +148,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
         <div className="animate-sheet fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-6">
           <div className="bg-surface border-line shadow-float mx-auto flex max-w-2xl items-center gap-3 rounded-full border p-2 pl-5">
             <span className="flex items-center gap-2 text-sm font-semibold">
-              <span className="bg-brand-500 text-ink grid size-6 shrink-0 place-items-center rounded-full text-xs tabular-nums">
+              <span className="bg-brand-700 grid size-6 shrink-0 place-items-center rounded-full text-xs text-white tabular-nums">
                 {itemCount}
               </span>
               <span className="hidden sm:inline">
@@ -179,7 +158,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
             {gate ? (
               <a
                 href={gate.href}
-                className="press bg-brand-500 text-ink hover:bg-brand-600 ml-auto rounded-full px-5 py-3 text-sm font-semibold transition-colors"
+                className="press bg-brand-700 hover:bg-brand-800 ml-auto rounded-full px-5 py-3 text-sm font-semibold text-white transition-colors"
               >
                 {gate.label}
               </a>
@@ -188,7 +167,7 @@ export default function MenuAndBasket({ vendor, menu, locations, gate = null }) 
                 type="button"
                 disabled={!canOrder}
                 onClick={() => setStep('review')}
-                className="press bg-brand-500 text-ink hover:bg-brand-600 ml-auto rounded-full px-6 py-3 text-sm font-semibold transition-colors disabled:opacity-55"
+                className="press bg-brand-700 hover:bg-brand-800 ml-auto rounded-full px-6 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
               >
                 Review order
               </button>
@@ -241,7 +220,7 @@ function Stepper({ value, onChange, label }) {
         type="button"
         aria-label={`Add one ${label}`}
         onClick={() => onChange(value + 1)}
-        className="press bg-brand-500 text-ink hover:bg-brand-600 grid size-10 place-items-center rounded-full text-lg font-semibold transition-colors"
+        className="press bg-brand-700 hover:bg-brand-800 grid size-10 place-items-center rounded-full text-lg font-semibold text-white transition-colors"
       >
         +
       </button>
@@ -252,15 +231,7 @@ function Stepper({ value, onChange, label }) {
 function Review({
   vendor,
   menu,
-  quantities,
   items,
-  fulfilment,
-  setFulfilment,
-  locations,
-  destination,
-  setDestination,
-  note,
-  setNote,
   quote,
   quoting,
   quoteError,
@@ -277,14 +248,7 @@ function Review({
 
   return (
     <form action={submit} className="mx-auto max-w-xl">
-      <input type="hidden" name="vendor_id" value={vendor.id} />
-      <input type="hidden" name="fulfilment_type" value={fulfilment} />
-      <input
-        type="hidden"
-        name="destination_location_id"
-        value={fulfilment === 'DELIVERY' ? destination : ''}
-      />
-      <input type="hidden" name="destination_note" value={note} />
+      <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
       {/* Ids and quantities only. No prices leave the browser. */}
       <input
         type="hidden"
@@ -326,69 +290,10 @@ function Review({
         </ul>
       </Card>
 
-      {/* --- Fulfilment --------------------------------------------------- */}
-      <Card className="mt-4 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          How do you want it?
-        </h3>
-
-        {/* Real radios, so this is keyboard- and screen-reader-native. A row of
-            buttons would have needed roving tabindex and still told a screen
-            reader nothing about what was selected. */}
-        <div role="radiogroup" aria-label="Fulfilment" className="flex gap-2">
-          {[
-            ['DELIVERY', 'Bring it to me'],
-            ['PICKUP', 'I will collect'],
-          ].map(([value, label]) => (
-            <label key={value} className="press flex-1 cursor-pointer">
-              <input
-                type="radio"
-                name="fulfilment_choice"
-                value={value}
-                checked={fulfilment === value}
-                onChange={() => setFulfilment(value)}
-                className="peer sr-only"
-              />
-              <span className="border-line-strong peer-checked:bg-brand-500 peer-checked:border-brand-500 peer-focus-visible:outline-brand-600 flex items-center justify-center gap-2 rounded-full border px-4 py-3 text-center text-sm font-semibold transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2">
-                {fulfilment === value ? <CheckIcon className="size-4" /> : null}
-                {label}
-              </span>
-            </label>
-          ))}
-        </div>
-
-        {fulfilment === 'DELIVERY' ? (
-          <div className="mt-5 space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Where on campus?</span>
-              <select
-                value={destination}
-                onChange={(event) => setDestination(event.target.value)}
-                className="rounded-input bg-surface border-line-strong text-ink focus:border-brand-600 h-12 w-full border px-4 text-[15px] outline-none"
-              >
-                {locations.map((location) => (
-                  <option key={location.location_id} value={location.location_id}>
-                    {location.path}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Anything else? (optional)</span>
-              <input
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Call when you reach the gate"
-                className="rounded-input bg-surface border-line-strong text-ink placeholder:text-faint focus:border-brand-600 h-12 w-full border px-4 text-[15px] outline-none"
-              />
-            </label>
-          </div>
-        ) : (
-          <p className="text-muted mt-4 text-sm leading-relaxed">
-            You will collect this from {vendor.name} once they mark it ready. No delivery fee.
-          </p>
-        )}
-      </Card>
+      {/* No fulfilment question here. It is asked after the vendor accepts,
+          on the order screen — see customer_choose_fulfilment(). Asking now
+          would be asking somebody to decide whether to pay GH₵5 for delivery
+          before knowing whether the kitchen is even going to cook. */}
 
       {/* --- Money -------------------------------------------------------- */}
       <Card className="mt-4 p-5">
@@ -422,7 +327,8 @@ function Review({
         )}
 
         <p className="text-muted mt-4 text-xs leading-relaxed">
-          You will not be charged until {vendor.name} accepts your order.
+          You are not charged yet. Once {vendor.name} accepts, you choose whether to collect it or
+          have a Partner bring it. The delivery fee is added then, if you want one.
         </p>
       </Card>
 
@@ -439,7 +345,7 @@ function Review({
         <button
           type="submit"
           disabled={submitting || !quote || quoting}
-          className="press bg-brand-500 text-ink hover:bg-brand-600 flex-1 rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
+          className="press bg-brand-700 hover:bg-brand-800 flex-1 rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
           {submitting ? 'Sending…' : 'Send order to vendor'}
         </button>

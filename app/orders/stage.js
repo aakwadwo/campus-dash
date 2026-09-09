@@ -1,9 +1,9 @@
 /**
  * How each customer-facing stage reads.
  *
- * `tone` is the text colour and `badge` the pill tone, both semantic tokens so
- * that light and dark modes are handled by the token layer rather than by a
- * second copy of this table.
+ * `tone` is the text colour and `badge` the pill tone, both semantic tokens, so
+ * a palette change happens in one place rather than in a second copy of this
+ * table.
  *
  * The stage itself is computed in the database from all three state dimensions
  * together, so this file only decides wording — never which state the order is
@@ -15,6 +15,14 @@ export const STAGE = {
     tone: 'text-warn',
     badge: 'warn',
     detail: 'They have a minute to accept. You have not been charged.',
+  },
+  // The new step, and the one the whole reordering exists for: the vendor has
+  // said yes, and the customer has not yet said how they want it.
+  CHOOSE_FULFILMENT: {
+    label: 'Choose how you want it',
+    tone: 'text-brand-700',
+    badge: 'brand',
+    detail: 'The vendor accepted. Collect it yourself, or have a Partner bring it for a fee.',
   },
   PAYMENT_REQUIRED: {
     label: 'Ready to pay',

@@ -1,7 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
-import { setPayoutDestinationAction } from '../actions';
+import { setPayoutDestinationAction, syncPayoutDestinationAction } from '../actions';
 import { Panel, Button, ActionResult, Empty, Unavailable } from '../ui';
 
 const NETWORKS = ['MTN', 'VODAFONE', 'AIRTELTIGO'];
@@ -10,15 +10,22 @@ const NETWORKS = ['MTN', 'VODAFONE', 'AIRTELTIGO'];
  * Where settlement money goes.
  *
  * A phone number is not enough to send mobile money: the network and the name
- * on the account matter, and the provider issues a recipient code that later
- * transfers refer to. That code is shown, because "not registered yet" is the
- * difference between a payout that can leave and one that cannot.
+ * on the account matter, and the provider issues TWO codes for the same
+ * account, one for each direction money travels.
  *
- * Changing the number clears the code, so a corrected destination cannot keep
- * paying the old one.
+ *   SPLIT      a subaccount. Present means the vendor's share of every new
+ *              order is routed to them by Paystack as the customer pays, and
+ *              never sits in the Campus Dash balance at all.
+ *   TRANSFER   a recipient. Present means a settlement run can push money to
+ *              this account.
+ *
+ * Both are shown, because "not registered yet" is the difference between money
+ * that settles itself and money somebody has to chase. Changing the number
+ * clears both, so a corrected destination cannot keep paying the old one.
  */
 export default function PayoutDestinations({ destinations }) {
   const [state, save, saving] = useActionState(setPayoutDestinationAction, {});
+  const [syncState, sync, syncing] = useActionState(syncPayoutDestinationAction, {});
 
   return (
     <Panel
@@ -41,7 +48,9 @@ export default function PayoutDestinations({ destinations }) {
                 <th className="pb-2 font-medium">Network</th>
                 <th className="pb-2 font-medium">Number</th>
                 <th className="pb-2 font-medium">Name on account</th>
-                <th className="pb-2 font-medium">Registered</th>
+                <th className="pb-2 font-medium">Split</th>
+                <th className="pb-2 font-medium">Transfers</th>
+                <th className="pb-2 font-medium"> </th>
               </tr>
             </thead>
             <tbody>
@@ -54,8 +63,39 @@ export default function PayoutDestinations({ destinations }) {
                   <td className="py-2">{row.momo_network}</td>
                   <td className="py-2 font-mono text-xs tabular-nums">{row.account_number}</td>
                   <td className="py-2">{row.account_name}</td>
-                  <td className="text-muted py-2 font-mono text-xs">
-                    {row.provider_recipient_code ?? 'not registered yet'}
+                  <td className="py-2 text-xs">
+                    {row.provider_subaccount_code ? (
+                      <span className="text-good font-mono">{row.provider_subaccount_code}</span>
+                    ) : row.subaccount_error ? (
+                      <span className="text-bad" title={row.subaccount_error}>
+                        failed
+                      </span>
+                    ) : (
+                      <span className="text-muted">not registered</span>
+                    )}
+                  </td>
+                  <td className="py-2 font-mono text-xs">
+                    {row.provider_recipient_code ? (
+                      <span className="text-good">{row.provider_recipient_code}</span>
+                    ) : (
+                      <span className="text-muted">not registered</span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    {row.provider_subaccount_code ? null : (
+                      <form action={sync}>
+                        <input type="hidden" name="payee_type" value={row.payee_type} />
+                        <input type="hidden" name="payee_id" value={row.payee_id} />
+                        <input type="hidden" name="payee_name" value={row.payee_name ?? ''} />
+                        <button
+                          type="submit"
+                          disabled={syncing}
+                          className="press-sm border-line-strong rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-55"
+                        >
+                          {syncing ? 'Registering…' : 'Register for split'}
+                        </button>
+                      </form>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -99,6 +139,7 @@ export default function PayoutDestinations({ destinations }) {
         </div>
       </form>
       <ActionResult state={state} />
+      <ActionResult state={syncState} />
     </Panel>
   );
 }

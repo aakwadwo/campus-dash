@@ -4,7 +4,7 @@ import { useActionState } from 'react';
 import { updateVendorAction } from '../../actions';
 import { Field, Select, ReasonField, Button, ActionResult } from '../../ui';
 
-export default function VendorSettingsForm({ vendor, locations }) {
+export default function VendorSettingsForm({ vendor, locations, categories = [] }) {
   const [state, action, pending] = useActionState(updateVendorAction, {});
 
   return (
@@ -12,6 +12,26 @@ export default function VendorSettingsForm({ vendor, locations }) {
       <input type="hidden" name="vendor_id" value={vendor.id} />
       <Field label="Name" name="name" defaultValue={vendor.name} />
       <Field label="Phone" name="phone" type="tel" defaultValue={vendor.phone} />
+      <Select
+        label="Category"
+        name="category_id"
+        defaultValue={vendor.category_id ?? ''}
+        options={[
+          { value: '', label: '(unchanged)' },
+          ...categories.map((c) => ({
+            value: c.id,
+            label: c.is_active ? c.name : `${c.name} (disabled)`,
+          })),
+        ]}
+      />
+      <div className="sm:col-span-2">
+        <Field
+          label="What it sells"
+          name="description"
+          defaultValue={vendor.description ?? ''}
+          placeholder="Hot Ghanaian staples cooked to order."
+        />
+      </div>
       <Select
         label="Location"
         name="location_id"

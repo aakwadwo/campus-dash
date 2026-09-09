@@ -58,6 +58,14 @@ const num = (formData, key) => {
 
 // --- Vendors ----------------------------------------------------------------
 
+/**
+ * Creates a CATALOGUE ENTRY, not an account.
+ *
+ * A business that wants a dashboard registers itself at /vendor/signup. This
+ * exists for the other case: a restaurant Campus Dash lists so a prepaid meal
+ * can be fetched from it, which has signed up for nothing and operates nothing.
+ * The row has no owner, so nobody can sign in as it.
+ */
 export async function createVendorAction(_prev, formData) {
   return run(
     () =>
@@ -65,6 +73,7 @@ export async function createVendorAction(_prev, formData) {
         name: str(formData, 'name'),
         phone: str(formData, 'phone'),
         reason: str(formData, 'reason'),
+        categoryId: str(formData, 'category_id'),
         locationId: str(formData, 'location_id'),
         locationNote: str(formData, 'location_note'),
         walkMinutes: num(formData, 'walk_minutes'),
@@ -82,11 +91,37 @@ export async function updateVendorAction(_prev, formData) {
         reason: str(formData, 'reason'),
         name: str(formData, 'name'),
         phone: str(formData, 'phone'),
+        categoryId: str(formData, 'category_id'),
+        description: str(formData, 'description'),
         locationId: str(formData, 'location_id'),
         locationNote: str(formData, 'location_note'),
         walkMinutes: num(formData, 'walk_minutes'),
       }),
     'Vendor updated.',
+    ['/admin/vendors']
+  );
+}
+
+/**
+ * Approve or reject a store application.
+ *
+ * APPROVAL DOES NOT OPEN THE STORE — going live is the vendor's own decision.
+ * A rejection carries a reason because the applicant can correct it and
+ * resubmit, and a rejection they cannot read is a dead end. The owner is told
+ * by SMS; a failed message never un-does the decision.
+ */
+export async function reviewVendorAction(_prev, formData) {
+  const approved = str(formData, 'decision') === 'APPROVE';
+  return run(
+    () =>
+      admin.reviewVendor({
+        vendorId: str(formData, 'vendor_id'),
+        approved,
+        reason: str(formData, 'reason'),
+      }),
+    approved
+      ? 'Approved. The owner has been texted and can open the store when they are ready.'
+      : 'Rejected. The owner has been texted and can correct the application and resubmit.',
     ['/admin/vendors']
   );
 }
@@ -127,40 +162,96 @@ export async function setVendorScansAction(_prev, formData) {
   );
 }
 
-export async function addVendorUserAction(_prev, formData) {
-  // public.users.phone is E.164, and admin_add_vendor_user matches it exactly.
-  // Without this, an administrator typing the number the way it is written on a
-  // stall's sign — 020 123 4567 — is told "no Campus Dash account for that
-  // number" about an account that is right there. Sign-in already normalises
-  // through the same function, so this is the same number either way.
-  const phone = normaliseGhanaPhone(str(formData, 'phone'));
-  if (!phone) {
-    return { ok: false, message: 'Enter a valid Ghanaian phone number, e.g. 020 123 4567.' };
-  }
+// --- Vendor categories --------------------------------------------------------
 
+export async function createVendorCategoryAction(_prev, formData) {
   return run(
     () =>
-      admin.addVendorUser({
-        vendorId: str(formData, 'vendor_id'),
-        phone,
+      admin.createVendorCategory({
+        slug: str(formData, 'slug'),
+        name: str(formData, 'name'),
+        sortOrder: num(formData, 'sort_order'),
         reason: str(formData, 'reason'),
       }),
-    'Staff member added.',
+    (c) => `Added ${c.name}.`,
     ['/admin/vendors']
   );
 }
 
-export async function removeVendorUserAction(_prev, formData) {
+/**
+ * Rename, reorder or disable a category.
+ *
+ * DISABLING IS NOT DELETING and touches no vendor row: a disabled category
+ * disappears from the sign-up form and the customer filter, the stores already
+ * in it keep trading, and every historical order keeps the category it was
+ * placed under.
+ */
+export async function updateVendorCategoryAction(_prev, formData) {
+  const active = formData.get('is_active');
   return run(
     () =>
-      admin.removeVendorUser({
-        vendorId: str(formData, 'vendor_id'),
-        userId: str(formData, 'user_id'),
+      admin.updateVendorCategory({
+        categoryId: str(formData, 'category_id'),
+        name: str(formData, 'name'),
+        sortOrder: num(formData, 'sort_order'),
+        isActive: active === null ? null : active === 'true',
         reason: str(formData, 'reason'),
       }),
-    'Staff member removed.',
+    'Category updated.',
     ['/admin/vendors']
   );
+}
+
+// --- Vendor images ------------------------------------------------------------
+
+export async function addVendorImageAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const file = formData.get('image');
+  if (!file || typeof file === 'string' || file.size === 0) {
+    return { ok: false, message: 'Choose an image to upload.' };
+  }
+
+  let uploaded;
+  try {
+    const { uploadVendorImage, deleteVendorImage } = await import('@/lib/verification/documents');
+    uploaded = await uploadVendorImage({ vendorId, file });
+    try {
+      await admin.addVendorImage({
+        vendorId,
+        storagePath: uploaded.path,
+        contentType: uploaded.contentType,
+        byteSize: uploaded.byteSize,
+        caption: str(formData, 'caption'),
+      });
+    } catch (error) {
+      // A row pointing at nothing renders as a broken image on every
+      // storefront; an object with no row is invisible. Undo the upload.
+      await deleteVendorImage(uploaded.path).catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    return actionFailure(error, CONTEXT);
+  }
+
+  revalidatePath(`/admin/vendors/${vendorId}`);
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: 'Photo added.' };
+}
+
+export async function deleteVendorImageAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  try {
+    const { deleteVendorImage } = await import('@/lib/verification/documents');
+    // The row goes first and hands back the path, so an object is only ever
+    // deleted once the record authorising it is gone.
+    const path = await admin.deleteVendorImage(str(formData, 'image_id'));
+    if (path) await deleteVendorImage(path).catch(() => {});
+  } catch (error) {
+    return actionFailure(error, CONTEXT);
+  }
+  revalidatePath(`/admin/vendors/${vendorId}`);
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: 'Photo removed.' };
 }
 
 // --- Menu items -------------------------------------------------------------
@@ -311,19 +402,15 @@ export async function reviewPartnerAction(_prev, formData) {
 /**
  * Irreversible. The confirmation lives in the form; the authorisation and the
  * choice of WHAT may be deleted live in purgePartnerDocuments(), which
- * re-derives the one allowed path itself and ignores anything else.
+ * re-derives the allowed paths itself and ignores anything else.
  */
 export async function purgePartnerDocumentsAction(_prev, formData) {
-  const path = str(formData, 'face_image_path');
   return run(
     () =>
       purgePartnerDocuments({
         userId: str(formData, 'user_id'),
-        // The face photograph only. The student ID belongs to the Customer
-        // profile now and is not a Partner document to purge. Omitted entirely
-        // when the caller has no path, which is the usual case — the server
-        // looks it up rather than trusting a hidden field.
-        paths: path ? [path] : null,
+        // No paths from the form at all. The server looks up what this Partner
+        // actually has, which is the only list that can be right.
         reason: str(formData, 'reason'),
       }),
     'Verification documents deleted.',
@@ -498,6 +585,46 @@ export async function retryPayoutsAction(_prev, formData) {
 // --- Pilot configuration -----------------------------------------------------
 
 /** Blank means "leave alone", so a partial edit cannot reset what it never saw. */
+/**
+ * Registers an existing payout destination with the payment provider.
+ *
+ * A retry, and it exists because the registration can fail for reasons that
+ * have nothing to do with the number: Paystack unreachable, split not enabled
+ * on the account, a name the network rejects. The destination is saved either
+ * way, so this is the button that finishes the job later.
+ */
+/** Records that a customer's reward was honoured, and what it was. */
+export async function settleCustomerRewardAction(_prev, formData) {
+  return run(
+    () =>
+      admin.settleCustomerReward({
+        rewardId: str(formData, 'reward_id'),
+        notes: str(formData, 'notes'),
+      }),
+    'Recorded.',
+    ['/admin/community']
+  );
+}
+
+export async function syncPayoutDestinationAction(_prev, formData) {
+  const payeeType = str(formData, 'payee_type');
+  const payeeId = str(formData, 'payee_id');
+
+  return run(
+    async () => {
+      const result = await admin.syncPayoutDestination({
+        payeeType,
+        payeeId,
+        businessName: str(formData, 'payee_name') ?? 'Campus Dash payee',
+      });
+      if (!result.ok) throw new Error(result.error ?? result.skipped ?? 'could not register');
+      return result;
+    },
+    'Registered with the payment provider.',
+    ['/admin/settlements']
+  );
+}
+
 export async function updateConfigAction(_prev, formData) {
   return run(
     () =>
@@ -512,6 +639,8 @@ export async function updateConfigAction(_prev, formData) {
         minPayoutPesewas: num(formData, 'min_payout_pesewas'),
         customerPollSeconds: num(formData, 'customer_poll_seconds'),
         scanServiceFeePesewas: num(formData, 'scan_service_fee_pesewas'),
+        maxActiveDeliveriesPerPartner: num(formData, 'max_active_deliveries_per_partner'),
+        partnerMinPayoutPesewas: num(formData, 'partner_min_payout_pesewas'),
       }),
     'Settings saved. Fee changes apply to the next order.',
     ['/admin/pilot']

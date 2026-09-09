@@ -53,7 +53,7 @@ export default function ConfigForm({ config }) {
         name="vendor_response_seconds"
         type="number"
         placeholder={String(config?.vendor_response_seconds ?? '')}
-        hint="How long a stall has to accept before the order expires."
+        hint="How long a store has to accept before the order expires."
       />
       <Field
         label="Partner search window (seconds)"
@@ -81,13 +81,36 @@ export default function ConfigForm({ config }) {
         name="min_payout_pesewas"
         type="number"
         placeholder={String(config?.min_payout_pesewas ?? '')}
-        hint="Below this a payout waits for the next run. 0 disables."
+        hint="The general floor, used for vendor runs. Below it a payout waits for the next run. 0 disables. Vendors with a Paystack subaccount are settled at the charge and never reach a run at all."
+      />
+      <Field
+        label="Partner weekly payout threshold (pesewas)"
+        name="partner_min_payout_pesewas"
+        type="number"
+        min="0"
+        placeholder={String(config?.partner_min_payout_pesewas ?? 2000)}
+        hint="2000 = GH₵20. A Partner is paid in the weekly run once their available earnings reach this. Below it the balance is NOT lost: the run releases its claim in the same transaction and the money is carried into the next cycle."
       />
       <Field
         label="Customer screen refresh (seconds)"
         name="customer_poll_seconds"
         type="number"
         placeholder={String(config?.customer_poll_seconds ?? '')}
+      />
+
+      {/* CAPACITY. Takes effect on the next acceptance attempt, not on the next
+          deploy — partner_accept_delivery() reads this row every time. Lowering
+          it never takes an order off a Partner who is already carrying it; they
+          come back under the limit by finishing what they have. */}
+      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Partners</h3>
+      <Field
+        label="Orders one Partner may carry at once"
+        name="max_active_deliveries_per_partner"
+        type="number"
+        min="1"
+        max="10"
+        placeholder={String(config?.max_active_deliveries_per_partner ?? 2)}
+        hint="Default 2. Applies to the next acceptance. Raising it does not reassign anything; lowering it never takes an order off somebody already carrying it."
       />
 
       <div className="sm:col-span-2">

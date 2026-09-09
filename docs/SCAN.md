@@ -120,6 +120,23 @@ authority on whether a scan is live. That is why the function is named
 not a verification. If an official integration ever exists, it can become
 authoritative and this becomes a fallback.
 
+## What the customer has to say
+
+An errand carries a **required** free-text field, `order_scans.details`, asked
+as "Give us details about your order". It is where the customer names the meal,
+the counter, and what to do if it has run out.
+
+It is required because the alternative is a Partner standing at a counter with
+somebody's scan and no idea what to ask for, ringing to find out. That phone
+call is what this field exists to prevent, and an optional field would not
+prevent it. `submit_scan_order()` refuses a blank one, so a screen is not the
+enforcement.
+
+The customer may attach the scan by **choosing a file or taking a photo**.
+Neither is privileged: a screenshot saved last week and a photograph taken now
+are the same evidence, and the upload endpoint could not tell them apart in any
+case.
+
 ## Privacy
 
 The image lives in the private `scan-documents` bucket. Like
@@ -128,8 +145,12 @@ denies every client read and write and only the service role can touch a file.
 Nobody ever receives a storage URL — only a short-lived signed URL minted
 server-side after the caller's right has been re-checked in SQL.
 
-Exactly three readers, enforced in `scan_image_path()` and in the
-`order_scans` RLS policy:
+The details ride on the same row under the same rule — `partner_scan_brief()`
+returns them only to the currently assigned Partner, so there is no second
+authorisation to keep in step with the image's.
+
+Exactly three readers, enforced in `scan_image_path()`, `partner_scan_brief()`
+and the `order_scans` RLS policy:
 
 - the customer who uploaded it
 - the **currently** assigned Partner

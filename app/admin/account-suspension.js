@@ -11,7 +11,7 @@ import { ConfirmButton } from './confirm';
  * SUSPENSION IS OF THE PERSON, NOT OF A ROLE. `users.is_suspended` is the
  * column is_admin(), is_customer(), is_approved_partner() and my_vendor_ids()
  * all consult, so this removes every capability the account holds at once —
- * ordering, delivering, staffing a stall — and reinstatement returns them all
+ * ordering, delivering, owning a store — and reinstatement returns them all
  * at once. It is deliberately NOT the same control as rejecting a Partner
  * application, which withdraws only the Partner capability and leaves somebody
  * perfectly able to buy lunch.
@@ -68,7 +68,7 @@ export default function AccountSuspension({ userId, name, isSuspended, isSelf, c
           question={
             isSuspended
               ? `Reinstate ${who}? Ordering, delivering and any vendor access come back immediately.`
-              : `Suspend ${who}? They will be signed out of everything they can do (ordering, any delivery in flight, and any stall they staff) until an administrator reinstates them.`
+              : `Suspend ${who}? They will be signed out of everything they can do (ordering, any delivery in flight, and any store they own) until an administrator reinstates them.`
           }
         >
           {isSuspended ? 'Reinstate account' : 'Suspend account'}

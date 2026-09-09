@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import AreaSwitcher from '@/app/area-switcher';
-import { BikeIcon, UserIcon } from '@/app/ui';
+import { UserIcon } from '@/app/ui';
+import { CampusDashMark } from '@/app/brand';
 
 export const metadata = { title: 'Partner · Campus Dash' };
 
@@ -23,10 +24,8 @@ export default async function PartnerLayout({ children }) {
             href="/partner"
             className="press-sm flex items-center gap-2 font-semibold tracking-tight"
           >
-            <span className="bg-brand-500 text-ink grid size-8 place-items-center rounded-full">
-              <BikeIcon className="size-4" />
-            </span>
-            <span>
+            <CampusDashMark height={26} />
+            <span className="text-[15px]">
               Campus Dash <span className="text-muted font-normal">Partner</span>
             </span>
           </Link>

@@ -52,8 +52,17 @@ describe('minimum payout threshold', () => {
   const service = (sql, params) => asService(async (c) => (await c.query(sql, params)).rows);
   const one = async (sql, params) => (await service(sql, params))[0];
 
+  // BOTH columns. Vendors and Partners now read different thresholds — a
+  // Partner has a GH₵20 weekly floor, a vendor uses the general one — and this
+  // suite is about the hold-and-release machinery rather than either policy, so
+  // it sets whichever number the run it is about to make will read.
   const setMinimum = (pesewas) =>
-    service('update public.pricing_config set min_payout_pesewas = $1 where id', [pesewas]);
+    service(
+      `update public.pricing_config
+          set min_payout_pesewas = $1, partner_min_payout_pesewas = $1
+        where id`,
+      [pesewas]
+    );
 
   const run = (payeeType, period = RUN_1) =>
     one('select * from public.create_settlement_run($1, $2, $3)', [payeeType, ...period]);

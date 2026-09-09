@@ -20,9 +20,9 @@ const TONE = {
  * One Partner — what they have actually done.
  *
  * The review queue at /admin/partners is where approval happens, because that
- * is where the ID and the face photograph are shown side by side and a decision
- * is made. This page is the other half: activity, earnings and liabilities for
- * somebody already in the system.
+ * is where the student ID is shown and a decision is made. This page is the
+ * other half: activity, ratings, earnings and liabilities for somebody already
+ * in the system.
  *
  * Document paths are not returned by admin_partner_detail(); only whether each
  * one exists. Reviewing the images stays on the queue screen, through the
@@ -77,21 +77,20 @@ export default async function AdminPartnerPage({ params }) {
           <Fact label="Reviewed" value={when(p.reviewed_at)} />
           <Fact label="Reviewed by" value={p.reviewed_by_name} />
           {p.review_notes ? <Fact label="Review notes" value={p.review_notes} /> : null}
-          <Fact
-            label="Live face photograph"
-            value={
-              p.has_face_image ? (
-                <span className="text-brand-700">On file (private)</span>
-              ) : (
-                <span className="text-bad">Missing</span>
-              )
-            }
-          />
+          {/* Only ever true for an application made before Campus Dash stopped
+              asking for one. "Missing" would be wrong for every new Partner, so
+              the row is simply absent. */}
+          {p.has_face_image ? (
+            <Fact
+              label="Face photograph"
+              value={<span className="text-muted">On file from an earlier application</span>}
+            />
+          ) : null}
           <Fact
             label="Student ID photograph"
             value={
               p.has_student_id ? (
-                <span className="text-brand-700">On file (private)</span>
+                <span className="text-good">On file (private)</span>
               ) : (
                 <span className="text-bad">Missing</span>
               )
@@ -109,7 +108,7 @@ export default async function AdminPartnerPage({ params }) {
             label="Student ID number"
             value={<span className="font-mono">{p.student_id_number}</span>}
           />
-          <Fact label="Class year" value={p.class_year} />
+          <Fact label="Level" value={p.level} />
         </Facts>
       </Panel>
 
@@ -151,7 +150,7 @@ export default async function AdminPartnerPage({ params }) {
         <PurgeDocumentsForm
           userId={p.user_id}
           name={p.full_name ?? p.phone}
-          hasFaceImage={p.has_face_image}
+          hasDocuments={Boolean(p.has_face_image || p.has_student_id)}
         />
       </Panel>
 

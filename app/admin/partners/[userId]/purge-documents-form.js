@@ -6,24 +6,24 @@ import { Field, ActionResult } from '../../ui';
 import { ConfirmButton } from '../../confirm';
 
 /**
- * Deletes the Partner's live face photograph, permanently.
+ * Deletes a Partner's verification documents, permanently.
  *
- * THE FACE PHOTOGRAPH ONLY. The student ID belongs to the CUSTOMER profile and
- * is the evidence for a capability the person still holds; purgePartnerDocuments
- * re-derives the one path it is allowed to delete server-side and ignores
- * anything else, so this form deliberately posts no path at all.
+ * THE FORM POSTS NO PATHS. purgePartnerDocuments() reads what this Partner
+ * actually has on file and deletes exactly that, so a tampered hidden field
+ * cannot aim the deletion at somebody else's image.
  *
- * Irreversible and unrecoverable — the storage object is removed and the column
- * cleared in the same operation, and re-verification means asking the person for
- * a new photograph. That is why it is behind a confirmation as well as a reason.
+ * Irreversible and unrecoverable — the storage objects are removed and the
+ * columns cleared in the same operation, and re-verifying means asking the
+ * person for a new photograph. That is why it is behind a confirmation as well
+ * as a reason.
  */
-export default function PurgeDocumentsForm({ userId, name, hasFaceImage }) {
+export default function PurgeDocumentsForm({ userId, name, hasDocuments }) {
   const [state, action, pending] = useActionState(purgePartnerDocumentsAction, {});
 
-  if (!hasFaceImage) {
+  if (!hasDocuments) {
     return (
       <p className="text-muted text-sm">
-        No verification photograph is on file for this Partner. Nothing to delete.
+        No verification documents are on file for this Partner. Nothing to delete.
       </p>
     );
   }
@@ -32,8 +32,8 @@ export default function PurgeDocumentsForm({ userId, name, hasFaceImage }) {
     <form action={action} className="grid gap-3 sm:max-w-xl">
       <input type="hidden" name="user_id" value={userId} />
       <p className="text-sm">
-        Deletes the live face photograph taken at application. The student ID photograph is not
-        touched, because it belongs to the Customer record.
+        Deletes the student ID photograph, and the face photograph if this Partner applied while
+        Campus Dash still asked for one.
       </p>
       <Field
         label="Reason (recorded in the audit log)"
@@ -47,9 +47,9 @@ export default function PurgeDocumentsForm({ userId, name, hasFaceImage }) {
           pending={pending}
           pendingLabel="Deleting…"
           confirmLabel="Yes, delete permanently"
-          question={`Permanently delete the verification photograph for ${name}? It cannot be recovered, and re-verifying means asking them for a new one.`}
+          question={`Permanently delete the verification documents for ${name}? They cannot be recovered, and re-verifying means asking for new ones.`}
         >
-          Delete verification photograph
+          Delete verification documents
         </ConfirmButton>
         <ActionResult state={state} />
       </div>

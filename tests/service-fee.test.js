@@ -10,6 +10,7 @@ import {
   MENU,
   LOCATIONS,
 } from './helpers/db.js';
+import { acceptedOrder, getOrder } from './helpers/flow.js';
 
 /**
  * The platform service fee: 5% of the FOOD subtotal.
@@ -39,16 +40,22 @@ describe('the 5% platform service fee', () => {
     await closePools();
   });
 
-  const quote = (items, fulfilment = 'PICKUP') =>
+  /**
+   * A quote is FOOD plus the 5% fee, and nothing else.
+   *
+   * There is no fulfilment argument any more: pickup or delivery is chosen
+   * after the vendor accepts, so a basket quote cannot know a delivery fee and
+   * does not pretend to. That is also why the fee base is unambiguous here —
+   * the delivery fee is not in the quote at all.
+   */
+  const quote = (items) =>
     asUser(
       ACTORS.customerAma,
       async (c) =>
         (
-          await c.query('select * from public.quote_order($1, $2, $3::jsonb, $4)', [
+          await c.query('select * from public.quote_order($1, $2::jsonb)', [
             VENDORS.one,
-            fulfilment,
             JSON.stringify(items),
-            fulfilment === 'DELIVERY' ? LOCATIONS.room204 : null,
           ])
         ).rows[0]
     );
@@ -65,9 +72,8 @@ describe('the 5% platform service fee', () => {
         'rounding fixture',
         price,
       ]);
-      const { rows } = await c.query('select * from public.quote_order($1, $2, $3::jsonb, null)', [
+      const { rows } = await c.query('select * from public.quote_order($1, $2::jsonb)', [
         VENDORS.one,
-        'PICKUP',
         JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
       ]);
       return rows[0];
@@ -85,19 +91,27 @@ describe('the 5% platform service fee', () => {
   });
 
   test('the fee is 5% of the food, and the delivery fee is not part of the base', async () => {
-    const pickup = await quote([{ menu_item_id: MENU.jollof, quantity: 1 }]);
-    const delivery = await quote([{ menu_item_id: MENU.jollof, quantity: 1 }], 'DELIVERY');
+    // A quote is food + fee. The delivery fee is not in the base and cannot be:
+    // it is added at the fulfilment choice, from the same snapshot, and the
+    // service fee is never recomputed there.
+    const basket = await quote([{ menu_item_id: MENU.jollof, quantity: 1 }]);
+    assert.equal(basket.subtotal_pesewas, 3500);
+    assert.equal(basket.service_fee_pesewas, 175, '5% of GH₵35');
+    assert.equal(basket.total_pesewas, 3675);
 
-    assert.equal(pickup.subtotal_pesewas, 3500);
-    assert.equal(pickup.service_fee_pesewas, 175, '5% of GH₵35');
-    assert.equal(delivery.subtotal_pesewas, 3500);
+    const order = await acceptedOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+      fulfilment: 'DELIVERY',
+    });
+    const stored = await getOrder(order.order_id);
+    assert.equal(stored.subtotal_pesewas, 3500);
     assert.equal(
-      delivery.service_fee_pesewas,
+      stored.service_fee_pesewas,
       175,
       'the SAME fee — adding GH₵5 of delivery does not add to the base'
     );
-    assert.equal(delivery.delivery_fee_pesewas, 500);
-    assert.equal(delivery.total_pesewas, 3500 + 175 + 500);
+    assert.equal(stored.delivery_fee_pesewas, 500);
+    assert.equal(stored.total_pesewas, 3500 + 175 + 500);
   });
 
   test('the worked example from the brief: GH₵25 food, GH₵1.25 fee', async () => {
@@ -186,7 +200,11 @@ describe('the 5% platform service fee', () => {
     const config = await asService(
       async (c) => (await c.query('select * from public.platform_config()')).rows[0]
     );
-    const q = await quote([{ menu_item_id: MENU.jollof, quantity: 2 }], 'DELIVERY');
+    const order = await acceptedOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'DELIVERY',
+    });
+    const q = await getOrder(order.order_id);
 
     assert.equal(q.subtotal_pesewas, 7000, 'the vendor entitlement is the food, in full');
     assert.equal(q.service_fee_pesewas, 350, 'and the platform takes 5% ON TOP');

@@ -9,7 +9,7 @@ import { formatPesewas } from '@/lib/util/money';
  * Server-safe by design: nothing in here holds state or imports a hook, so a
  * server component can use every one of these directly and the marketplace
  * ships almost no JavaScript. The handful of pieces that genuinely need the
- * browser — the basket, the theme toggle, the availability switch — stay in
+ * browser — the basket, the availability switch, the rating prompt — stay in
  * their own 'use client' files and import these for their presentation.
  *
  * The admin console has its own kit in app/admin/ui.js. It is denser on
@@ -102,18 +102,19 @@ export function PageHeader({ eyebrow, title, description, action, back, classNam
  * ------------------------------------------------------------------------- */
 
 /**
- * Pills, like the references. The shape is the same at every size so a small
- * secondary action and a full-width primary read as the same family.
+ * Pills. The shape is the same at every size so a small secondary action and a
+ * full-width primary read as the same family.
  *
- * `primary` is the only filled yellow on a screen, and it always carries
- * text-ink — the token was chosen so that is safe at any size.
+ * `primary` is the only filled orange on a screen. It uses brand-700 rather
+ * than the identity orange because it carries white text, and the identity
+ * orange is not legible under it.
  */
 const BUTTON_BASE =
   'press inline-flex items-center justify-center gap-2 rounded-full font-semibold ' +
   'disabled:cursor-not-allowed disabled:opacity-55 select-none whitespace-nowrap';
 
 const BUTTON_VARIANTS = {
-  primary: 'bg-brand-500 text-ink hover:bg-brand-600',
+  primary: 'bg-brand-700 text-white hover:bg-brand-800',
   secondary: 'bg-surface text-ink border border-line-strong hover:bg-surface-2',
   subtle: 'bg-surface-2 text-ink hover:bg-surface-3',
   ghost: 'text-ink hover:bg-surface-2',
@@ -226,8 +227,8 @@ export function Panel({ title, description, action, className = '', children }) 
 
 /**
  * The soft accent panel — the "here is something worth noticing" block.
- * Deliberately not a card: it has no border in light mode, just a warm ground,
- * so it reads as a highlight rather than another container.
+ * Deliberately not a card: no border, just a warm ground, so it reads as a
+ * highlight rather than another container.
  */
 export function Callout({ tone = 'brand', className = '', children }) {
   const tones = {
@@ -252,7 +253,9 @@ export function Callout({ tone = 'brand', className = '', children }) {
 export function Badge({ tone = 'neutral', className = '', children }) {
   const tones = {
     neutral: 'bg-surface-2 text-muted',
-    brand: 'bg-brand-100 text-brand-700',
+    // brand-800 rather than brand-700: on the pale orange ground the lighter
+    // one drops to 3.7:1, which is not enough for text this small.
+    brand: 'bg-brand-100 text-brand-800',
     good: 'bg-good-bg text-good',
     warn: 'bg-warn-bg text-warn',
     bad: 'bg-bad-bg text-bad',
@@ -275,7 +278,7 @@ export function Badge({ tone = 'neutral', className = '', children }) {
  * corner of their eye.
  */
 export function LiveDot({ tone = 'good', className = '' }) {
-  const tones = { good: 'bg-good', warn: 'bg-warn', bad: 'bg-bad', brand: 'bg-brand-600' };
+  const tones = { good: 'bg-good', warn: 'bg-warn', bad: 'bg-bad', brand: 'bg-brand-500' };
   return <span className={`inline-block size-2 rounded-full ${tones[tone]} ${className}`} />;
 }
 
@@ -406,7 +409,7 @@ export function Facts({ className = '', children }) {
 export function CodeDisplay({ label, hint, code, tone = 'brand' }) {
   const digits = String(code ?? '').split('');
   const tiles = {
-    brand: 'bg-brand-500 text-ink',
+    brand: 'bg-brand-700 text-white',
     neutral: 'bg-surface text-ink border border-line',
   };
   return (
@@ -514,11 +517,9 @@ export function Timeline({ steps }) {
 /**
  * The image ground for a vendor or item that has no photograph.
  *
- * Campus Dash has no image pipeline yet, and inventing one to make a grid look
- * finished would be building backend for a screenshot. Instead the placeholder
- * is designed: a warm brand-tinted ground carrying the vendor's initials. It
- * looks intentional at any size, and it will keep working as a fallback on the
- * day real photographs arrive.
+ * A warm brand-tinted ground carrying the vendor's initials. It looks
+ * intentional at any size, and it keeps working as the fallback for a vendor
+ * who has not uploaded a photograph.
  */
 export function ImagePlaceholder({ name = '', className = '', ratio = 'aspect-[16/10]' }) {
   const initials = name
@@ -534,7 +535,7 @@ export function ImagePlaceholder({ name = '', className = '', ratio = 'aspect-[1
       className={`image-ground rounded-card relative grid place-items-center overflow-hidden ${ratio} ${className}`}
       aria-hidden
     >
-      <span className="text-brand-700/70 text-2xl font-semibold tracking-tight select-none">
+      <span className="text-brand-800/70 text-2xl font-semibold tracking-tight select-none">
         {initials || '-'}
       </span>
     </div>
@@ -545,17 +546,29 @@ export function ImagePlaceholder({ name = '', className = '', ratio = 'aspect-[1
  * A vendor in the marketplace grid.
  *
  * The composition follows the references exactly: image, a state chip over it,
- * then name and metadata beneath in decreasing weight. A closed stall is not
+ * then name and metadata beneath in decreasing weight. A closed store is not
  * hidden — knowing a place exists but is shut is useful — but it is desaturated
  * and not a link, so it cannot waste a tap.
  */
-export function VendorCard({ vendor, href, meta = null }) {
+export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
   const open = vendor.is_accepting_orders;
 
   const body = (
     <>
       <div className="relative">
-        <ImagePlaceholder name={vendor.name} className={open ? '' : 'opacity-45 saturate-0'} />
+        {imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={imageUrl}
+            alt=""
+            loading="lazy"
+            className={`rounded-card aspect-[16/10] w-full object-cover ${
+              open ? '' : 'opacity-45 saturate-0'
+            }`}
+          />
+        ) : (
+          <ImagePlaceholder name={vendor.name} className={open ? '' : 'opacity-45 saturate-0'} />
+        )}
         <div className="absolute top-3 left-3">
           {open ? (
             <span className="bg-surface text-good border-line inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold">
@@ -653,7 +666,7 @@ export function SegmentedOption({ name, value, checked, onChange, children }) {
         onChange={onChange}
         className="peer sr-only"
       />
-      <span className="border-line-strong peer-checked:bg-brand-500 peer-checked:border-brand-500 peer-focus-visible:outline-brand-600 block rounded-full border px-4 py-2.5 text-center text-sm font-semibold transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2">
+      <span className="border-line-strong peer-checked:bg-brand-700 peer-checked:border-brand-700 peer-focus-visible:outline-brand-600 block rounded-full border px-4 py-2.5 text-center text-sm font-semibold transition-colors peer-checked:text-white peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2">
         {children}
       </span>
     </label>
@@ -664,8 +677,8 @@ export function SegmentedOption({ name, value, checked, onChange, children }) {
  * Icons
  * ---------------------------------------------------------------------------
  * Inline SVG rather than an icon package: a dozen icons at ~200 bytes each
- * beats a dependency, and they inherit currentColor so they work in both modes
- * with no extra thought.
+ * beats a dependency, and they inherit currentColor so a caller sets the colour
+ * by setting text colour.
  */
 
 function icon(path, { fill = false } = {}) {

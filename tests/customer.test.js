@@ -13,6 +13,8 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
+  chooseFulfilment,
   vendorAccept,
   payOrder,
   vendorPrepare,
@@ -37,11 +39,11 @@ describe('customer ordering', () => {
     await closePools();
   });
 
+  /** A basket quote: a vendor and some items. Food plus the 5% fee. */
   const quote = (userId, args) =>
     asUser(
       userId,
-      async (c) =>
-        (await c.query('select * from public.quote_order($1, $2, $3::jsonb, $4)', args)).rows[0]
+      async (c) => (await c.query('select * from public.quote_order($1, $2::jsonb)', args)).rows[0]
     );
 
   const myOrders = (userId) =>
@@ -60,31 +62,29 @@ describe('customer ordering', () => {
   test('the server prices the basket; the client only sends ids and quantities', async () => {
     const result = await quote(ACTORS.customerAma, [
       VENDORS.one,
-      'DELIVERY',
       JSON.stringify([
         // A crafted basket carrying its own prices.
         { menu_item_id: MENU.jollof, quantity: 2, unit_price_pesewas: 1, price: 1, total: 1 },
         { menu_item_id: MENU.water, quantity: 1, unit_price_pesewas: 1 },
       ]),
-      LOCATIONS.room204,
     ]);
 
-    // 2 × GH₵35 + GH₵3 = GH₵73 food, + 5% (GH₵3.65) + GH₵5 delivery = GH₵81.65
+    // 2 × GH₵35 + GH₵3 = GH₵73 food, + 5% (GH₵3.65) = GH₵76.65
     assert.equal(result.subtotal_pesewas, 7300);
     assert.equal(result.service_fee_pesewas, 365);
-    assert.equal(result.delivery_fee_pesewas, 500);
-    assert.equal(result.total_pesewas, 8165);
+    assert.equal(result.total_pesewas, 7665);
     assert.equal(result.lines[0].unit_price_pesewas, 3500, 'the menu price, not the sent one');
   });
 
-  test('a pickup basket carries no delivery fee', async () => {
+  test('a basket quote carries no delivery fee, because none has been chosen', async () => {
+    // The quote cannot know: pickup or delivery is decided after the vendor
+    // accepts. A quote that guessed at a delivery fee would be showing a number
+    // the customer has not agreed to and may never owe.
     const result = await quote(ACTORS.customerAma, [
       VENDORS.one,
-      'PICKUP',
       JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-      null,
     ]);
-    assert.equal(result.delivery_fee_pesewas, 0);
+    assert.ok(!('delivery_fee_pesewas' in result), 'not a zero — absent');
     // GH₵35 food + 5% = GH₵36.75
     assert.equal(result.service_fee_pesewas, 175);
     assert.equal(result.total_pesewas, 3675);
@@ -95,12 +95,7 @@ describe('customer ordering', () => {
       { menu_item_id: MENU.jollof, quantity: 2 },
       { menu_item_id: MENU.waakye, quantity: 1 },
     ];
-    const quoted = await quote(ACTORS.customerAma, [
-      VENDORS.one,
-      'DELIVERY',
-      JSON.stringify(items),
-      LOCATIONS.room204,
-    ]);
+    const quoted = await quote(ACTORS.customerAma, [VENDORS.one, JSON.stringify(items)]);
     const order = await submitOrder({ items });
 
     assert.equal(order.total_pesewas, quoted.total_pesewas);
@@ -108,7 +103,7 @@ describe('customer ordering', () => {
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, quoted.subtotal_pesewas);
     assert.equal(stored.service_fee_pesewas, quoted.service_fee_pesewas);
-    assert.equal(stored.delivery_fee_pesewas, quoted.delivery_fee_pesewas);
+    assert.equal(stored.delivery_fee_pesewas, 0, 'nothing owed for a delivery nobody asked for');
   });
 
   test('a quote is refused for a closed vendor, an unavailable item or a bad destination', async () => {
@@ -118,9 +113,7 @@ describe('customer ordering', () => {
     const closed = await expectRejection(
       quote(ACTORS.customerAma, [
         VENDORS.one,
-        'PICKUP',
         JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-        null,
       ])
     );
     assert.match(closed.message, /not accepting orders/);
@@ -132,9 +125,7 @@ describe('customer ordering', () => {
     const unavailable = await expectRejection(
       quote(ACTORS.customerAma, [
         VENDORS.one,
-        'PICKUP',
         JSON.stringify([{ menu_item_id: MENU.kelewele, quantity: 1 }]),
-        null,
       ])
     );
     assert.match(unavailable.message, /unavailable/);
@@ -142,20 +133,23 @@ describe('customer ordering', () => {
     const wrongVendor = await expectRejection(
       quote(ACTORS.customerAma, [
         VENDORS.one,
-        'PICKUP',
         JSON.stringify([{ menu_item_id: MENU.shawarma, quantity: 1 }]),
-        null,
       ])
     );
     assert.match(wrongVendor.message, /unavailable/);
 
+    // A bad DESTINATION is no longer a quoting failure, because a quote does not
+    // take one. It is refused where the choice is actually made.
+    const order = await submitOrder();
+    await vendorAccept(order.order_id);
     const badDestination = await expectRejection(
-      quote(ACTORS.customerAma, [
-        VENDORS.one,
-        'DELIVERY',
-        JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-        LOCATIONS.floor2,
-      ])
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.customer_choose_fulfilment($1, $2, $3, null)', [
+          order.order_id,
+          'DELIVERY',
+          LOCATIONS.floor2,
+        ])
+      )
     );
     assert.match(badDestination.message, /not a valid delivery location/);
   });
@@ -165,9 +159,7 @@ describe('customer ordering', () => {
       const error = await expectRejection(
         quote(ACTORS.customerAma, [
           VENDORS.one,
-          'PICKUP',
           JSON.stringify([{ menu_item_id: MENU.jollof, quantity }]),
-          null,
         ])
       );
       assert.match(error.message, /invalid quantity/);
@@ -183,21 +175,17 @@ describe('customer ordering', () => {
     const error = await expectRejection(
       quote(ACTORS.customerAma, [
         VENDORS.one,
-        'PICKUP',
         JSON.stringify([
           { menu_item_id: MENU.jollof, quantity: 1 },
           { menu_item_id: MENU.jollof, quantity: 1 },
         ]),
-        null,
       ])
     );
     assert.match(error.message, /appears more than once/);
   });
 
   test('an empty basket is refused', async () => {
-    const error = await expectRejection(
-      quote(ACTORS.customerAma, [VENDORS.one, 'PICKUP', '[]', null])
-    );
+    const error = await expectRejection(quote(ACTORS.customerAma, [VENDORS.one, '[]']));
     assert.match(error.message, /at least one item/);
   });
 
@@ -205,8 +193,10 @@ describe('customer ordering', () => {
   // Price snapshots
   // =========================================================================
   test('a price change after submission never touches the placed order', async () => {
+    // 2 × GH₵35 = GH₵70 food + 5% (GH₵3.50). NO delivery fee: the customer has
+    // not been asked yet, so there is nothing to charge for one.
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(order.total_pesewas, 7850);
+    assert.equal(order.total_pesewas, 7350);
 
     await asUser(
       ACTORS.admin,
@@ -220,11 +210,12 @@ describe('customer ordering', () => {
     );
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.total_pesewas, 7850, 'the customer still owes what they agreed');
+    assert.equal(view.total_pesewas, 7350, 'the customer still owes what they agreed');
     assert.equal(view.items[0].unit_price_pesewas, 3500);
 
+    // GH₵100 food + 5% (GH₵5.00).
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 11000, 'a new order uses the new price');
+    assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
   });
 
   test('an item disabled after submission does not break the placed order', async () => {
@@ -237,8 +228,8 @@ describe('customer ordering', () => {
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.items[0].name, 'Jollof Rice with Chicken');
-    // GH₵35 food + 5% (GH₵1.75) + GH₵5 delivery.
-    assert.equal(view.total_pesewas, 4175);
+    // GH₵35 food + 5% (GH₵1.75). The delivery fee lands when it is chosen.
+    assert.equal(view.total_pesewas, 3675);
   });
 
   // =========================================================================
@@ -250,6 +241,11 @@ describe('customer ordering', () => {
 
     assert.equal(await stageNow(), 'AWAITING_VENDOR');
     await vendorAccept(order.order_id);
+    // The new step, and the reason the whole flow was reordered: accepted, and
+    // the customer has still to say how they want it. Only then is there a
+    // price to pay.
+    assert.equal(await stageNow(), 'CHOOSE_FULFILMENT');
+    await chooseFulfilment(order.order_id);
     assert.equal(await stageNow(), 'PAYMENT_REQUIRED');
     await payOrder(order.order_id);
     assert.equal(await stageNow(), 'PAID_AWAITING_KITCHEN');
@@ -262,8 +258,7 @@ describe('customer ordering', () => {
   });
 
   test('a pickup order reads READY, because there is nobody to wait for', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -303,8 +298,7 @@ describe('customer ordering', () => {
   });
 
   test('delivery records the destination but dispatches nobody yet', async () => {
-    const order = await submitOrder({ destination: LOCATIONS.room204 });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ destination: LOCATIONS.room204 });
     await payOrder(order.order_id);
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
@@ -323,8 +317,7 @@ describe('customer ordering', () => {
   });
 
   test('a repeated payment request produces one payment, not two charges', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const key = `order:${order.order_id}:attempt:1`;
     const first = await asService(
@@ -360,8 +353,7 @@ describe('customer ordering', () => {
   });
 
   test('a failed payment can be retried as a new attempt', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const first = await asService(
       async (c) =>
@@ -405,8 +397,7 @@ describe('customer ordering', () => {
   });
 
   test('two simultaneous pay taps cannot create two live intents', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     // Both taps compute the same attempt number, so both send the same key.
     // Raced on two separate service-role connections, because that is the only
@@ -438,8 +429,7 @@ describe('customer ordering', () => {
   });
 
   test('a customer cannot mark their own order PAID by any route', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const direct = await expectRejection(
       asUser(ACTORS.customerAma, (c) =>
@@ -502,8 +492,7 @@ describe('customer ordering', () => {
   });
 
   test('a customer cannot modify an order once the vendor has accepted it', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     for (const sql of [
       'update public.orders set fulfilment_type = $2 where id = $1',
@@ -567,10 +556,11 @@ describe('customer ordering', () => {
 
     for (const sql of [
       'select * from public.customer_order_list()',
-      'select * from public.quote_order($1, $2, $3::jsonb, null)',
+      'select * from public.quote_order($1, $2::jsonb)',
+      'select * from public.submit_order($1, $2::jsonb)',
     ]) {
       const params = sql.includes('$1')
-        ? [VENDORS.one, 'PICKUP', JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }])]
+        ? [VENDORS.one, JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }])]
         : [];
       const error = await expectRejection(asAnon((c) => c.query(sql, params)));
       assert.match(error.message, /permission denied/i);
@@ -593,13 +583,21 @@ describe('customer ordering', () => {
   });
 
   test('a completed order keeps its history without exposing anything new', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1)', [
+    // The CUSTOMER holds the collection code and shows it; the vendor types in
+    // what they see. Reading it here stands in for that conversation.
+    const collection = await asUser(
+      ACTORS.customerAma,
+      async (c) =>
+        (await c.query('select public.get_my_pickup_code($1) as code', [order.order_id])).rows[0]
+          .code
+    );
+    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1, $2)', [
       order.order_id,
+      collection,
     ]);
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);

@@ -85,24 +85,39 @@ a test asserts the two have not drifted. The database is authoritative.
 ## Core flow
 
 ```
-Vendor → Items → Destination → Pickup or Delivery → Submit
+Vendor → Items → Submit                       ONE order is ONE vendor.
    ↓
 Vendor has 60s to ACCEPT or REJECT; no response → auto-EXPIRED, no charge
    ↓
-Customer pays → PREPARING → vendor marks READY
-   ↓
-Pickup:   delivery_status stays NONE, customer collects
+Customer chooses PICKUP or DELIVERY           ← the price is fixed here
+   ↓                                            (fulfilment_type is NULL until
+Customer pays → PREPARING → vendor marks READY   this happens, and payment
+   ↓                                             refuses an order still in it)
+Pickup:   delivery_status stays NONE; the customer shows a collection code and
+          the vendor types it in
 Delivery: dispatch starts HERE (never at order time — a Partner should never
           wait at the vendor for food) → broadcast to eligible Partners →
-          first valid acceptance wins, atomically → pickup code → vendor
-          confirms handoff → destination + customer phone revealed to Partner →
-          delivery code confirms completion
+          first valid acceptance wins, atomically → the assigned Partner gets
+          the room and the customer's phone immediately → the VENDOR reads out
+          the pickup code and the Partner types it in → the CUSTOMER reads out
+          the delivery code and the Partner types it in → complete
 ```
 
+**The fulfilment choice sits between acceptance and payment** because that is
+where the information is. Asked at the basket, it put "do I walk there, or pay
+someone GH₵5" before the one fact that decides it: whether there is going to be
+an order at all.
+
+**Both handoff codes follow one rule** — the person who holds the secret is
+never the person who performs the act. See `docs/PARTNER.md`.
+
+A Partner may carry **two deliveries at once**. The limit is a partial unique
+index on a slot column, not a predicate somebody could race past.
+
 Partner cancellation before handoff keeps **the same order**: assignment is
-removed, delivery returns to SEARCHING, the pickup code rotates and the old one
-dies immediately. Payment and vendor preparation are untouched. The vendor is
-never asked to recreate an order.
+removed, the slot is released, delivery returns to SEARCHING, the pickup code
+rotates and the old one dies immediately. Payment and vendor preparation are
+untouched. The vendor is never asked to recreate an order.
 
 ## Identity and capability
 
@@ -113,11 +128,20 @@ holding one never confers another, and never takes another away.
 ```
 AUTH IDENTITY  ── auth.users.id, and nothing else is ever the key
       │
-      ├── CUSTOMER   a customer_profiles row, from student onboarding
+      ├── CUSTOMER   a customer_profiles row, from customer sign-up
       ├── PARTNER    an APPROVED partner_profiles row — REQUIRES Customer
-      ├── VENDOR     a vendor_users link to a business
+      ├── VENDOR     vendors.owner_user_id pointing at this account
       └── ADMIN      users.is_admin
 ```
+
+Three sign-ins reach that one identity, and the difference is the PROOF, not the
+person:
+
+| Capability | Proves                             | Phone number                           |
+| ---------- | ---------------------------------- | -------------------------------------- |
+| CUSTOMER   | a verified `@acity.edu.gh` address | a profile field — how a Partner rings  |
+| VENDOR     | a phone number, by SMS code        | **is** the credential                  |
+| ADMIN      | a password                         | **none at all**; `users.phone` is NULL |
 
 There is no account TYPE anywhere in the schema. No enum, no column and no table
 expresses `CUSTOMER | PARTNER | VENDOR | ADMIN` as one exclusive choice, and
@@ -125,30 +149,40 @@ expresses `CUSTOMER | PARTNER | VENDOR | ADMIN` as one exclusive choice, and
 
 The rules, and where each is enforced:
 
-| Rule                                    | Enforced by                                    |
-| --------------------------------------- | ---------------------------------------------- |
-| **PARTNER ⇒ CUSTOMER**, always          | `partner_requires_customer`, a foreign key     |
-| **CUSTOMER ⇏ PARTNER** without approval | `is_approved_partner()`                        |
-| **ADMIN ⇏ CUSTOMER / PARTNER / VENDOR** | by construction — none creates the other's row |
-| **VENDOR ⇏ CUSTOMER / PARTNER**         | by construction, likewise                      |
-| **one email → one identity**            | `users_email_unique` on `lower(email)`         |
+| Rule                                    | Enforced by                                        |
+| --------------------------------------- | -------------------------------------------------- |
+| **PARTNER ⇒ CUSTOMER**, always          | `partner_requires_customer`, a foreign key         |
+| **CUSTOMER ⇏ PARTNER** without approval | `is_approved_partner()`                            |
+| **ADMIN ⇏ CUSTOMER / PARTNER / VENDOR** | by construction — none creates the other's row     |
+| **VENDOR ⇏ CUSTOMER / PARTNER**         | by construction, likewise                          |
+| **one email → one identity**            | GoTrue, and `users_email_unique` on `lower(email)` |
+| **one phone → one identity**            | `users_phone_key`, unique where present            |
+| **one account → at most one store**     | `vendors_owner_unique`, partial unique             |
 
-- Identity: a verified phone number. It proves **who** somebody is and grants
-  nothing on its own. Supabase Auth owns the code; our Send SMS Hook delivers it
-  through the same `SmsProvider` seam as every other notification. Anyone may
-  browse the marketplace with no account at all.
-- Customer: student onboarding — full name, student ID number, class year, a
-  unique email, a photograph of the student ID, and terms acceptance, all in one
-  transaction. No admin review: completing it **is** the grant. Nobody can place
-  an order without it, including administrators and vendor accounts.
+- Identity: a confirmed contact detail. It proves **who** somebody is and grants
+  nothing on its own. Supabase Auth owns every code; our Send SMS Hook delivers
+  the SMS ones through the same `SmsProvider` seam as every other notification,
+  and an email template carries the rest. Anyone may browse the marketplace with
+  no account at all.
+- Customer: sign-up — full name, verified school address, student ID number,
+  level, phone number and terms acceptance, all in one transaction. No admin
+  review: completing it **is** the grant. Nobody can place an order without it,
+  including administrators and vendor accounts. No document is collected: no
+  review ever consumed one.
 - Partner: an **upgrade to an existing Customer**, on the same `auth.users.id`.
-  It adds exactly one thing — a live face photograph captured with the device
-  camera, so an admin can compare the face to the student ID already on file.
-  There is no second login, no second email and no second identity. Approval is
-  manual in V1, and an approved Partner keeps full Customer functionality.
-- Vendor: a business. Hand-recruited; registration is closed. Admin creates and
-  approves, and `vendor_users` says who may operate it. A vendor account is not
-  a shopper: staffing a stall grants no ordering and no delivering.
+  It adds ONE document, a photograph of the student ID. No face photograph:
+  holding the Customer capability already means a verified `@acity.edu.gh`
+  address, so the school has established the identity and a selfie added a
+  weaker second check while making Campus Dash custodian of its most sensitive
+  image. There is no second login, no second address and no second identity.
+  Approval is manual in V1, and an approved Partner keeps full Customer
+  functionality.
+- Vendor: a business, owned by an identity. **Registration is open**: a stall
+  fills in a form, verifies its phone number, and waits for an administrator to
+  approve or reject with a reason it can act on. `vendors.owner_user_id` says
+  who may operate it, and NULL means a catalogue entry that operates nothing. A
+  vendor account is not a shopper: owning a stall grants no ordering and no
+  delivering.
 - Admin: email and password, at `/login/admin`. Not phone OTP — operational
   access must not depend on an SMS arriving, least of all when messaging is the
   thing that is broken. `is_admin` is a database column no client statement can
@@ -175,15 +209,20 @@ and no risk of merging two people who were never the same.
 Verification documents live in a **private** Supabase Storage bucket, reachable
 only through short-lived signed URLs generated server-side for an admin.
 
-The Partner's live face photograph is deleted after the approval retention
-period. The customer's student ID photograph is **not** on that clock: it is the
-standing evidence for the Customer capability, so it is retained while the
-account holds it and is deleted with the account. Account deletion does not
-exist yet, which makes this an open policy item rather than a finished one —
-`docs/PILOT-QUESTIONS.md` question 18b.
+The student ID is deleted after the approval retention period, together with any
+face photograph left over from an application made before Campus Dash stopped
+asking for one. Both columns are cleared in the same statement, so purging one
+and leaving the other would strand an object in storage with nothing left to
+find it by. A customer holds no verification document at all, so there is
+nothing on that clock belonging to somebody who is not a Partner.
 
-Phone numbers are exposed only during an active delivery — never before Partner
-assignment, never in public lists, never in completed order history.
+Storefront photographs are the one PUBLIC bucket, because an unauthenticated
+visitor browsing the marketplace has to see them and a picture of a plate of
+jollof is advertising. It takes no client writes.
+
+Phone numbers are exposed only during an active delivery — from assignment until
+the delivery ends, never in public lists, never in completed order history, and
+never in an SMS.
 
 ## Locations
 
@@ -206,7 +245,8 @@ race-sensitive rules are additionally backed by partial unique indexes. See
 
 ```
 app/
-  (auth)/ (customer)/ vendor/ partner/ admin/
+  (auth)/ login, signup, vendor/signup   the three doors
+  order/ orders/ vendor/ partner/ admin/
   api/…                     route handlers — all server authority lives here
 lib/
   config.js                 the ONLY place process.env is read
@@ -217,7 +257,9 @@ lib/
   payments/                 PaymentProvider + FakePaymentProvider
   sms/                      SmsProvider, Fake + Arkesel, delivery webhook
   notifications/            domain events → copy → channels
+  notifications/dispatch.js the non-order ones: approvals, offers, payouts
   auth/session.js           session + capabilities, derived from the database
+  auth/school-email.js      the @acity.edu.gh rule, as a pure function
   auth/webhook-signature.js Standard Webhooks HMAC for the Send SMS Hook
   orders/state.js           the three state machines
   orders/transitions.js     the ONLY way the app changes order state

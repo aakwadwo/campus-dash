@@ -76,12 +76,13 @@ describe('scan delivery', () => {
       customer,
       async (c) =>
         (
-          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6)', [
+          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6, $7)', [
             vendorId,
             destination,
             path ?? scanPath(customer),
             'image/jpeg',
             120000,
+            'Jollof with chicken from the hot counter.',
             null,
           ])
         ).rows[0],
@@ -206,11 +207,9 @@ describe('scan delivery', () => {
       const { rows } = await asUser(
         ACTORS.customerAma,
         async (c) =>
-          c.query('select * from public.quote_order($1, $2, $3::jsonb, $4)', [
+          c.query('select * from public.quote_order($1, $2::jsonb)', [
             VENDORS.one,
-            'DELIVERY',
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-            LOCATIONS.room204,
           ]),
         { commit: false }
       );
@@ -226,7 +225,10 @@ describe('scan delivery', () => {
       );
       assert.equal(Number(quote.service_fee_pesewas), 175);
       assert.notEqual(Number(quote.service_fee_pesewas), SCAN_FEE);
-      assert.equal(Number(quote.total_pesewas), 3500 + 175 + DELIVERY_FEE);
+      // A FOOD basket quote carries no delivery fee — pickup or delivery is
+      // chosen after the vendor accepts. A SCAN quote does, because a scan
+      // errand is a delivery by definition and there is nothing to decide.
+      assert.equal(Number(quote.total_pesewas), 3500 + 175);
     });
 
     test('an unconfigured scan fee refuses to price rather than assuming zero', async () => {
@@ -538,12 +540,9 @@ describe('scan delivery', () => {
       const { rows } = await asUser(
         ACTORS.customerAma,
         async (c) =>
-          c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+          c.query('select * from public.submit_order($1, $2::jsonb)', [
             VENDORS.one,
-            'DELIVERY',
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-            LOCATIONS.room204,
-            null,
           ]),
         { commit: true }
       );
@@ -552,6 +551,18 @@ describe('scan delivery', () => {
       await asUser(
         ACTORS.vendor1Staff,
         (c) => c.query('select public.vendor_accept_order($1)', [foodOrderId]),
+        { commit: true }
+      );
+      // A food order is only payable once the customer has said how they want
+      // it. A scan errand never asks, which is exactly the difference.
+      await asUser(
+        ACTORS.customerAma,
+        (c) =>
+          c.query('select public.customer_choose_fulfilment($1, $2, $3, null)', [
+            foodOrderId,
+            'DELIVERY',
+            LOCATIONS.room204,
+          ]),
         { commit: true }
       );
       await asService(async (c) => {
@@ -925,12 +936,9 @@ describe('scan delivery', () => {
       const { rows } = await asUser(
         ACTORS.customerAma,
         async (c) =>
-          c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+          c.query('select * from public.submit_order($1, $2::jsonb)', [
             VENDORS.one,
-            'DELIVERY',
             JSON.stringify([{ menu_item_id: '30000000-0000-4000-8000-000000000001', quantity: 1 }]),
-            LOCATIONS.room204,
-            null,
           ]),
         { commit: true }
       );
@@ -997,9 +1005,12 @@ describe('scan delivery', () => {
       assert.match(error.message, /order you placed yourself/i);
     });
 
-    test('a Partner cannot deliver a scan order from a restaurant they staff', async () => {
+    test('a Partner cannot deliver a scan order from a restaurant they own', async () => {
+      // Wafflemania is a CATALOGUE ENTRY in the seed — listed so a scan can be
+      // fetched from it, with no owner. Giving it one here is what creates the
+      // conflict this test is about; resetTransactionalState() restores the NULL.
       await asService((c) =>
-        c.query('insert into public.vendor_users (vendor_id, user_id) values ($1, $2)', [
+        c.query('update public.vendors set owner_user_id = $2 where id = $1', [
           VENDORS.wafflemania,
           ACTORS.partnerYaw,
         ])
@@ -1013,12 +1024,11 @@ describe('scan delivery', () => {
             c.query('select * from public.partner_accept_delivery($1)', [orderId])
           )
         );
-        assert.match(error.message, /vendor you work for/i);
+        assert.match(error.message, /store you own/i);
       } finally {
         await asService((c) =>
-          c.query('delete from public.vendor_users where vendor_id = $1 and user_id = $2', [
+          c.query('update public.vendors set owner_user_id = null where id = $1', [
             VENDORS.wafflemania,
-            ACTORS.partnerYaw,
           ])
         );
       }

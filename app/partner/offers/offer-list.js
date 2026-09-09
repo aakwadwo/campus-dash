@@ -40,19 +40,19 @@ export default function OfferList({ offers, pollMs = 10000 }) {
 
       <ul className="mt-4 space-y-3">
         {offers.map((offer) => (
-          <li key={offer.order_id} className="rounded-card bg-surface ring-line p-4 ring-1">
+          <li key={offer.order_id} className="rounded-card bg-surface border-line border p-4">
             {/* A scan errand is a different job and must not be mistaken for a
                 collection: you carry the customer's prepaid scan, redeem it at
                 the counter yourself, and the food is not waiting for you. */}
             {offer.order_type === 'SCAN' ? (
-              <p className="text-brand-700 mb-1 text-xs font-semibold tracking-wide uppercase">
+              <p className="text-brand-800 mb-1 text-xs font-semibold tracking-[0.12em] uppercase">
                 Scan delivery
               </p>
             ) : null}
 
             <div className="flex items-baseline justify-between gap-3">
               <span className="font-semibold">{offer.vendor_name}</span>
-              <span className="text-brand-700 font-semibold tabular-nums">
+              <span className="text-brand-800 font-semibold tabular-nums">
                 {formatPesewas(offer.earnings_pesewas)}
               </span>
             </div>
@@ -66,7 +66,7 @@ export default function OfferList({ offers, pollMs = 10000 }) {
                 }
               />
               {offer.order_type === 'SCAN' ? (
-                <Row label="You do" value="redeem the customer’s scan, then deliver" />
+                <Row label="You do" value="redeem the scan, then take it over" />
               ) : (
                 <>
                   <Row label="Items" value={`${offer.item_count}`} />
@@ -80,9 +80,9 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               <button
                 type="submit"
                 disabled={accepting}
-                className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
+                className="press bg-brand-700 hover:bg-brand-800 w-full rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
               >
-                {accepting ? 'Accepting…' : 'Accept this delivery'}
+                {accepting ? 'Accepting…' : 'Accept this order'}
               </button>
             </form>
           </li>

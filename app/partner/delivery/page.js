@@ -1,32 +1,55 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
+import { redirect, notFound } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { getActiveDelivery, getMyPickupCode } from '@/lib/partner';
-import { scanImageUrl } from '@/lib/scan';
+import { getActiveDeliveries } from '@/lib/partner';
+import { scanImageUrl, getPartnerScanBrief } from '@/lib/scan';
 import { formatPesewas } from '@/lib/util/money';
 import DeliveryActions from './delivery-actions';
 import ScanCollection from './scan-collection';
 
 export const dynamic = 'force-dynamic';
 
-export default async function PartnerDeliveryPage() {
+/**
+ * One delivery, in detail.
+ *
+ * A Partner can carry more than one at once, so this page names WHICH —
+ * `?order=<id>`, defaulting to the first. The list is partner_active_delivery(), which returns
+ * only rows where partner_id = auth.uid() and the delivery is still live, so an
+ * order id that is not theirs is not in the list and 404s. The screen never
+ * queries an order by id.
+ *
+ * THE CUSTOMER'S PHONE NUMBER is on this page from the moment the delivery is
+ * assigned, and it is authorised three times over: the read model selects it
+ * only for the assigned Partner while ASSIGNED or PICKED_UP, the RLS policy on
+ * public.users says the same thing independently, and neither returns anything
+ * once the delivery is DELIVERED. It is not hidden with CSS anywhere.
+ */
+export default async function PartnerDeliveryPage({ searchParams }) {
   const me = await getCapabilities();
   if (!me.is_partner) redirect('/partner');
 
-  const delivery = await getActiveDelivery();
-  if (!delivery) redirect('/partner');
+  const params = await searchParams;
+  const deliveries = await getActiveDeliveries();
+  if (deliveries.length === 0) redirect('/partner');
+
+  const requested = typeof params?.order === 'string' ? params.order : null;
+  const delivery = requested
+    ? (deliveries.find((d) => d.order_id === requested) ?? null)
+    : deliveries[0];
+  if (!delivery) notFound();
 
   const collecting = delivery.delivery_status === 'ASSIGNED';
   const isScan = delivery.order_type === 'SCAN';
 
-  // Only the assigned Partner can read either of these, and only while
-  // assigned. A scan errand has no pickup code to read to anybody — there is no
-  // vendor handover — so it fetches the scan instead. The URL is short-lived and
-  // is re-derived on every load, which is what makes losing the assignment
-  // revoke access rather than merely hide the link.
-  const pickupCode =
-    collecting && !isScan ? await getMyPickupCode(delivery.order_id).catch(() => null) : null;
+  // A scan errand has no vendor handover and therefore no pickup code — the
+  // scan image is what the Partner presents instead. The URL is short-lived and
+  // re-derived on every load, which is what makes losing the assignment revoke
+  // access rather than merely hide a link.
   const scanUrl = collecting && isScan ? await scanImageUrl(delivery.order_id) : null;
+
+  // What the customer asked for. Gated on the same release as the image, so it
+  // opens on assignment and closes when the delivery does.
+  const brief = isScan ? await getPartnerScanBrief(delivery.order_id) : null;
 
   return (
     <main className="mx-auto max-w-2xl px-4 pt-5 pb-16">
@@ -34,28 +57,84 @@ export default async function PartnerDeliveryPage() {
         ← Partner
       </Link>
 
+      {deliveries.length > 1 ? (
+        <nav className="mt-3 flex gap-2" aria-label="Your active orders">
+          {deliveries.map((d) => (
+            <Link
+              key={d.order_id}
+              href={`/partner/delivery?order=${d.order_id}`}
+              className={`rounded-full border px-3.5 py-2 font-mono text-sm font-semibold ${
+                d.order_id === delivery.order_id
+                  ? 'bg-brand-700 border-brand-700 text-white'
+                  : 'bg-surface border-line text-muted'
+              }`}
+            >
+              {d.order_number}
+            </Link>
+          ))}
+        </nav>
+      ) : null}
+
       <header className="mt-3 mb-4">
         <p className="font-mono text-sm">{delivery.order_number}</p>
         {isScan ? (
-          <p className="text-brand-700 text-xs font-semibold tracking-wide uppercase">
+          <p className="text-brand-800 text-xs font-semibold tracking-[0.12em] uppercase">
             Scan delivery
           </p>
         ) : null}
         <h1 className="text-2xl font-semibold tracking-tight">
           {collecting ? (isScan ? 'Redeem the scan' : 'Collect the order') : 'Deliver the order'}
         </h1>
-        <p className="text-brand-700 mt-1 text-sm font-semibold">
+        <p className="text-brand-800 mt-1 text-sm font-semibold">
           You earn {formatPesewas(delivery.earnings_pesewas)}
         </p>
       </header>
 
+      {/* WHERE IT IS GOING, and who to ring. Shown from assignment for both
+          legs of the journey: a Partner who cannot find a room needs to call
+          before they are holding food that is going cold, not after. */}
+      <section className="rounded-card bg-surface border-line border p-4">
+        <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
+          {collecting ? 'Then take it to' : 'Take it to'}
+        </h2>
+        {/* THE FIRST NAME, LARGE. It is what the Partner says out loud when
+            somebody opens the door, so it is the biggest thing on the card —
+            above the room, which they need second. */}
+        {delivery.customer_first_name ? (
+          <p className="mt-1 text-xl font-semibold">{delivery.customer_first_name}</p>
+        ) : null}
+        <p className="mt-0.5 text-lg">{delivery.destination}</p>
+        {delivery.destination_note ? (
+          <p className="text-muted mt-1 text-sm">“{delivery.destination_note}”</p>
+        ) : null}
+        {delivery.customer_phone ? (
+          <a
+            href={`tel:${delivery.customer_phone}`}
+            className="press bg-brand-700 hover:bg-brand-800 mt-3 inline-flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-semibold text-white"
+          >
+            Call {delivery.customer_first_name ?? 'the customer'} · {delivery.customer_phone}
+          </a>
+        ) : null}
+      </section>
+
       {collecting && isScan ? (
         <>
-          <section className="rounded-card bg-surface ring-line p-4 ring-1">
-            <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>
+          <section className="rounded-card bg-surface border-line mt-3 border p-4">
+            <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">Go to</h2>
             <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
             <p className="text-muted text-sm">{delivery.vendor_location}</p>
           </section>
+
+          {/* What to ask for. Written by the customer, and required of them, so
+              this is never empty on a new errand. */}
+          {brief?.details ? (
+            <section className="rounded-card bg-brand-50 mt-3 p-4">
+              <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
+                What they asked for
+              </h2>
+              <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line">{brief.details}</p>
+            </section>
+          ) : null}
 
           <div className="mt-3">
             <ScanCollection
@@ -64,69 +143,35 @@ export default async function PartnerDeliveryPage() {
               restaurantName={delivery.vendor_name}
             />
           </div>
-
-          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
-            Delivering to <strong className="text-ink">{delivery.destination_zone}</strong>. The
-            exact room appears once you confirm the scan was redeemed.
-          </section>
         </>
       ) : collecting ? (
-        <>
-          <section className="rounded-card bg-surface ring-line p-4 ring-1">
-            <h2 className="text-xs font-semibold tracking-wide uppercase">Go to</h2>
-            <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
-            <p className="text-muted text-sm">{delivery.vendor_location}</p>
-            <a
-              href={`tel:${delivery.vendor_phone}`}
-              className="text-brand-700 mt-2 inline-block text-sm underline underline-offset-4"
-            >
-              Call the stall
-            </a>
-          </section>
-
-          <section className="bg-brand-500 text-ink rounded-card mt-3 p-4">
-            <h2 className="text-xs font-semibold tracking-wide uppercase opacity-90">
-              Read this to the vendor
-            </h2>
-            <p className="mt-1 font-mono text-5xl font-bold tracking-[0.2em] tabular-nums">
-              {pickupCode ?? '––––'}
-            </p>
-            <p className="mt-2 text-sm opacity-90">
-              They type it in to release the food. Only then do you get the delivery address.
-            </p>
-          </section>
-
-          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
-            Delivering to <strong className="text-ink">{delivery.destination_zone}</strong>. The
-            exact room appears once the vendor confirms the handoff.
-          </section>
-        </>
+        <section className="rounded-card bg-surface border-line mt-3 border p-4">
+          <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
+            Collect from
+          </h2>
+          <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
+          <p className="text-muted text-sm">{delivery.vendor_location}</p>
+          <a
+            href={`tel:${delivery.vendor_phone}`}
+            className="text-brand-700 mt-2 inline-block text-sm underline underline-offset-4"
+          >
+            Call the store
+          </a>
+          <p className="text-muted mt-3 text-sm leading-relaxed">
+            Ask the vendor for the <strong className="text-ink">4-digit pickup code</strong> on
+            their screen and enter it below. That is what releases the food.
+          </p>
+        </section>
       ) : (
-        <>
-          <section className="rounded-card bg-surface ring-line p-4 ring-1">
-            <h2 className="text-xs font-semibold tracking-wide uppercase">Take it to</h2>
-            <p className="mt-1 text-lg font-semibold">{delivery.destination}</p>
-            {delivery.destination_note ? (
-              <p className="mt-1 text-sm">“{delivery.destination_note}”</p>
-            ) : null}
-            <p className="text-muted mt-2 text-sm">{delivery.customer_name}</p>
-            <a
-              href={`tel:${delivery.customer_phone}`}
-              className="text-brand-700 mt-1 inline-block text-sm underline underline-offset-4"
-            >
-              Call {delivery.customer_phone}
-            </a>
-          </section>
-
-          <section className="text-muted rounded-card bg-surface ring-line mt-3 p-4 text-sm ring-1">
-            Ask the customer for their <strong className="text-ink">4-digit delivery code</strong>{' '}
-            and enter it below. That is what completes the job and records your earning.
-          </section>
-        </>
+        <section className="text-muted rounded-card bg-surface border-line mt-3 border p-4 text-sm">
+          Ask {delivery.customer_first_name ?? 'the customer'} for their{' '}
+          <strong className="text-ink">4-digit delivery code</strong> and enter it below. That is
+          what completes the order and records your earning.
+        </section>
       )}
 
       <div className="mt-4">
-        <DeliveryActions delivery={delivery} />
+        <DeliveryActions delivery={delivery} isScan={isScan} />
       </div>
     </main>
   );

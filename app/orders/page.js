@@ -4,6 +4,7 @@ import { listMyOrders } from '@/lib/customer';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import { STAGE } from './stage';
+import RewardProgress from '../reward-progress';
 import {
   Container,
   Card,
@@ -75,7 +76,7 @@ export default async function MyOrdersPage() {
               <h2 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
                 In progress
               </h2>
-              <ul className="stagger space-y-3">
+              <ul className="space-y-3">
                 {live.map((order) => (
                   <li key={order.order_id}>
                     <OrderRow order={order} emphasis />
@@ -99,6 +100,9 @@ export default async function MyOrdersPage() {
               </ul>
             </section>
           ) : null}
+
+          {/* Under the orders, not over them. It counts what is above it. */}
+          <RewardProgress className="mt-10" />
         </Container>
       </main>
 

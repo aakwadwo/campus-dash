@@ -9,7 +9,7 @@ import {
   VENDORS,
   LOCATIONS,
 } from './helpers/db.js';
-import { expectRejection, submitOrder } from './helpers/flow.js';
+import { expectRejection, acceptedOrder } from './helpers/flow.js';
 
 describe('admin — campus locations', () => {
   before(resetTransactionalState);
@@ -49,7 +49,10 @@ describe('admin — campus locations', () => {
     assert.equal(room.is_deliverable, true);
     assert.equal(room.is_active, true);
 
-    const order = await submitOrder({ destination: room.id });
+    // The destination is validated where it is CHOSEN — after the vendor
+    // accepts — so this walks an order to that point rather than stopping at
+    // submission.
+    const order = await acceptedOrder({ destination: room.id });
     assert.ok(order.order_id);
 
     // The Partner offer must resolve the block-level zone, not the room.
@@ -111,7 +114,7 @@ describe('admin — campus locations', () => {
   });
 
   test('marking a floor deliverable makes it a valid destination', async () => {
-    const before = await expectRejection(submitOrder({ destination: FLOOR_2 }));
+    const before = await expectRejection(acceptedOrder({ destination: FLOOR_2 }));
     assert.match(before.message, /not a valid delivery location/);
 
     await admin('select * from public.admin_update_location($1, $2, null, $3)', [
@@ -120,7 +123,7 @@ describe('admin — campus locations', () => {
       true,
     ]);
 
-    const order = await submitOrder({ destination: FLOOR_2 });
+    const order = await acceptedOrder({ destination: FLOOR_2 });
     assert.ok(order.order_id);
   });
 
@@ -149,12 +152,12 @@ describe('admin — campus locations', () => {
       'no room is left selectable under a closed block'
     );
 
-    const error = await expectRejection(submitOrder({ destination: LOCATIONS.room204 }));
+    const error = await expectRejection(acceptedOrder({ destination: LOCATIONS.room204 }));
     assert.match(error.message, /not a valid delivery location/);
   });
 
   test('deactivating does not disturb an order already heading there', async () => {
-    const order = await submitOrder({ destination: LOCATIONS.room204 });
+    const order = await acceptedOrder({ destination: LOCATIONS.room204 });
 
     await admin('select * from public.admin_set_location_active($1, false, $2)', [
       BLOCK_A,
@@ -170,7 +173,7 @@ describe('admin — campus locations', () => {
       LOCATIONS.room204,
       'the Partner still needs the room'
     );
-    assert.equal(stored.order_status, 'SUBMITTED');
+    assert.equal(stored.order_status, 'ACCEPTED');
   });
 
   test('reactivating a block is audited and restores it', async () => {
@@ -221,7 +224,7 @@ describe('admin — campus locations', () => {
   });
 
   test('a location an order points at cannot be deleted', async () => {
-    await submitOrder({ destination: LOCATIONS.room204 });
+    await acceptedOrder({ destination: LOCATIONS.room204 });
     const error = await expectRejection(
       admin('select public.admin_delete_location($1, $2)', [LOCATIONS.room204, 'tidying up'])
     );
@@ -236,7 +239,7 @@ describe('admin — campus locations', () => {
       'new stall pitch',
       FLOOR_2,
     ]);
-    await admin('select * from public.admin_update_vendor($1, $2, null, null, $3)', [
+    await admin('select * from public.admin_update_vendor($1, $2, null, null, null, null, $3)', [
       VENDORS.one,
       'moved to the new pitch',
       spot.id,

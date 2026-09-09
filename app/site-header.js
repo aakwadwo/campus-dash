@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
 import AreaSwitcher from './area-switcher';
 import { BagIcon, ReceiptIcon, StoreIcon, UserIcon } from './ui';
+import { CampusDashLogo } from './brand';
 
 /**
  * The consumer chrome.
@@ -36,12 +37,10 @@ export default async function SiteHeader({ active = null }) {
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link
             href="/"
-            className="press-sm flex min-h-11 shrink-0 items-center gap-2 text-[15px] font-semibold tracking-tight sm:text-[17px]"
+            className="press-sm flex min-h-11 shrink-0 items-center"
+            aria-label="Campus Dash home"
           >
-            <span className="bg-brand-500 text-ink grid size-7 place-items-center rounded-full text-xs font-bold sm:size-8 sm:text-sm">
-              CD
-            </span>
-            <span>Campus Dash</span>
+            <CampusDashLogo height={28} priority />
           </Link>
 
           {/* Desktop navigation. Hidden on mobile, where the bottom bar owns it. */}
@@ -78,12 +77,24 @@ export default async function SiteHeader({ active = null }) {
                 <span className="hidden sm:inline">Account</span>
               </Link>
             ) : (
-              <Link
-                href="/login"
-                className="press bg-brand-500 text-ink hover:bg-brand-600 inline-flex min-h-11 items-center rounded-full px-5 text-sm font-semibold transition-colors"
-              >
-                Sign in
-              </Link>
+              // Sign UP is the primary action for a signed-out visitor, not
+              // sign in: most people arriving here do not have an account yet,
+              // and the sign-in page links back the other way. No admin link
+              // anywhere — /admin is typed, not advertised.
+              <div className="flex items-center gap-1.5">
+                <Link
+                  href="/login"
+                  className="press-sm text-muted hover:text-ink hidden min-h-11 items-center rounded-full px-3 text-sm font-semibold transition-colors sm:inline-flex"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/signup"
+                  className="press bg-brand-700 hover:bg-brand-800 inline-flex min-h-11 items-center rounded-full px-5 text-sm font-semibold text-white transition-colors"
+                >
+                  Sign up
+                </Link>
+              </div>
             )}
           </div>
         </div>

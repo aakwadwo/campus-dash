@@ -1,10 +1,11 @@
 import { notFound } from 'next/navigation';
 import { requireCustomer } from '@/lib/auth/session';
-import { getMyOrder } from '@/lib/customer';
+import { getMyOrder, fulfilmentOptions, listDeliverableLocations } from '@/lib/customer';
 import { getPollIntervals } from '@/lib/platform-config';
 import SiteHeader from '../../site-header';
 import { STAGE } from '../stage';
 import OrderStatus from './order-status';
+import RatePartner from './rate-partner';
 import {
   Container,
   Card,
@@ -65,9 +66,13 @@ function stepsFor(order) {
     ];
   }
 
+  // Before the choice is made, the DELIVERY journey is drawn: it is the longer
+  // of the two, so the steps narrow when the customer picks up rather than
+  // appearing out of nowhere. `pickup` only becomes true once they said so.
   const order_ = [
     { key: 'placed', label: 'Order placed', at: at(order.submitted_at) },
     { key: 'accepted', label: 'Vendor accepted your order', at: at(order.accepted_at) },
+    { key: 'chosen', label: 'Pickup or delivery chosen' },
     { key: 'paid', label: 'Payment confirmed' },
     { key: 'preparing', label: 'Your order is being prepared' },
     {
@@ -79,8 +84,8 @@ function stepsFor(order) {
       ? []
       : [
           { key: 'searching', label: 'Finding a Partner' },
-          { key: 'assigned', label: 'Partner is collecting your order' },
-          { key: 'otw', label: 'On the way to you' },
+          { key: 'assigned', label: 'Partner going to the vendor', at: at(order.assigned_at) },
+          { key: 'otw', label: 'Partner picked it up, coming to you', at: at(order.picked_up_at) },
         ]),
     { key: 'done', label: pickup ? 'Collected' : 'Delivered', at: at(order.completed_at) },
   ];
@@ -88,8 +93,9 @@ function stepsFor(order) {
   // Where the order has got to, expressed as an index into the list above.
   const reached = {
     AWAITING_VENDOR: 'placed',
-    PAYMENT_REQUIRED: 'accepted',
-    PAYMENT_PROCESSING: 'accepted',
+    CHOOSE_FULFILMENT: 'accepted',
+    PAYMENT_REQUIRED: 'chosen',
+    PAYMENT_PROCESSING: 'chosen',
     PAID_AWAITING_KITCHEN: 'paid',
     PREPARING: 'preparing',
     READY: 'ready',
@@ -131,6 +137,14 @@ export default async function CustomerOrderPage({ params }) {
   const [order, intervals] = await Promise.all([getMyOrder(orderId), getPollIntervals()]);
   if (!order) notFound();
 
+  // Only fetched when the question is actually being asked. Both totals are
+  // computed in the database from this order's own price snapshot — the screen
+  // never adds a delivery fee to a subtotal itself.
+  const [options, locations] =
+    order.stage === 'CHOOSE_FULFILMENT'
+      ? await Promise.all([fulfilmentOptions(orderId), listDeliverableLocations()])
+      : [null, null];
+
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
   const live = !['COMPLETED', 'REJECTED', 'EXPIRED', 'CANCELLED'].includes(order.stage);
 
@@ -170,8 +184,20 @@ export default async function CustomerOrderPage({ params }) {
           {/* Whatever the customer can DO right now — pay, give a code, decide
               what happens when nobody took the delivery. */}
           <div className="mt-8">
-            <OrderStatus order={order} email={me.email ?? null} pollMs={intervals.customerMs} />
+            <OrderStatus
+              order={order}
+              email={me.email ?? null}
+              pollMs={intervals.customerMs}
+              fulfilmentOptions={options}
+              locations={locations ?? []}
+            />
           </div>
+
+          {/* Straight after the delivery code was accepted, which is the one
+              moment the customer actually remembers the delivery. can_rate_partner
+              comes from the database and goes false the instant a rating exists,
+              so this cannot be shown twice. */}
+          {order.can_rate_partner ? <RatePartner orderId={order.order_id} /> : null}
 
           <Card className="mt-6 p-5 sm:p-6">
             <h2 className="text-muted mb-5 text-xs font-semibold tracking-[0.14em] uppercase">
@@ -224,13 +250,20 @@ export default async function CustomerOrderPage({ params }) {
                 label="Fulfilment"
                 value={
                   <Badge tone="neutral">
-                    {order.fulfilment_type === 'PICKUP' ? 'You collect' : 'Delivered to you'}
+                    {order.fulfilment_type === null
+                      ? 'Not chosen yet'
+                      : order.fulfilment_type === 'PICKUP'
+                        ? 'You collect'
+                        : 'Delivered to you'}
                   </Badge>
                 }
               />
               {order.destination ? <Fact label="Destination" value={order.destination} /> : null}
               {order.destination_note ? <Fact label="Note" value={order.destination_note} /> : null}
               {order.partner_name ? <Fact label="Partner" value={order.partner_name} /> : null}
+              {order.vendor_location ? (
+                <Fact label="Vendor is at" value={order.vendor_location} />
+              ) : null}
             </Facts>
 
             {order.fulfilment_type === 'DELIVERY' && order.order_status === 'READY' ? (

@@ -79,8 +79,9 @@ describe('row level security and authorisation', () => {
         },
       ],
     });
-    // 2 x GH₵35.00 = GH₵70.00, + 10% (GH₵7.00) + GH₵5 delivery = GH₵82.00
-    assert.equal(order.total_pesewas, 7850, 'the server priced it, not the client');
+    // 2 × GH₵35.00 = GH₵70.00, + 5% (GH₵3.50) = GH₵73.50. No delivery fee:
+    // that is added when the customer chooses, from the same snapshot.
+    assert.equal(order.total_pesewas, 7350, 'the server priced it, not the client');
   });
 
   // --- 6 -------------------------------------------------------------------
@@ -163,23 +164,36 @@ describe('row level security and authorisation', () => {
     assert.ok(!('destination' in offer), 'the offer has no room-level destination');
   });
 
-  test('a Partner still cannot see the customer phone after assignment but before handoff', async () => {
+  test('ASSIGNMENT is what reveals the customer phone, and only to that Partner', async () => {
+    // The window OPENS at assignment now, not at handoff. A Partner who cannot
+    // find a room needs to ring before they are holding food that is going
+    // cold, not after — and the offer list still shows nobody a phone number.
     const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
 
-    const rows = await asUser(
+    const assigned = await asUser(
       ACTORS.partnerYaw,
       async (c) =>
         (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma])).rows
     );
-    assert.equal(rows.length, 0, 'assignment alone does not reveal the customer');
+    assert.equal(assigned.length, 1, 'the assigned Partner may ring the customer');
+    assert.equal(assigned[0].phone, '+233200000021');
+
+    // EVERY OTHER PARTNER STILL SEES NOTHING. The policy is per assignment, not
+    // per capability.
+    const stranger = await asUser(
+      ACTORS.partnerAdjoa,
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma])).rows
+    );
+    assert.equal(stranger.length, 0, 'an unassigned Partner gets nothing');
   });
 
-  test('a Partner CAN see the customer phone once the vendor confirms handoff, and not after completion', async () => {
+  test('a Partner keeps the customer phone while carrying, and loses it on completion', async () => {
     const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await tryTransition(ACTORS.partnerYaw, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
       secrets.pickup_code,
     ]);
@@ -265,24 +279,48 @@ describe('row level security and authorisation', () => {
     }
   });
 
-  test('the Partner gets their pickup code only through the entitlement-checked function', async () => {
+  test('the VENDOR gets the pickup code, and no Partner can reach it at all', async () => {
+    // THE HANDOFF, and the asymmetry that makes it mean anything. The vendor
+    // holds the code and reads it out; the Partner types in what they hear. A
+    // Partner who could read it could confirm a collection that never happened.
     const order = await orderReadyForDispatch();
-    const accepted = await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
 
-    const mine = await asUser(
-      ACTORS.partnerYaw,
+    const stored = await getSecrets(order.order_id);
+    const theirs = await asUser(
+      ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.get_my_pickup_code($1) as code', [order.order_id])).rows[0]
+        (await c.query('select public.vendor_pickup_code($1) as code', [order.order_id])).rows[0]
           .code
     );
-    assert.equal(mine, accepted.pickup_code);
+    assert.equal(theirs, stored.pickup_code);
 
-    const error = await expectRejection(
-      asUser(ACTORS.partnerAdjoa, (c) =>
-        c.query('select public.get_my_pickup_code($1)', [order.order_id])
+    for (const partner of [ACTORS.partnerYaw, ACTORS.partnerAdjoa]) {
+      const error = await expectRejection(
+        asUser(partner, (c) => c.query('select public.vendor_pickup_code($1)', [order.order_id]))
+      );
+      assert.match(error.message, /not authorised for this order/);
+    }
+
+    // A different store cannot read it either.
+    const otherStore = await expectRejection(
+      asUser(ACTORS.vendor2Staff, (c) =>
+        c.query('select public.vendor_pickup_code($1)', [order.order_id])
       )
     );
-    assert.match(error.message, /no pickup code available/);
+    assert.match(otherStore.message, /not authorised for this order/);
+  });
+
+  test('the customer gets a COLLECTION code, and only for an order they collect', async () => {
+    // A different code from the delivery one, held by a different person: this
+    // is the one the customer shows at the counter for a self-pickup order.
+    const delivery = await orderReadyForDispatch();
+    const notTheirs = await expectRejection(
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.get_my_pickup_code($1)', [delivery.order_id])
+      )
+    );
+    assert.match(notTheirs.message, /no collection code available/);
   });
 
   test('the customer gets their delivery code, and another customer cannot', async () => {

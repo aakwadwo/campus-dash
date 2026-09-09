@@ -7,7 +7,6 @@ import {
   markPreparingAction,
   markReadyAction,
   completePickupAction,
-  confirmPartnerPickupAction,
 } from '@/app/vendor/actions';
 
 /**
@@ -18,13 +17,12 @@ import {
  * refuses one that is no longer valid. If a colleague accepted the same order a
  * second earlier, the button is still there and pressing it simply says so.
  */
-export default function OrderActions({ order, vendorId }) {
+export default function OrderActions({ order, vendorId, pickupCode }) {
   const [accept, acceptAction, accepting] = useActionState(acceptOrderAction, {});
   const [reject, rejectAction, rejecting] = useActionState(rejectOrderAction, {});
   const [prepare, prepareAction, preparing] = useActionState(markPreparingAction, {});
   const [ready, readyAction, marking] = useActionState(markReadyAction, {});
   const [pickup, pickupAction, completing] = useActionState(completePickupAction, {});
-  const [handoff, handoffAction, handingOver] = useActionState(confirmPartnerPickupAction, {});
   const [showReject, setShowReject] = useState(false);
 
   const hidden = (
@@ -34,7 +32,7 @@ export default function OrderActions({ order, vendorId }) {
     </>
   );
 
-  const result = [accept, reject, prepare, ready, pickup, handoff].find((state) => state.message);
+  const result = [accept, reject, prepare, ready, pickup].find((state) => state.message);
 
   return (
     <div className="space-y-3">
@@ -88,7 +86,15 @@ export default function OrderActions({ order, vendorId }) {
         </>
       ) : null}
 
-      {order.order_status === 'ACCEPTED' ? (
+      {order.order_status === 'ACCEPTED' && order.fulfilment_type === null ? (
+        <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
+          Accepted. The customer is choosing whether to collect it or have a Partner bring it — the
+          price depends on the answer, so they pay after that.{' '}
+          <strong>Do not start cooking yet.</strong>
+        </p>
+      ) : null}
+
+      {order.order_status === 'ACCEPTED' && order.fulfilment_type !== null ? (
         order.payment_status === 'PAID' ? (
           <form action={prepareAction}>
             {hidden}
@@ -118,37 +124,55 @@ export default function OrderActions({ order, vendorId }) {
         </form>
       ) : null}
 
+      {/* SELF-PICKUP. The CUSTOMER holds the code and shows it; the vendor types
+          in what they see. The vendor cannot read the stored value, so they
+          cannot complete a collection that never happened. */}
       {order.order_status === 'READY' && order.fulfilment_type === 'PICKUP' ? (
-        <form action={pickupAction}>
+        <form action={pickupAction} className="rounded-card bg-surface ring-line p-4 ring-1">
           {hidden}
+          <p className="text-sm font-medium">The customer is collecting this order.</p>
+          <p className="text-muted mt-1 text-xs">
+            Ask them for the 4-digit collection code on their screen and type it in. Do not hand
+            over the food until the code is accepted.
+          </p>
+          <input
+            name="pickup_code"
+            inputMode="numeric"
+            required
+            pattern="\d{4}"
+            maxLength={4}
+            placeholder="1234"
+            className="border-line-strong mt-3 mb-3 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
+          />
           <BigButton disabled={completing} tone="ready">
-            {completing ? 'Completing…' : 'Customer collected it'}
+            {completing ? 'Checking…' : 'Confirm collection'}
           </BigButton>
         </form>
       ) : null}
 
+      {/* PARTNER HANDOFF, the other way round. The VENDOR holds the code and
+          reads it out; the Partner types it into their own app. Whoever holds
+          the secret must not also be the one confirming, or it proves nothing —
+          so this is a display, not a form. */}
       {order.order_status === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
         order.delivery_status === 'ASSIGNED' ? (
-          <form action={handoffAction} className="rounded-card bg-surface ring-line p-4 ring-1">
-            {hidden}
-            <p className="text-sm font-medium">A Partner is here to collect this order.</p>
-            <p className="text-muted mt-1 text-xs">
-              Ask them for their 4-digit pickup code and type it in. Do not hand over the food until
-              the code is accepted.
+          <div className="rounded-card bg-surface ring-line p-4 ring-1">
+            <p className="text-sm font-medium">
+              {order.partner_name ? `${order.partner_name} is` : 'A Partner is'} coming to collect
+              this order.
             </p>
-            <input
-              name="pickup_code"
-              inputMode="numeric"
-              required
-              pattern="\d{4}"
-              maxLength={4}
-              placeholder="1234"
-              className="border-line-strong mt-3 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
-            />
-            <BigButton disabled={handingOver} tone="ready">
-              {handingOver ? 'Checking…' : 'Confirm pickup'}
-            </BigButton>
-          </form>
+            <p className="text-muted mt-1 text-xs">
+              Read this code out to them. They type it into their own app, and only then do you hand
+              over the food.
+            </p>
+            {pickupCode ? (
+              <p className="text-ink bg-surface-2 rounded-card mt-3 py-4 text-center text-3xl font-semibold tracking-[0.4em] tabular-nums">
+                {pickupCode}
+              </p>
+            ) : (
+              <p className="text-muted mt-3 text-sm">Refresh to load the code.</p>
+            )}
+          </div>
         ) : order.delivery_status === 'PICKED_UP' ? (
           <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
             Handed to the Partner. Nothing more for you to do on this order.
@@ -177,8 +201,8 @@ export default function OrderActions({ order, vendorId }) {
 /** Sized for a thumb on a phone propped next to a hot plate. */
 function BigButton({ children, disabled, tone }) {
   const tones = {
-    accept: 'bg-brand-500 text-ink',
-    ready: 'bg-brand-500 text-ink',
+    accept: 'bg-brand-700 text-white',
+    ready: 'bg-brand-700 text-white',
     reject: 'bg-red-700 text-white',
   };
   return (

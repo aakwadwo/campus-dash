@@ -109,17 +109,17 @@ const client = new pg.Client({
 await client.connect();
 
 try {
-  // Two documents, two owners. The student ID photograph is the CUSTOMER's and
-  // lives on customer_profiles; the live face photograph is the PARTNER's and
-  // lives on partner_profiles. The review screen shows them side by side, so
-  // both have to exist for it to be worth looking at.
+  // Two documents, one owner. Both belong to the PARTNER application: the point
+  // of the student ID is to be held next to the live face, and the review screen
+  // shows them side by side, so both have to exist for it to be worth looking
+  // at. Neither belongs to a customer — signing up to order lunch collects no
+  // document at all.
   const { rows } = await client.query(`
     select u.id as user_id, u.full_name, p.status,
-           c.student_id_image_path, p.face_image_path
+           p.student_id_image_path, p.face_image_path
       from public.users u
-      left join public.customer_profiles c on c.user_id = u.id
-      left join public.partner_profiles  p on p.user_id = u.id
-     where c.student_id_image_path is not null
+      join public.partner_profiles p on p.user_id = u.id
+     where p.student_id_image_path is not null
         or p.face_image_path is not null
      order by u.full_name
   `);

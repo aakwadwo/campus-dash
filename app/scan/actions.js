@@ -41,6 +41,7 @@ export async function submitScanOrderAction(_prev, formData) {
       scanImagePath: String(formData.get('scan_image_path') ?? ''),
       contentType: String(formData.get('content_type') ?? ''),
       byteSize: Number(formData.get('byte_size') ?? 0),
+      details: String(formData.get('details') ?? '').trim(),
       destinationNote: String(formData.get('destination_note') ?? '').trim() || null,
     });
     orderId = result?.order_id;

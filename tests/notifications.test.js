@@ -117,7 +117,7 @@ describe('order notifications', () => {
       isPickup: false,
     });
     assert.match(pickup, /READY for pickup/);
-    assert.match(delivery, /Finding a Partner/);
+    assert.match(delivery, /finding a Partner/);
   });
 
   test('the vendor is never told a pickup code by SMS', () => {

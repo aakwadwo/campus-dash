@@ -6,19 +6,16 @@ export const dynamic = 'force-dynamic';
 /**
  * Receives one verification image from the signed-in account.
  *
- * Three callers, three kinds:
- *   student-id  student onboarding, where the CUSTOMER capability is granted
- *   face        the Partner application, which adds exactly this one document
+ * Two kinds:
+ *   student-id  the Partner application's one document
  *   scan        a campus meal scan, which goes to its own private bucket and
  *               is later released to one assigned Partner for one errand
  *
- * The face photograph arrives as a blob captured from the device camera — that
- * form offers no file picker, deliberately, because the point is a LIVE
- * photograph an admin can compare against the ID.
- *
- * That constraint is enforced in the browser and cannot be enforced here. A
- * determined applicant can always POST whatever they like; the real control is
- * the human review, which is why Partner approval is manual.
+ * Either may arrive as a file the person chose or as a blob captured from the
+ * device camera. This endpoint cannot tell the difference and does not try:
+ * for a student ID the control is that an administrator reads the application,
+ * and for a scan it is that only the customer and one assigned Partner can ever
+ * fetch it back.
  */
 export async function POST(request) {
   try {

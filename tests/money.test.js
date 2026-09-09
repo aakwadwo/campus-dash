@@ -11,6 +11,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   payOrder,
   orderReadyForDispatch,
@@ -19,6 +20,7 @@ import {
   getAllocations,
   expectRejection,
   completeDelivery,
+  setPartnerPayoutThreshold,
 } from './helpers/flow.js';
 
 describe('money, allocations and settlement', () => {
@@ -28,17 +30,16 @@ describe('money, allocations and settlement', () => {
 
   // --- 17 ------------------------------------------------------------------
   test('allocations split a paid order correctly and sum to the total', async () => {
-    // GH₵35 jollof + GH₵3 water = GH₵38 food, + GH₵2 service + GH₵5 delivery = GH₵45
-    const order = await submitOrder({
+    const order = await acceptedOrder({
       items: [
         { menu_item_id: MENU.jollof, quantity: 1 },
         { menu_item_id: MENU.water, quantity: 1 },
       ],
     });
-    // GH₵38 food + 5% (GH₵1.90) + GH₵5 delivery
-    assert.equal(order.total_pesewas, 4490);
+    // GH₵35 jollof + GH₵3 water = GH₵38 food, + 5% (GH₵1.90) + GH₵5 delivery.
+    // The delivery fee is on the order because the customer has now chosen it.
+    assert.equal((await getOrder(order.order_id)).total_pesewas, 4490);
 
-    await vendorAccept(order.order_id);
     await payOrder(order.order_id);
 
     const allocations = await getAllocations(order.order_id);
@@ -80,8 +81,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('a pickup order allocates nothing to any Partner', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
 
     const allocations = await getAllocations(order.order_id);
@@ -94,8 +94,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('allocations that do not sum to the order total are refused by the database', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     const error = await expectRejection(
@@ -111,8 +110,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('running allocation twice does not double the ledger', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     const again = await asService(
@@ -125,8 +123,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('confirming a payment twice is a no-op, not a second PAID transition', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     const payment = await payOrder(order.order_id);
 
     const replay = await asService(
@@ -145,8 +142,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('a provider reporting the wrong amount is refused, not reconciled away', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     const payment = await asService(
       async (c) =>
         (
@@ -188,6 +184,10 @@ describe('money, allocations and settlement', () => {
     assert.equal(vendorPayouts[0].amount_pesewas, 6500, 'GH₵35 + GH₵30');
     assert.equal(vendorRun.total_pesewas, 6500);
 
+    // Payout SHAPE, not payout policy: two Partners at GH₵5 each are both under
+    // the GH₵20 weekly floor, so it is lifted here on purpose. The floor has its
+    // own tests in tests/partner-payouts.test.js.
+    await setPartnerPayoutThreshold(1);
     const partnerRun = await asService(
       async (c) =>
         (await c.query("select * from public.create_settlement_run('PARTNER', $1, $2)", period))
@@ -255,8 +255,7 @@ describe('money, allocations and settlement', () => {
 
   // --- 16 ------------------------------------------------------------------
   test('cancelling a paid order moves it to REFUND_PENDING and cancels the allocations', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     await asUser(
@@ -282,8 +281,7 @@ describe('money, allocations and settlement', () => {
   });
 
   test('a refund completes only from REFUND_PENDING', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     // Cannot jump straight to REFUNDED.
@@ -317,12 +315,10 @@ describe('money, allocations and settlement', () => {
   });
 
   test('cancelled allocations are excluded from settlement', async () => {
-    const good = await submitOrder();
-    await vendorAccept(good.order_id);
+    const good = await acceptedOrder();
     await payOrder(good.order_id);
 
-    const bad = await submitOrder({ customer: ACTORS.customerKwesi });
-    await vendorAccept(bad.order_id);
+    const bad = await acceptedOrder({ customer: ACTORS.customerKwesi });
     await payOrder(bad.order_id, { key: `pay-${bad.order_id}` });
     await asUser(
       ACTORS.admin,

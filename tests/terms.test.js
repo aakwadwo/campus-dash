@@ -41,9 +41,9 @@ describe('terms and conditions', () => {
       `);
       await c.query(`
         insert into public.terms_acceptances (user_id, terms_id, audience, version)
-        select vu.user_id, t.id, t.audience, t.version
-          from public.vendor_users vu cross join public.terms_documents t
-         where t.audience = 'VENDOR'
+        select v.owner_user_id, t.id, t.audience, t.version
+          from public.vendors v cross join public.terms_documents t
+         where t.audience = 'VENDOR' and v.owner_user_id is not null
         on conflict do nothing
       `);
     });

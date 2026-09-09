@@ -11,6 +11,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   payOrder,
   getOrder,
@@ -54,8 +55,7 @@ describe('pilot hardening', () => {
   // THE STUCK PAYMENT — the reason this milestone exists
   // =========================================================================
   async function pendingPayment() {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     const payment = await asService(
       async (c) =>
         (
@@ -172,8 +172,7 @@ describe('pilot hardening', () => {
   });
 
   test('a payment that DID succeed is never swept', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     await asService((c) =>
@@ -367,8 +366,9 @@ describe('pilot hardening', () => {
 
   test('a changed fee applies to the NEXT order and never to a placed one', async () => {
     const before = await submitOrder();
-    // GH₵35 food + 5% (GH₵1.75) + GH₵5 delivery
-    assert.equal(before.total_pesewas, 4175);
+    // GH₵35 food + 5% (GH₵1.75). No delivery fee at submission: pickup or
+    // delivery is chosen after the vendor accepts, and priced then.
+    assert.equal(before.total_pesewas, 3675);
 
     await asUser(
       ACTORS.admin,
@@ -376,9 +376,9 @@ describe('pilot hardening', () => {
       { commit: true }
     );
 
-    assert.equal((await getOrder(before.order_id)).total_pesewas, 4175, 'the snapshot holds');
+    assert.equal((await getOrder(before.order_id)).total_pesewas, 3675, 'the snapshot holds');
     const after = await submitOrder();
-    assert.equal(after.total_pesewas, 4350, 'GH₵35 + 10% (GH₵3.50) + GH₵5 delivery');
+    assert.equal(after.total_pesewas, 3850, 'GH₵35 + 10% (GH₵3.50)');
   });
 
   test('a changed timeout takes effect immediately', async () => {
@@ -474,7 +474,11 @@ describe('pilot hardening', () => {
 
     assert.equal(by.orders_placed, 2);
     assert.equal(by.orders_completed, 1);
-    assert.equal(by.deliveries_requested, 2);
+    // ONE, not two. A delivery is not "requested" until the customer has been
+    // asked and has said so — the second order is still waiting on its vendor,
+    // and counting it here would inflate demand for a service nobody has yet
+    // chosen to buy.
+    assert.equal(by.deliveries_requested, 1);
     assert.equal(by.partners_approved, 3);
     assert.equal(by.collected_pesewas, 4175);
     assert.equal(by.unsettled_pesewas, 4175, 'nothing paid out yet');
@@ -498,8 +502,7 @@ describe('pilot hardening', () => {
   // PROVIDER RECONCILIATION
   // =========================================================================
   async function paidOrderWithTxn() {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     const payment = await payOrder(order.order_id);
     return { order, payment };
   }

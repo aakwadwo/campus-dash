@@ -6,7 +6,11 @@ import { actionFailure } from '@/lib/errors';
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { submitOrder } from '@/lib/orders/transitions';
+import {
+  submitOrder,
+  customerChooseFulfilment,
+  customerRatePartner,
+} from '@/lib/orders/transitions';
 import { quoteOrder } from '@/lib/customer';
 import { startPayment, refreshPaymentState } from '@/lib/orders/payments';
 import { setMyEmail } from '@/lib/customer';
@@ -16,9 +20,10 @@ import { NOTIFICATION_EVENT } from '@/lib/notifications';
 /**
  * Customer actions.
  *
- * The client sends menu item ids, quantities, a fulfilment choice and a
- * destination. It sends no prices, no totals and no fees — and if it did they
- * would be ignored, because price_order() reads only ids and quantities.
+ * The client sends menu item ids and quantities, and later a fulfilment choice
+ * and a destination. It sends no prices, no totals and no fees — and if it did
+ * they would be ignored, because price_order() reads only ids and quantities
+ * and customer_choose_fulfilment() recomputes from the order's own snapshot.
  */
 /**
  * Never lets a raw error reach a screen. toUserError() logs the detail
@@ -36,14 +41,9 @@ function fail(error) {
  * price_order(), which is the same function that will charge the customer — so
  * the number on the review screen cannot disagree with the order.
  */
-export async function quoteAction({ vendorId, fulfilmentType, items, destinationLocationId }) {
+export async function quoteAction({ vendorId, items }) {
   try {
-    const quote = await quoteOrder({
-      vendorId,
-      fulfilmentType,
-      items,
-      destinationLocationId,
-    });
+    const quote = await quoteOrder({ vendorId, items });
     return { ok: true, quote };
   } catch (error) {
     return fail(error);
@@ -52,9 +52,6 @@ export async function quoteAction({ vendorId, fulfilmentType, items, destination
 
 export async function submitOrderAction(_prev, formData) {
   const vendorId = String(formData.get('vendor_id') ?? '');
-  const fulfilmentType = formData.get('fulfilment_type') === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
-  const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
-  const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
 
   let items;
   try {
@@ -70,15 +67,12 @@ export async function submitOrderAction(_prev, formData) {
   try {
     order = await submitOrder({
       vendorId,
-      fulfilmentType,
       // Only these two fields survive. Anything else the basket carried is
       // never read.
       items: items.map((item) => ({
         menuItemId: String(item.menuItemId),
         quantity: Number(item.quantity),
       })),
-      destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
-      destinationNote,
     });
   } catch (error) {
     return fail(error);
@@ -86,6 +80,47 @@ export async function submitOrderAction(_prev, formData) {
 
   await notifyOrderEvent(NOTIFICATION_EVENT.ORDER_SUBMITTED, order.order_id);
   redirect(`/orders/${order.order_id}`);
+}
+
+/**
+ * Pickup or delivery, chosen after the vendor has accepted.
+ *
+ * No amount crosses this boundary. The delivery fee and the new total are
+ * recomputed in the database from the order's own price snapshot, so the screen
+ * that asked the question cannot influence the answer's price.
+ */
+export async function chooseFulfilmentAction(_prev, formData) {
+  const orderId = String(formData.get('order_id') ?? '');
+  const fulfilmentType = formData.get('fulfilment_type') === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
+  const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
+  const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
+
+  if (fulfilmentType === 'DELIVERY' && !destinationLocationId) {
+    return { ok: false, message: 'Choose where the Partner should bring it.' };
+  }
+
+  let result;
+  try {
+    result = await customerChooseFulfilment({
+      orderId,
+      fulfilmentType,
+      destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
+      destinationNote,
+    });
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath(`/orders/${orderId}`);
+  return result.success
+    ? {
+        ok: true,
+        message:
+          fulfilmentType === 'PICKUP'
+            ? 'You will collect this order. Pay to send it to the kitchen.'
+            : 'A Partner will bring it. Pay to send the order to the kitchen.',
+      }
+    : { ok: false, message: result.reason ?? 'That is no longer possible.' };
 }
 
 /**
@@ -165,6 +200,36 @@ export async function collectInsteadAction(_prev, formData) {
     'customer_collect_instead',
     'Go to the vendor and collect your order.'
   );
+}
+
+/**
+ * Rates the Partner who brought a completed order.
+ *
+ * Takes an order id and a number of stars, and NOT a Partner. The database
+ * reads the Partner off the order, checks the order belongs to the caller and
+ * is actually complete, and refuses a second rating on the order's own primary
+ * key — so there is nothing a hand-built request can aim at somebody else and
+ * no way to leave two.
+ */
+export async function ratePartnerAction({ orderId, stars, comment }) {
+  const value = Number(stars);
+  if (!Number.isInteger(value) || value < 1 || value > 5) {
+    return { ok: false, message: 'Choose between one and five stars.' };
+  }
+
+  try {
+    const result = await customerRatePartner({
+      orderId: String(orderId ?? ''),
+      stars: value,
+      comment: String(comment ?? '').trim() || null,
+    });
+    if (!result.success) return { ok: false, message: result.reason ?? 'Could not save that.' };
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath(`/orders/${orderId}`);
+  return { ok: true };
 }
 
 export async function disputeAction(_prev, formData) {

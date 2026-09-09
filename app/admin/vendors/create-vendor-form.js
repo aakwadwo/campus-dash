@@ -4,7 +4,7 @@ import { useActionState } from 'react';
 import { createVendorAction } from '../actions';
 import { Field, Select, ReasonField, Button, ActionResult } from '../ui';
 
-export default function CreateVendorForm({ locations }) {
+export default function CreateVendorForm({ locations, categories = [] }) {
   const [state, action, pending] = useActionState(createVendorAction, {});
 
   return (
@@ -17,6 +17,15 @@ export default function CreateVendorForm({ locations }) {
         type="tel"
         placeholder="+233201234567"
         hint="E.164, including the country code."
+      />
+      <Select
+        label="Category"
+        name="category_id"
+        defaultValue=""
+        options={[
+          { value: '', label: 'Meals & Food (default)' },
+          ...categories.map((c) => ({ value: c.id, label: c.name })),
+        ]}
       />
       <Select
         label="Location"

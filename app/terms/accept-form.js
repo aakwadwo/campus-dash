@@ -12,7 +12,7 @@ export default function AcceptForm({ termsId }) {
       <button
         type="submit"
         disabled={accepting || state.ok}
-        className="press bg-brand-500 text-ink w-full rounded-full py-3 text-sm font-semibold transition-colors disabled:opacity-55"
+        className="press bg-brand-700 w-full rounded-full py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
       >
         {state.ok ? 'Accepted' : accepting ? 'Recording…' : 'I accept these terms'}
       </button>

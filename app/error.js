@@ -30,7 +30,7 @@ export default function GlobalError({ error, reset }) {
         <button
           type="button"
           onClick={reset}
-          className="press bg-brand-500 text-ink hover:bg-brand-600 rounded-full px-6 py-3 text-sm font-semibold transition-colors"
+          className="press bg-brand-700 hover:bg-brand-800 rounded-full px-6 py-3 text-sm font-semibold text-white transition-colors"
         >
           Try again
         </button>

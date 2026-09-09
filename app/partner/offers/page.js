@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { getOffers, getActiveDelivery, getMyApplication } from '@/lib/partner';
+import { getOffers, getActiveDeliveries, getMyApplication, getCapacity } from '@/lib/partner';
 import { getPollIntervals } from '@/lib/platform-config';
 import { formatPesewas } from '@/lib/util/money';
 import OfferList from './offer-list';
@@ -12,8 +12,16 @@ export default async function PartnerOffersPage() {
   const me = await getCapabilities();
   if (!me.is_partner) redirect('/partner');
 
-  const [active, application] = await Promise.all([getActiveDelivery(), getMyApplication()]);
-  if (active) redirect('/partner/delivery');
+  const [active, application, capacity] = await Promise.all([
+    getActiveDeliveries(),
+    getMyApplication(),
+    getCapacity(),
+  ]);
+  // Only at the LIMIT is the offer list pointless. Carrying one still leaves
+  // room for another whenever the configured maximum is above one, and the
+  // claim would refuse anyway — this only avoids offering a button that cannot
+  // succeed.
+  if (active.length >= capacity.maxActive) redirect('/partner');
 
   const [offers, intervals] = await Promise.all([
     application?.is_available ? getOffers() : Promise.resolve([]),
@@ -25,19 +33,20 @@ export default async function PartnerOffersPage() {
       <Link href="/partner" className="text-muted text-sm underline underline-offset-4">
         ← Partner
       </Link>
-      <h1 className="mt-3 text-xl font-semibold tracking-tight">Available deliveries</h1>
+      <h1 className="mt-3 text-xl font-semibold tracking-tight">Available orders</h1>
 
       {!application?.is_available ? (
         <p className="rounded-card bg-warn-bg text-warn mt-4 px-4 py-3 text-sm">
-          You are offline, so no offers are shown. Go online from the Partner home screen.
+          You are offline, so nothing is shown here. Go online from the Partner home screen.
         </p>
       ) : (
         <OfferList offers={offers ?? []} pollMs={intervals.partnerMs} />
       )}
 
       <p className="text-muted mt-6 text-xs leading-relaxed">
-        Every job here has food already cooked and waiting. You are never sent to stand at a stall.
-        The exact room is released once the vendor hands the order to you.
+        Every food order here is already cooked and waiting, so you are never sent to stand at a
+        counter. You can carry {capacity.maxActive} at once. The customer&apos;s name, exact room
+        and phone number appear as soon as an order is yours, and only while you are carrying it.
       </p>
     </main>
   );

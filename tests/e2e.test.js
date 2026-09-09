@@ -11,7 +11,7 @@ import {
   MENU,
   LOCATIONS,
 } from './helpers/db.js';
-import { expectRejection } from './helpers/flow.js';
+import { expectRejection, setPartnerPayoutThreshold } from './helpers/flow.js';
 
 /**
  * One realistic Campus Dash order, end to end, plus every way it can go wrong.
@@ -54,44 +54,51 @@ describe('end to end', () => {
         (await c.query('select * from public.order_secrets where order_id = $1', [orderId])).rows[0]
     );
 
-  /** Steps 1–6: the customer orders. */
+  const BASKET = JSON.stringify([
+    { menu_item_id: MENU.jollof, quantity: 2 },
+    { menu_item_id: MENU.water, quantity: 1 },
+  ]);
+
+  /**
+   * Steps 1–5: the customer picks a vendor and some food, and sends it.
+   *
+   * NOT pickup or delivery. That is a separate step, taken after the vendor
+   * says yes — see chooseDelivery below — because until then there may be no
+   * order to make the decision about.
+   */
   async function customerOrders() {
     const quote = await asUser(
       customer,
       async (c) =>
-        (
-          await c.query('select * from public.quote_order($1, $2, $3::jsonb, $4)', [
-            VENDORS.one,
-            'DELIVERY',
-            JSON.stringify([
-              { menu_item_id: MENU.jollof, quantity: 2 },
-              { menu_item_id: MENU.water, quantity: 1 },
-            ]),
-            LOCATIONS.room204,
-          ])
-        ).rows[0]
+        (await c.query('select * from public.quote_order($1, $2::jsonb)', [VENDORS.one, BASKET]))
+          .rows[0]
     );
 
     const order = await asUser(
       customer,
       async (c) =>
-        (
-          await c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
-            VENDORS.one,
-            'DELIVERY',
-            JSON.stringify([
-              { menu_item_id: MENU.jollof, quantity: 2 },
-              { menu_item_id: MENU.water, quantity: 1 },
-            ]),
-            LOCATIONS.room204,
-            'Blue door on the left',
-          ])
-        ).rows[0],
+        (await c.query('select * from public.submit_order($1, $2::jsonb)', [VENDORS.one, BASKET]))
+          .rows[0],
       { commit: true }
     );
 
     return { quote, order };
   }
+
+  /** Step 8: accepted, so now the customer says how they want it. */
+  const chooseDelivery = (orderId, note = 'Blue door on the left') =>
+    act(customer, 'select public.customer_choose_fulfilment($1, $2, $3, $4)', [
+      orderId,
+      'DELIVERY',
+      LOCATIONS.room204,
+      note,
+    ]);
+
+  const choosePickup = (orderId) =>
+    act(customer, 'select public.customer_choose_fulfilment($1, $2, null, null)', [
+      orderId,
+      'PICKUP',
+    ]);
 
   /** Steps 9–10: the provider takes the money. */
   async function customerPays(orderId) {
@@ -117,8 +124,8 @@ describe('end to end', () => {
   test('a complete order: customer → vendor → payment → Partner → delivered → settled', async () => {
     // 1–6. Customer signs in, picks a vendor, food, delivery and a room.
     const { quote, order } = await customerOrders();
-    assert.equal(quote.total_pesewas, 8165, '2×GH₵35 + GH₵3 food, +5% (GH₵3.65) +GH₵5');
-    assert.equal(order.total_pesewas, quote.total_pesewas, 'quoted and charged agree');
+    assert.equal(quote.total_pesewas, 7665, '2×GH₵35 + GH₵3 food, +5% (GH₵3.65)');
+    assert.equal(order.total_pesewas, quote.total_pesewas, 'quoted and submitted agree');
 
     // 7–8. The vendor sees it and accepts.
     const board = await asUser(
@@ -128,13 +135,21 @@ describe('end to end', () => {
     );
     const card = board.find((b) => b.order_id === order.order_id);
     assert.equal(card.bucket, 'NEW');
-    assert.equal(card.destination_zone, 'Hostel Block A', 'zone only, never the room');
+    assert.equal(card.fulfilment_type, null, 'the customer has not chosen yet');
 
     assert.equal(
       envelope(await act(vendorStaff, 'select public.vendor_accept_order($1)', [order.order_id]))
         .success,
       true
     );
+
+    // 8b. THE DECISION, now that there is an order to make it about. This is
+    // where the delivery fee is added, and where the total becomes the number
+    // the customer is actually charged.
+    assert.equal(envelope(await chooseDelivery(order.order_id)).success, true);
+    const priced = await orderRow(order.order_id);
+    assert.equal(priced.delivery_fee_pesewas, 500);
+    assert.equal(priced.total_pesewas, 8165, 'food + 5% + GH₵5 delivery');
 
     // 9–10. The customer pays; the provider confirms.
     await customerPays(order.order_id);
@@ -178,31 +193,44 @@ describe('end to end', () => {
     assert.ok(loser, 'somebody lost');
     assert.match(loser.reason, /already been taken/);
 
-    // 17. The winner holds a pickup code.
-    assert.match(winner.pickup_code, /^\d{4}$/);
+    // 17. The winner is told which job is theirs — and NOT the pickup code.
+    // That belongs to the vendor now, who reads it out at the counter.
+    assert.ok(winner.order_number);
+    assert.ok(!('pickup_code' in winner));
     const assigned = await orderRow(order.order_id);
     const winnerId = assigned.partner_id;
     const loserId = winnerId === partnerA ? partnerB : partnerA;
 
-    // 18–19. The Partner reaches the stall; the vendor checks the code.
+    // 18. From the moment it is theirs, the assigned Partner has the room and
+    // the customer's number — before they are holding food that is going cold.
     const before = await asUser(
       winnerId,
       async (c) => (await c.query('select * from public.partner_active_delivery()')).rows[0]
     );
-    assert.equal(before.destination, null, 'no room number yet');
-    assert.equal(before.customer_phone, null, 'no phone yet');
+    assert.match(before.destination, /Room 204/);
+    assert.ok(before.customer_phone, 'and somebody to ring on arrival');
+
+    // 19. The VENDOR reads the code off their own screen; the PARTNER types it
+    // in. Neither half of that is available to the other.
+    const handoffCode = await asUser(
+      vendorStaff,
+      async (c) =>
+        (await c.query('select public.vendor_pickup_code($1) as code', [order.order_id])).rows[0]
+          .code
+    );
+    assert.match(handoffCode, /^\d{4}$/);
 
     assert.equal(
       envelope(
-        await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+        await act(winnerId, 'select public.partner_confirm_pickup($1, $2)', [
           order.order_id,
-          winner.pickup_code,
+          handoffCode,
         ])
       ).success,
       true
     );
 
-    // 20. Only now does the Partner learn where to go and who to call.
+    // 20. The Partner is carrying the food.
     const after = await asUser(
       winnerId,
       async (c) => (await c.query('select * from public.partner_active_delivery()')).rows[0]
@@ -246,6 +274,12 @@ describe('end to end', () => {
     assert.equal(money.balances, true);
 
     // 25–26. Vendor daily, Partner weekly.
+    //
+    // One delivery earns GH₵5 and the weekly Partner floor is GH₵20, so the
+    // floor is lifted here: this walk-through is about the whole order reaching
+    // settlement, not about how many weeks a Partner waits. The floor and its
+    // rollover have their own suite.
+    await setPartnerPayoutThreshold(1);
     const period = ['2020-01-01T00:00:00Z', '2100-01-01T00:00:00Z'];
     const vendorRun = await asService(
       async (c) =>
@@ -299,6 +333,7 @@ describe('end to end', () => {
   async function readyForDispatch() {
     const { order } = await customerOrders();
     await act(vendorStaff, 'select public.vendor_accept_order($1)', [order.order_id]);
+    await chooseDelivery(order.order_id);
     await customerPays(order.order_id);
     await act(vendorStaff, 'select public.vendor_mark_preparing($1)', [order.order_id]);
     await act(vendorStaff, 'select public.vendor_mark_ready($1)', [order.order_id]);
@@ -352,6 +387,8 @@ describe('end to end', () => {
       { commit: true }
     );
 
+    const codeBefore = (await secrets(order.order_id)).pickup_code;
+
     await act(partnerA, 'select public.partner_cancel_delivery($1, $2)', [
       order.order_id,
       'bike broke',
@@ -365,7 +402,10 @@ describe('end to end', () => {
       { commit: true }
     );
     assert.equal(second.success, true);
-    assert.notEqual(second.pickup_code, first.pickup_code, 'a fresh code');
+    // The code lives on the order for the VENDOR to read out, and a fresh
+    // assignment mints a fresh one.
+    const codeAfter = (await secrets(order.order_id)).pickup_code;
+    assert.notEqual(codeAfter, codeBefore, 'a fresh code');
 
     // The order never changed identity, and the vendor was never asked to act.
     const stored = await orderRow(order.order_id);
@@ -373,22 +413,26 @@ describe('end to end', () => {
     assert.equal(stored.order_status, 'READY');
     assert.equal(stored.payment_status, 'PAID');
 
-    // Partner A's code is worthless.
+    // Partner A's code is worthless — checked from Partner B's hand, because
+    // Partner A is no longer authorised to try at all. That refusal is an
+    // AUTHORISATION failure and raises; "the number is wrong" is a different
+    // fact and returns.
     assert.equal(
       envelope(
-        await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+        await act(partnerB, 'select public.partner_confirm_pickup($1, $2)', [
           order.order_id,
-          first.pickup_code,
+          codeBefore,
         ])
       ).success,
       false
     );
-    // Partner B's works.
+    // Partner B's works — and it is Partner B who types it, because Partner A
+    // is no longer carrying anything.
     assert.equal(
       envelope(
-        await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+        await act(partnerB, 'select public.partner_confirm_pickup($1, $2)', [
           order.order_id,
-          second.pickup_code,
+          codeAfter,
         ])
       ).success,
       true
@@ -444,9 +488,9 @@ describe('end to end', () => {
           .rows[0],
       { commit: true }
     );
-    await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await act(partnerA, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
-      claim.pickup_code,
+      (await secrets(order.order_id)).pickup_code,
     ]);
 
     await act(partnerA, 'select public.partner_report_customer_absent($1)', [order.order_id]);
@@ -496,7 +540,7 @@ describe('end to end', () => {
     // Wrong pickup code.
     assert.equal(
       envelope(
-        await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+        await act(partnerA, 'select public.partner_confirm_pickup($1, $2)', [
           order.order_id,
           '0000',
         ])
@@ -504,9 +548,9 @@ describe('end to end', () => {
       false
     );
 
-    await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await act(partnerA, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
-      claim.pickup_code,
+      (await secrets(order.order_id)).pickup_code,
     ]);
 
     // Wrong delivery code.
@@ -537,6 +581,7 @@ describe('end to end', () => {
   test('variant: a duplicate webhook moves money once', async () => {
     const { order } = await customerOrders();
     await act(vendorStaff, 'select public.vendor_accept_order($1)', [order.order_id]);
+    await chooseDelivery(order.order_id);
 
     const payment = await asService(
       async (c) =>
@@ -602,14 +647,18 @@ describe('end to end', () => {
           .rows[0],
       { commit: true }
     );
-    await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await act(partnerA, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
-      claim.pickup_code,
+      (await secrets(order.order_id)).pickup_code,
     ]);
     await act(partnerA, 'select public.partner_complete_delivery($1, $2)', [
       order.order_id,
       (await secrets(order.order_id)).delivery_code,
     ]);
+
+    // Idempotency of the RUN, not the weekly threshold: one delivery is GH₵5
+    // and the floor is GH₵20, so it is lifted here on purpose.
+    await setPartnerPayoutThreshold(1);
 
     const period = ['2020-01-01T00:00:00Z', '2100-01-01T00:00:00Z'];
     const first = await asService(
@@ -658,9 +707,9 @@ describe('end to end', () => {
           .rows[0],
       { commit: true }
     );
-    await act(vendorStaff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await act(partnerA, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
-      claim.pickup_code,
+      (await secrets(order.order_id)).pickup_code,
     ]);
     await act(partnerA, 'select public.partner_complete_delivery($1, $2)', [
       order.order_id,

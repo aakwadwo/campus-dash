@@ -97,3 +97,63 @@ when, is still immutable. `tests/audit.test.js` pins down exactly that.
 answerable: what did not arrive.
 
 Full setup, the signature scheme and troubleshooting: [`SMS.md`](./SMS.md).
+
+## The events that are not about an order
+
+`lib/orders/notify.js` turns an order transition into messages. Three other
+kinds go through `lib/notifications/dispatch.js`, and each resolves its
+recipients with a **service-only** database function — because each returns
+somebody's phone number to a caller who is not that person, which is the
+definition of a question a client must not be able to ask.
+
+| Event                                   | Who hears it                      | Recipient list                  |
+| --------------------------------------- | --------------------------------- | ------------------------------- |
+| `VENDOR_APPROVED` / `VENDOR_REJECTED`   | the store's owner                 | `vendor_owner_contact()`        |
+| `PARTNER_APPROVED` / `PARTNER_REJECTED` | the applicant                     | the account itself              |
+| `DELIVERY_AVAILABLE`                    | every eligible, available Partner | `partners_to_notify_of_offer()` |
+| `PAYOUT_SENT`                           | the payee                         | `payout_recipient_contact()`    |
+
+`DELIVERY_AVAILABLE` is a **broadcast**, and the copy reflects that: it says a
+delivery exists and links to the dashboard. No customer, no destination, no
+amount owed to a named person. Eligibility is re-derived in SQL from the same
+rules the offer list uses, so nobody is texted about work they would then be
+refused — and the notification layer dedupes per order per recipient, so a
+retried transition does not buzz forty phones twice.
+
+`PAYOUT_SENT` fires on **PAID**, never on PROCESSING: a transfer the provider
+merely accepted is not money that has arrived. It names an amount and a link and
+deliberately **not a rail** — an administrator may settle by bank transfer, by
+mobile money or in cash, and naming the wrong one is worse than naming none.
+
+The capability decisions carry a `dedupeSubject` rather than an order id, so a
+double-clicked admin button cannot send the same congratulations twice.
+
+## Two things that must never be in an SMS
+
+**A customer's phone number.** It was in `PARTNER_PICKED_UP`. An SMS is
+forwardable, screenshottable and permanent, and it outlives the delivery it was
+sent for; the dashboard's copy expires when the authorisation does.
+
+**A handoff code, to the wrong side.** The Partner is not sent the pickup code —
+the vendor reads it off their own screen. Putting it in a message would give the
+Partner both halves of the proof.
+
+## Names in messages
+
+A message that names a person names them by **first name only**, and only when
+the recipient is entitled to know who they are.
+
+- `PARTNER_ASSIGNED` tells the CUSTOMER "Kwame has accepted your order". A
+  surname adds nothing to finding somebody at your door and is theirs, not ours
+  to hand out.
+- The same event tells the PARTNER the order number, the vendor and their
+  earning, and **no customer name and no customer phone number**. Both are on
+  the dashboard, gated on this Partner still being the assigned one — and an
+  SMS outlives that gate. It is forwardable, screenshottable and permanent.
+- `DELIVERY_AVAILABLE` goes to every available Partner and therefore carries
+  nothing about anybody: no customer, no destination, no name, no amount owed to
+  a named person. Its whole job is to get somebody to open their own dashboard.
+
+`lib/orders/notify.js` derives the first name with `firstNameOf()`, which falls
+back to the first word of a legacy `full_name` for accounts created before the
+name was split.

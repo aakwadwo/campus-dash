@@ -47,9 +47,6 @@ insert into auth.users (
   email_change_token_current, phone_change, phone_change_token, reauthentication_token
 )
 values
-  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000001', 'authenticated', 'authenticated',
-   '233200000001', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Dev Admin"}',
-   now(), now(), '', '', '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000011', 'authenticated', 'authenticated',
    '233200000011', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Muni Owner (test)"}',
    now(), now(), '', '', '', '', '', '', '', ''),
@@ -85,27 +82,76 @@ values
    now(), now(), '', '', '', '', '', '', '', '');
 
 -- ---------------------------------------------------------------------------
+-- The administrator — EMAIL AND PASSWORD, AND NO PHONE NUMBER
+-- ---------------------------------------------------------------------------
+-- Deliberately not in the list above. An administrator has no phone number at
+-- all: operational access must not depend on an SMS arriving, least of all when
+-- messaging is the thing that has broken. This is the seed demonstrating the
+-- rule, not a shortcut — public.users.phone is NULL for this row and every
+-- admin function still works.
+--
+-- The address is a SCHOOL one on purpose. An administrator does not need to be
+-- a student, and this row holds no customer profile — but Admin + Customer is a
+-- valid account, and a customer capability requires a verified @acity.edu.gh
+-- address. Giving the dev admin one makes that combination reachable in a local
+-- walkthrough instead of theoretical.
+--
+-- DEVELOPMENT PASSWORD, in a development-only file: campusdash
+insert into auth.users (
+  instance_id, id, aud, role,
+  email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change,
+  email_change_token_current, phone_change, phone_change_token, reauthentication_token
+)
+values (
+  '00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000001',
+  'authenticated', 'authenticated',
+  'admin@acity.edu.gh',
+  extensions.crypt('campusdash', extensions.gen_salt('bf')),
+  now(),
+  '{"provider":"email","providers":["email"]}', '{"full_name":"Dev Admin"}',
+  now(), now(), '', '', '', '', '', '', '', ''
+);
+
+insert into auth.identities (
+  id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+)
+values (
+  gen_random_uuid(), '00000000-0000-4000-8000-000000000001',
+  '00000000-0000-4000-8000-000000000001',
+  jsonb_build_object(
+    'sub', '00000000-0000-4000-8000-000000000001',
+    'email', 'admin@acity.edu.gh',
+    'email_verified', true
+  ),
+  'email', now(), now(), now()
+);
+
+-- ---------------------------------------------------------------------------
 -- public.users — profiles
 -- ---------------------------------------------------------------------------
 -- The on_auth_user_created trigger has ALREADY created a base profile for each
 -- auth.users row above. This upsert only adds what the trigger cannot know:
 -- who is an admin, and which student ID backs a Partner application.
-insert into public.users (id, phone, full_name, is_admin) values
-  ('00000000-0000-4000-8000-000000000001', '+233200000001', 'Dev Admin',            true),
-  ('00000000-0000-4000-8000-000000000011', '+233200000011', 'Muni Owner (test)',    false),
-  ('00000000-0000-4000-8000-000000000012', '+233200000012', 'Grill Owner (test)',   false),
-  ('00000000-0000-4000-8000-000000000021', '+233200000021', 'Ama Test-Customer',    false),
-  ('00000000-0000-4000-8000-000000000022', '+233200000022', 'Kwesi Test-Customer',  false),
-  ('00000000-0000-4000-8000-000000000023', '+233200000023', 'Efua Test-Customer',   false),
-  ('00000000-0000-4000-8000-000000000031', '+233200000031', 'Yaw Test-Partner',     false),
-  ('00000000-0000-4000-8000-000000000032', '+233200000032', 'Adjoa Test-Partner',   false),
-  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'Kofi Test-Applicant',  false),
-  ('00000000-0000-4000-8000-000000000034', '+233200000034', 'Esi Test-Partner',     false),
-  ('00000000-0000-4000-8000-000000000035', '+233200000035', 'Kojo Test-Applicant',  false),
-  ('00000000-0000-4000-8000-000000000024', '+233200000024', 'Abena Test-Customer',  false)
+insert into public.users (id, phone, email, first_name, last_name, is_admin) values
+  ('00000000-0000-4000-8000-000000000001', null,            'admin@acity.edu.gh', 'Dev',   'Admin',           true),
+  ('00000000-0000-4000-8000-000000000011', '+233200000011', null,                 'Muni',  'Owner (test)',    false),
+  ('00000000-0000-4000-8000-000000000012', '+233200000012', null,                 'Grill', 'Owner (test)',    false),
+  ('00000000-0000-4000-8000-000000000021', '+233200000021', 'ama@acity.edu.gh',   'Ama',   'Test-Customer',   false),
+  ('00000000-0000-4000-8000-000000000022', '+233200000022', 'kwesi@acity.edu.gh', 'Kwesi', 'Test-Customer',   false),
+  ('00000000-0000-4000-8000-000000000023', '+233200000023', 'efua@acity.edu.gh',  'Efua',  'Test-Customer',   false),
+  ('00000000-0000-4000-8000-000000000031', '+233200000031', 'yaw@acity.edu.gh',   'Yaw',   'Test-Partner',    false),
+  ('00000000-0000-4000-8000-000000000032', '+233200000032', 'adjoa@acity.edu.gh', 'Adjoa', 'Test-Partner',    false),
+  ('00000000-0000-4000-8000-000000000033', '+233200000033', 'kofi@acity.edu.gh',  'Kofi',  'Test-Applicant',  false),
+  ('00000000-0000-4000-8000-000000000034', '+233200000034', 'esi@acity.edu.gh',   'Esi',   'Test-Partner',    false),
+  ('00000000-0000-4000-8000-000000000035', '+233200000035', 'kojo@acity.edu.gh',  'Kojo',  'Test-Applicant',  false),
+  ('00000000-0000-4000-8000-000000000024', '+233200000024', 'abena@acity.edu.gh', 'Abena', 'Test-Customer',   false)
 on conflict (id) do update
-   set full_name = excluded.full_name,
-       is_admin  = excluded.is_admin;
+   set first_name = excluded.first_name,
+       last_name  = excluded.last_name,
+       email      = excluded.email,
+       is_admin   = excluded.is_admin;
 
 -- ---------------------------------------------------------------------------
 -- Customer profiles — the CUSTOMER capability
@@ -122,43 +168,41 @@ on conflict (id) do update
 -- application is an upgrade to an existing Customer, and the foreign key
 -- partner_requires_customer would refuse the partner_profiles rows below
 -- without these.
-insert into public.customer_profiles (
-  user_id, student_id_number, class_year, student_id_image_path
-) values
-  ('00000000-0000-4000-8000-000000000021', 'TEST-STU-0021', 'Class of 2028', 'partner-docs/dev/0021/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000022', 'TEST-STU-0022', 'Class of 2028', 'partner-docs/dev/0022/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000023', 'TEST-STU-0023', 'Class of 2029', 'partner-docs/dev/0023/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000024', 'TEST-STU-0024', 'Class of 2029', 'partner-docs/dev/0024/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000031', 'TEST-STU-0031', 'Class of 2027', 'partner-docs/dev/0031/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000032', 'TEST-STU-0032', 'Class of 2027', 'partner-docs/dev/0032/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000033', 'TEST-STU-0033', 'Class of 2028', 'partner-docs/dev/0033/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000034', 'TEST-STU-0034', 'Class of 2026', 'partner-docs/dev/0034/student-id.jpg'),
-  ('00000000-0000-4000-8000-000000000035', 'TEST-STU-0035', 'Class of 2029', 'partner-docs/dev/0035/student-id.jpg')
+insert into public.customer_profiles (user_id, student_id_number, level) values
+  ('00000000-0000-4000-8000-000000000021', 'TEST-STU-0021', '200'),
+  ('00000000-0000-4000-8000-000000000022', 'TEST-STU-0022', '200'),
+  ('00000000-0000-4000-8000-000000000023', 'TEST-STU-0023', '100'),
+  ('00000000-0000-4000-8000-000000000024', 'TEST-STU-0024', '100'),
+  ('00000000-0000-4000-8000-000000000031', 'TEST-STU-0031', '300'),
+  ('00000000-0000-4000-8000-000000000032', 'TEST-STU-0032', '300'),
+  ('00000000-0000-4000-8000-000000000033', 'TEST-STU-0033', '200'),
+  ('00000000-0000-4000-8000-000000000034', 'TEST-STU-0034', '400'),
+  ('00000000-0000-4000-8000-000000000035', 'TEST-STU-0035', '100')
 on conflict (user_id) do update
-   set student_id_number     = excluded.student_id_number,
-       class_year            = excluded.class_year,
-       student_id_image_path = excluded.student_id_image_path;
+   set student_id_number = excluded.student_id_number,
+       level             = excluded.level;
 
 -- ---------------------------------------------------------------------------
 -- Partner profiles
 -- ---------------------------------------------------------------------------
 -- Two approved and available; one still awaiting manual review, so the admin
 -- approval screen has something real to act on.
--- The student ID photograph is NOT here: it belongs to the Customer profile
--- above. A Partner application adds exactly one document — the live face.
+-- BOTH verification documents are here. The student ID photograph moved back to
+-- the Partner application, because the Partner review is the only place anybody
+-- ever looks at one — signing up to order lunch never required it.
 insert into public.partner_profiles (
-  user_id, status, is_available, face_image_path, reviewed_at, reviewed_by
+  user_id, status, is_available, student_id_image_path, face_image_path, reviewed_at, reviewed_by
 ) values
   ('00000000-0000-4000-8000-000000000031', 'APPROVED', true,
-   'partner-docs/dev/0031/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0031/student-id.jpg', 'partner-docs/dev/0031/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000032', 'APPROVED', true,
-   'partner-docs/dev/0032/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0032/student-id.jpg', 'partner-docs/dev/0032/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000033', 'PENDING_REVIEW', false,
-   'partner-docs/dev/0033/face.jpg', null, null),
+   'partner-docs/dev/0033/student-id.jpg', 'partner-docs/dev/0033/face.jpg', null, null),
   ('00000000-0000-4000-8000-000000000034', 'APPROVED', true,
-   'partner-docs/dev/0034/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
+   'partner-docs/dev/0034/student-id.jpg', 'partner-docs/dev/0034/face.jpg', now(), '00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000035', 'PENDING_REVIEW', false,
-   'partner-docs/dev/0035/face.jpg', null, null);
+   'partner-docs/dev/0035/student-id.jpg', 'partner-docs/dev/0035/face.jpg', null, null);
 
 -- ---------------------------------------------------------------------------
 -- Locations — Academic City campus tree
@@ -190,28 +234,79 @@ insert into public.locations (id, parent_id, kind, name, is_deliverable, sort_or
   ('10000000-0000-4000-8000-000000000411', '10000000-0000-4000-8000-000000000040', 'FIELD', 'Main Field', true, 1);
 
 -- ---------------------------------------------------------------------------
--- Vendors (fictional) and their staff
+-- Vendors (fictional) and their owners
 -- ---------------------------------------------------------------------------
-insert into public.vendors (id, name, phone, status, is_accepting_orders, location_id, walk_minutes_to_campus) values
+-- OWNED stores. owner_user_id is the whole vendor capability: the account that
+-- signed up for this business, on the same auth identity it would use to order
+-- lunch if it ever acquired the CUSTOMER capability (it has not, and that is
+-- the point — a stall is not a shopper).
+insert into public.vendors (
+  id, name, phone, status, is_accepting_orders, owner_user_id, category_id,
+  description, applicant_name, owner_is_student, submitted_at, reviewed_at,
+  location_id, walk_minutes_to_campus
+) values
   ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One',  '+233200000011', 'ACTIVE', true,
+   '00000000-0000-4000-8000-000000000011', '40000000-0000-4000-8000-000000000001',
+   'Hot Ghanaian staples cooked to order.', 'Muni Owner (test)', false, now(), now(),
    '10000000-0000-4000-8000-000000000030', 4),
   ('20000000-0000-4000-8000-000000000002', 'Test Grill Two',    '+233200000012', 'ACTIVE', true,
+   '00000000-0000-4000-8000-000000000012', '40000000-0000-4000-8000-000000000002',
+   'Shawarma, burgers and pies from the grill.', 'Grill Owner (test)', true, now(), now(),
    '10000000-0000-4000-8000-000000000040', 6);
+
+-- A store still waiting on review, so /admin/vendors has a real decision to
+-- make and the vendor side has a real Pending Approval screen to show.
+insert into auth.users (
+  instance_id, id, aud, role,
+  phone, phone_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change,
+  email_change_token_current, phone_change, phone_change_token, reauthentication_token
+)
+values
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000013', 'authenticated', 'authenticated',
+   '233200000013', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Pending Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000014', 'authenticated', 'authenticated',
+   '233200000014', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Rejected Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', '');
+
+insert into public.users (id, phone, first_name, last_name) values
+  ('00000000-0000-4000-8000-000000000013', '+233200000013', 'Pending',  'Owner (test)'),
+  ('00000000-0000-4000-8000-000000000014', '+233200000014', 'Rejected', 'Owner (test)')
+on conflict (id) do update
+   set first_name = excluded.first_name,
+       last_name  = excluded.last_name;
+
+insert into public.vendors (
+  id, name, phone, status, is_accepting_orders, owner_user_id, category_id,
+  description, applicant_name, owner_is_student, submitted_at, rejection_reason, reviewed_at
+) values
+  ('20000000-0000-4000-8000-000000000005', 'Pending Provisions (test)', '+233200000013',
+   'PENDING_APPROVAL', false, '00000000-0000-4000-8000-000000000013',
+   '40000000-0000-4000-8000-000000000005',
+   'Dry goods, toiletries and phone credit.', 'Pending Owner (test)', true, now(), null, null),
+  ('20000000-0000-4000-8000-000000000006', 'Rejected Snacks (test)', '+233200000014',
+   'REJECTED', false, '00000000-0000-4000-8000-000000000014',
+   '40000000-0000-4000-8000-000000000002',
+   'Chips and sweets.', 'Rejected Owner (test)', true, now(),
+   'The store name and the description do not match. Resubmit with the real trading name.',
+   now());
 
 -- Scan-capable restaurants. DEVELOPMENT ONLY — this file is never applied to a
 -- hosted project (`db:install` installs schema.sql alone), so these exist to
 -- make the scan flow walkable locally and nowhere else. The real Wafflemania
 -- and Yellow Bar are created in production by an administrator through
 -- /admin/vendors, against the same vendor model; nothing here is duplicated.
-insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, location_id, walk_minutes_to_campus) values
-  ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000013', 'ACTIVE', true, true,
-   '10000000-0000-4000-8000-000000000030', 3),
-  ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)',  '+233200000014', 'ACTIVE', true, true,
-   '10000000-0000-4000-8000-000000000040', 5);
-
-insert into public.vendor_users (vendor_id, user_id) values
-  ('20000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000011'),
-  ('20000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000012');
+-- CATALOGUE-ONLY entries: owner_user_id is NULL. Campus Dash lists these so a
+-- student can have a prepaid meal fetched from them. They have signed up for
+-- nothing, operate no dashboard, and nobody can sign in as them — which is
+-- exactly what a NULL owner means.
+insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, category_id, location_id, walk_minutes_to_campus) values
+  ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000053', 'ACTIVE', true, true,
+   '40000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000030', 3),
+  ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)',  '+233200000054', 'ACTIVE', true, true,
+   '40000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000040', 5);
 
 -- ---------------------------------------------------------------------------
 -- Menu items (prices in integer pesewas)
@@ -281,10 +376,10 @@ select c.user_id, t.id, t.audience, t.version
 on conflict do nothing;
 
 insert into public.terms_acceptances (user_id, terms_id, audience, version)
-select vu.user_id, t.id, t.audience, t.version
-  from public.vendor_users vu
+select v.owner_user_id, t.id, t.audience, t.version
+  from public.vendors v
   cross join public.terms_documents t
- where t.audience = 'VENDOR'
+ where t.audience = 'VENDOR' and v.owner_user_id is not null
 on conflict do nothing;
 
 insert into public.terms_acceptances (user_id, terms_id, audience, version)

@@ -94,7 +94,7 @@ export function ReasonField({ placeholder = 'Why are you doing this?' }) {
 
 export function Button({ children, variant = 'primary', ...rest }) {
   const styles = {
-    primary: 'bg-brand-500 text-ink hover:bg-brand-600',
+    primary: 'bg-brand-700 text-white hover:bg-brand-800',
     secondary: 'bg-surface text-ink ring-1 ring-line-strong hover:bg-surface-2',
     danger: 'bg-surface text-bad ring-1 ring-bad/30 hover:bg-bad-bg',
   };
@@ -129,7 +129,7 @@ export function Empty({ children }) {
 export function ActionResult({ state }) {
   if (!state?.message) return null;
   return (
-    <p role="status" className={`mt-3 text-sm ${state.ok ? 'text-brand-700' : 'text-bad'}`}>
+    <p role="status" className={`mt-3 text-sm ${state.ok ? 'text-good' : 'text-bad'}`}>
       {state.message}
     </p>
   );
@@ -147,7 +147,7 @@ export function ActionResult({ state }) {
 export function Stat({ label, value, hint, tone = 'neutral', href }) {
   const tones = {
     neutral: 'text-ink',
-    good: 'text-brand-700',
+    good: 'text-good',
     warn: 'text-warn',
     bad: 'text-bad',
   };
@@ -160,7 +160,7 @@ export function Stat({ label, value, hint, tone = 'neutral', href }) {
   );
   const className = 'block rounded-card bg-surface p-4 ring-1 ring-line transition-colors';
   return href ? (
-    <a href={href} className={`${className} press hover:ring-brand-600/50`}>
+    <a href={href} className={`${className} press hover:ring-line-strong`}>
       {body}
     </a>
   ) : (
@@ -220,7 +220,7 @@ export function FilterChip({ active, href, label }) {
     <a
       href={href}
       className={`press-sm rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
-        active ? 'bg-brand-500 text-ink' : 'bg-surface ring-line hover:ring-line-strong ring-1'
+        active ? 'bg-brand-700 text-white' : 'bg-surface ring-line hover:ring-line-strong ring-1'
       }`}
     >
       {label}

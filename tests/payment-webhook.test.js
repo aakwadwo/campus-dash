@@ -1,7 +1,7 @@
 import { test, before, beforeEach, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { asService, asUser, resetTransactionalState, closePools, ACTORS } from './helpers/db.js';
-import { submitOrder, vendorAccept, getOrder, expectRejection } from './helpers/flow.js';
+import { acceptedOrder as acceptedOrderFlow, getOrder, expectRejection } from './helpers/flow.js';
 
 /**
  * The webhook path is the only thing that can mark an order PAID, so it gets
@@ -15,10 +15,9 @@ describe('payment webhook handling', () => {
     await closePools();
   });
 
+  /** Submitted, accepted, and with a fulfilment chosen — the first payable state. */
   async function acceptedOrder() {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
-    return order;
+    return acceptedOrderFlow();
   }
 
   async function intent(orderId, attempt = 1) {

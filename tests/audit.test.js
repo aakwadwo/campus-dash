@@ -220,6 +220,10 @@ describe('audit trail', () => {
     assert.deepEqual(events, [
       'ORDER_SUBMITTED',
       'VENDOR_ACCEPT',
+      // The customer's choice of pickup or delivery, which is what fixed the
+      // price — so it belongs in the reconstruction between the vendor's answer
+      // and the money.
+      'FULFILMENT_CHOSEN',
       'PAYMENT_INTENT_CREATED',
       'PAYMENT_CONFIRMED',
       'VENDOR_PREPARING',

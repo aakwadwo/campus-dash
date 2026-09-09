@@ -32,7 +32,7 @@ export function ConfirmButton({
   const [armed, setArmed] = useState(false);
 
   const styles = {
-    primary: 'bg-brand-500 text-ink',
+    primary: 'bg-brand-700 text-white',
     secondary: 'bg-surface text-ink ring-1 ring-line-strong',
     danger: 'bg-surface text-bad ring-1 ring-bad/30',
   };

@@ -285,8 +285,10 @@ ALTER TYPE "public"."transition_result" OWNER TO "postgres";
 
 CREATE TYPE "public"."vendor_status" AS ENUM (
     'DRAFT',
+    'PENDING_APPROVAL',
     'ACTIVE',
-    'SUSPENDED'
+    'SUSPENDED',
+    'REJECTED'
 );
 
 
@@ -352,61 +354,18 @@ $$;
 ALTER FUNCTION "public"."accept_terms"("p_terms_id" "uuid") OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."vendor_users" (
-    "vendor_id" "uuid" NOT NULL,
-    "user_id" "uuid" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
-);
-
-
-ALTER TABLE "public"."vendor_users" OWNER TO "postgres";
-
-
-CREATE OR REPLACE FUNCTION "public"."admin_add_vendor_user"("p_vendor_id" "uuid", "p_phone" "text", "p_reason" "text") RETURNS "public"."vendor_users"
-    LANGUAGE "plpgsql" SECURITY DEFINER
+CREATE OR REPLACE FUNCTION "public"."active_vendor_categories"() RETURNS TABLE("id" "uuid", "slug" "text", "name" "text", "sort_order" integer)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-declare
-  v_user_id uuid;
-  v_link    public.vendor_users%rowtype;
-begin
-  if not public.is_admin() then
-    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
-  end if;
-
-  select id into v_user_id from public.users where phone = p_phone;
-  if v_user_id is null then
-    raise exception 'no Campus Dash account for %. Ask them to sign in once first.', p_phone
-      using errcode = 'no_data_found';
-  end if;
-
-  if not exists (select 1 from public.vendors where id = p_vendor_id) then
-    raise exception 'vendor not found' using errcode = 'no_data_found';
-  end if;
-
-  insert into public.vendor_users (vendor_id, user_id)
-  values (p_vendor_id, v_user_id)
-  on conflict (vendor_id, user_id) do nothing
-  returning * into v_link;
-
-  if v_link.vendor_id is null then
-    -- Already staff. Idempotent, and not worth an audit entry.
-    select * into v_link from public.vendor_users
-     where vendor_id = p_vendor_id and user_id = v_user_id;
-    return v_link;
-  end if;
-
-  perform public.log_admin_action(
-    'VENDOR_STAFF_ADD', 'vendor', p_vendor_id, p_reason, null,
-    jsonb_build_object('user_id', v_user_id, 'phone', p_phone)
-  );
-
-  return v_link;
-end;
+  select k.id, k.slug, k.name, k.sort_order
+    from public.vendor_categories k
+   where k.is_active
+   order by k.sort_order, k.name;
 $$;
 
 
-ALTER FUNCTION "public"."admin_add_vendor_user"("p_vendor_id" "uuid", "p_phone" "text", "p_reason" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."active_vendor_categories"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."next_order_number"() RETURNS "text"
@@ -425,7 +384,7 @@ CREATE TABLE IF NOT EXISTS "public"."orders" (
     "customer_id" "uuid" NOT NULL,
     "vendor_id" "uuid" NOT NULL,
     "partner_id" "uuid",
-    "fulfilment_type" "public"."fulfilment_type" NOT NULL,
+    "fulfilment_type" "public"."fulfilment_type",
     "order_status" "public"."order_status" DEFAULT 'DRAFT'::"public"."order_status" NOT NULL,
     "payment_status" "public"."payment_status" DEFAULT 'UNPAID'::"public"."payment_status" NOT NULL,
     "delivery_status" "public"."delivery_status" DEFAULT 'NONE'::"public"."delivery_status" NOT NULL,
@@ -458,11 +417,13 @@ CREATE TABLE IF NOT EXISTS "public"."orders" (
     "dispute_resolved_at" timestamp with time zone,
     "order_type" "public"."order_type" DEFAULT 'FOOD'::"public"."order_type" NOT NULL,
     "scan_status" "public"."scan_status",
+    "partner_slot" smallint,
     CONSTRAINT "orders_delivery_fee_pesewas_check" CHECK (("delivery_fee_pesewas" >= 0)),
     CONSTRAINT "orders_delivery_needs_destination" CHECK ((("fulfilment_type" <> 'DELIVERY'::"public"."fulfilment_type") OR ("destination_location_id" IS NOT NULL))),
     CONSTRAINT "orders_partner_earnings_pesewas_check" CHECK (("partner_earnings_pesewas" >= 0)),
     CONSTRAINT "orders_partner_earnings_within_fee" CHECK (("partner_earnings_pesewas" <= "delivery_fee_pesewas")),
     CONSTRAINT "orders_partner_matches_delivery_state" CHECK ((("partner_id" IS NOT NULL) = ("delivery_status" = ANY (ARRAY['ASSIGNED'::"public"."delivery_status", 'PICKED_UP'::"public"."delivery_status", 'DELIVERED'::"public"."delivery_status", 'FAILED_CUSTOMER_ABSENT'::"public"."delivery_status"])))),
+    CONSTRAINT "orders_partner_slot_range" CHECK ((("partner_slot" IS NULL) OR (("partner_slot" >= 1) AND ("partner_slot" <= 10)))),
     CONSTRAINT "orders_pickup_has_no_delivery" CHECK ((("fulfilment_type" <> 'PICKUP'::"public"."fulfilment_type") OR (("delivery_fee_pesewas" = 0) AND ("partner_earnings_pesewas" = 0) AND ("delivery_status" = 'NONE'::"public"."delivery_status") AND ("partner_id" IS NULL)))),
     CONSTRAINT "orders_scan_has_no_food_value" CHECK ((("order_type" <> 'SCAN'::"public"."order_type") OR ("subtotal_pesewas" = 0))),
     CONSTRAINT "orders_scan_is_delivery" CHECK ((("order_type" <> 'SCAN'::"public"."order_type") OR ("fulfilment_type" = 'DELIVERY'::"public"."fulfilment_type"))),
@@ -477,7 +438,13 @@ CREATE TABLE IF NOT EXISTS "public"."orders" (
 ALTER TABLE "public"."orders" OWNER TO "postgres";
 
 
+COMMENT ON COLUMN "public"."orders"."fulfilment_type" IS 'PICKUP, DELIVERY, or NULL meaning the customer has not chosen yet. NULL is a state, not a missing value: an order reaches it at submission and leaves it when customer_choose_fulfilment() runs, after the vendor has accepted. create_payment_intent() refuses an order still in it, so nothing is ever charged for a delivery nobody asked for.';
+
+
 COMMENT ON COLUMN "public"."orders"."order_type" IS 'FOOD or SCAN. Decides pricing, whether the vendor participates, and whether a vendor allocation is written.';
+
+
+COMMENT ON COLUMN "public"."orders"."partner_slot" IS 'Which of a Partner''s concurrent delivery slots this order occupies. Unique per Partner while the delivery is active — that index IS the capacity limit; pricing_config.max_active_deliveries_per_partner decides how many slots exist. Retained after completion for the audit trail; the index ignores it there, so a finished delivery never blocks a new one.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_cancel_order"("p_order_id" "uuid", "p_reason" "text") RETURNS "public"."orders"
@@ -545,6 +512,7 @@ CREATE TABLE IF NOT EXISTS "public"."partner_profiles" (
     "documents_purge_after" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "student_id_image_path" "text",
     CONSTRAINT "partner_reviewed_consistently" CHECK ((("status" = ANY (ARRAY['APPROVED'::"public"."partner_application_status", 'REJECTED'::"public"."partner_application_status", 'SUSPENDED'::"public"."partner_application_status"])) = (("reviewed_at" IS NOT NULL) AND ("reviewed_by" IS NOT NULL))))
 );
 
@@ -553,6 +521,9 @@ ALTER TABLE "public"."partner_profiles" OWNER TO "postgres";
 
 
 COMMENT ON COLUMN "public"."partner_profiles"."face_image_path" IS 'PARTNER verification document, in the private partner-documents bucket. Purged after the review retention window — see documents_purge_after and admin_partner_documents_due_for_purge().';
+
+
+COMMENT ON COLUMN "public"."partner_profiles"."student_id_image_path" IS 'PARTNER verification document — the student ID photograph an administrator compares against face_image_path. Purged with the face photograph after the review retention window.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_clear_partner_documents"("p_user_id" "uuid", "p_reason" "text") RETURNS "public"."partner_profiles"
@@ -573,7 +544,8 @@ begin
   end if;
 
   update public.partner_profiles
-     set face_image_path = null,
+     set student_id_image_path = null,
+         face_image_path       = null,
          documents_purge_after = null
    where user_id = p_user_id
   returning * into v_after;
@@ -760,7 +732,17 @@ CREATE TABLE IF NOT EXISTS "public"."vendors" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "can_accept_scans" boolean DEFAULT false NOT NULL,
+    "owner_user_id" "uuid",
+    "category_id" "uuid",
+    "description" "text",
+    "applicant_name" "text",
+    "owner_is_student" boolean,
+    "rejection_reason" "text",
+    "submitted_at" timestamp with time zone,
+    "reviewed_at" timestamp with time zone,
+    "reviewed_by" "uuid",
     CONSTRAINT "vendors_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text")),
+    CONSTRAINT "vendors_rejection_has_reason" CHECK ((("status" <> 'REJECTED'::"public"."vendor_status") OR (NULLIF("btrim"(COALESCE("rejection_reason", ''::"text")), ''::"text") IS NOT NULL))),
     CONSTRAINT "vendors_walk_minutes_to_campus_check" CHECK (("walk_minutes_to_campus" >= 0))
 );
 
@@ -768,10 +750,19 @@ CREATE TABLE IF NOT EXISTS "public"."vendors" (
 ALTER TABLE "public"."vendors" OWNER TO "postgres";
 
 
+COMMENT ON COLUMN "public"."vendors"."phone" IS 'The business contact number. NOT published on the storefront and NOT the owner''s sign-in credential — that lives on users.phone, on the owner''s own identity row, and is never exposed through a vendor read model.';
+
+
 COMMENT ON COLUMN "public"."vendors"."can_accept_scans" IS 'Whether this restaurant honours campus meal scans. Set by an administrator.';
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
+COMMENT ON COLUMN "public"."vendors"."owner_user_id" IS 'The identity that operates this business. NULL means a catalogue-only entry — a restaurant Campus Dash lists so a scan can be fetched from it, which has signed up for nothing and operates no dashboard. A NULL owner grants nothing to anybody: my_vendor_ids() matches no row.';
+
+
+COMMENT ON COLUMN "public"."vendors"."owner_is_student" IS 'Whether the owner told us they are a student. INFORMATIONAL ONLY. It is not a capability and confers none — a student vendor is not thereby a Customer.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid" DEFAULT NULL::"uuid", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -786,14 +777,13 @@ begin
     raise exception 'vendor name is required' using errcode = 'check_violation';
   end if;
 
-  -- A vendor is created DRAFT and not accepting orders. Going live is a
-  -- separate, separately-audited decision.
   insert into public.vendors (
     name, phone, status, is_accepting_orders,
-    location_id, location_note, walk_minutes_to_campus
+    category_id, location_id, location_note, walk_minutes_to_campus
   )
   values (
     btrim(p_name), p_phone, 'DRAFT', false,
+    coalesce(p_category_id, '40000000-0000-4000-8000-000000000001'),
     p_location_id, p_location_note, p_walk_minutes_to_campus
   )
   returning * into v_vendor;
@@ -807,28 +797,78 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "has_student_id" boolean, "is_suspended" boolean, "is_admin" boolean, "onboarded_at" timestamp with time zone, "created_at" timestamp with time zone, "partner_status" "text", "partner_applied_at" timestamp with time zone, "vendor_names" "text"[], "order_count" bigint, "completed_count" bigint, "spent_pesewas" bigint, "recent_orders" "jsonb")
+CREATE TABLE IF NOT EXISTS "public"."vendor_categories" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "slug" "text" NOT NULL,
+    "name" "text" NOT NULL,
+    "sort_order" integer DEFAULT 0 NOT NULL,
+    "is_active" boolean DEFAULT true NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "vendor_categories_name_shape" CHECK (("btrim"("name") <> ''::"text")),
+    CONSTRAINT "vendor_categories_slug_shape" CHECK (("slug" ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::"text"))
+);
+
+
+ALTER TABLE "public"."vendor_categories" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."vendor_categories" IS 'What kind of business a vendor is. Admin-managed rows rather than an enum, so the list can change without a deploy. Disabling a category hides it from the sign-up form and the customer filter; it never detaches the vendors already in it, and it never touches a historical order.';
+
+
+COMMENT ON COLUMN "public"."vendor_categories"."slug" IS 'The stable identifier. Filters and vendor rows point at the category by id, and this is what makes a rename safe: the display name is free to change.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_create_vendor_category"("p_slug" "text", "p_name" "text", "p_sort_order" integer, "p_reason" "text") RETURNS "public"."vendor_categories"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_row public.vendor_categories%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  insert into public.vendor_categories (slug, name, sort_order)
+  values (lower(btrim(p_slug)), btrim(p_name), coalesce(p_sort_order, 0))
+  returning * into v_row;
+
+  perform public.log_admin_action(
+    'VENDOR_CATEGORY_CREATE', 'vendor_category', v_row.id, p_reason, null, to_jsonb(v_row)
+  );
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_create_vendor_category"("p_slug" "text", "p_name" "text", "p_sort_order" integer, "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "first_name" "text", "last_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "level" "text", "is_suspended" boolean, "is_admin" boolean, "onboarded_at" timestamp with time zone, "created_at" timestamp with time zone, "partner_status" "text", "partner_applied_at" timestamp with time zone, "vendor_names" "text"[], "order_count" bigint, "completed_count" bigint, "spent_pesewas" bigint, "reward_goal" integer, "reward_status" "text", "reward_unlocked_at" timestamp with time zone, "recent_orders" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select u.id, u.full_name, u.phone, u.email,
-         c.student_id_number, c.class_year,
-         c.student_id_image_path is not null,
+  select u.id, u.full_name, u.first_name, u.last_name, u.phone, u.email,
+         c.student_id_number, c.level,
          u.is_suspended, u.is_admin, c.onboarded_at, u.created_at,
          coalesce(p.status::text, 'NOT_APPLIED'), p.applied_at,
          coalesce((select array_agg(v.name order by v.name)
-                     from public.vendor_users vu
-                     join public.vendors v on v.id = vu.vendor_id
-                    where vu.user_id = u.id), '{}'),
+                     from public.vendors v where v.owner_user_id = u.id), '{}'),
          (select count(*) from public.orders o where o.customer_id = u.id and o.order_status <> 'DRAFT'),
          (select count(*) from public.orders o where o.customer_id = u.id and o.order_status = 'COMPLETED'),
          (select coalesce(sum(pay.amount_pesewas),0)::bigint
             from public.payments pay
             join public.orders o on o.id = pay.order_id
            where o.customer_id = u.id and pay.status = 'SUCCEEDED'),
+         (public.customer_reward_milestones())[array_length(public.customer_reward_milestones(), 1)],
+         (select r.status from public.customer_rewards r
+           where r.user_id = u.id order by r.cycle desc limit 1),
+         (select r.unlocked_at from public.customer_rewards r
+           where r.user_id = u.id order by r.cycle desc limit 1),
          coalesce((select jsonb_agg(jsonb_build_object(
                      'order_id', o.id, 'order_number', o.order_number,
                      'order_type', o.order_type, 'order_status', o.order_status,
@@ -848,15 +888,39 @@ $$;
 ALTER FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_customers"("p_search" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "is_suspended" boolean, "is_admin" boolean, "partner_status" "text", "order_count" bigint, "last_order_at" timestamp with time zone, "onboarded_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_customer_rewards"("p_status" "text" DEFAULT 'UNLOCKED'::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("reward_id" "uuid", "user_id" "uuid", "customer_name" "text", "email" "text", "phone" "text", "cycle" integer, "goal_orders" integer, "completed_orders" integer, "status" "text", "unlocked_at" timestamp with time zone, "fulfilled_at" timestamp with time zone, "notes" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select r.id, r.user_id, u.full_name, u.email, u.phone,
+         r.cycle, r.goal_orders,
+         (select count(*)::integer from public.orders o
+           where o.customer_id = r.user_id and o.order_status = 'COMPLETED'),
+         r.status, r.unlocked_at, r.fulfilled_at, r.notes
+    from public.customer_rewards r
+    join public.users u on u.id = r.user_id
+   where public.is_admin()
+     and (p_status is null or r.status = p_status)
+   order by r.unlocked_at desc
+   limit least(coalesce(p_limit, 100), 500);
+$$;
+
+
+ALTER FUNCTION "public"."admin_customer_rewards"("p_status" "text", "p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_customers"("p_search" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "level" "text", "is_suspended" boolean, "is_admin" boolean, "partner_status" "text", "order_count" bigint, "completed_count" bigint, "reward_status" "text", "last_order_at" timestamp with time zone, "onboarded_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select u.id, u.full_name, u.phone, u.email,
-         c.student_id_number, c.class_year,
+         c.student_id_number, c.level,
          u.is_suspended, u.is_admin,
          coalesce(p.status::text, 'NOT_APPLIED'),
          (select count(*) from public.orders o where o.customer_id = u.id and o.order_status <> 'DRAFT'),
+         (select count(*) from public.orders o where o.customer_id = u.id and o.order_status = 'COMPLETED'),
+         (select r.status from public.customer_rewards r
+           where r.user_id = u.id order by r.cycle desc limit 1),
          (select max(o.created_at) from public.orders o where o.customer_id = u.id),
          c.onboarded_at
     from public.customer_profiles c
@@ -865,7 +929,7 @@ CREATE OR REPLACE FUNCTION "public"."admin_customers"("p_search" "text" DEFAULT 
    where public.is_admin()
      and (p_search is null or btrim(p_search) = ''
           or u.full_name ilike '%' || btrim(p_search) || '%'
-          or u.phone ilike '%' || btrim(p_search) || '%'
+          or coalesce(u.phone,'') ilike '%' || btrim(p_search) || '%'
           or coalesce(u.email,'') ilike '%' || btrim(p_search) || '%'
           or c.student_id_number ilike '%' || btrim(p_search) || '%')
    order by c.onboarded_at desc
@@ -1297,13 +1361,13 @@ $$;
 ALTER FUNCTION "public"."admin_list_actions"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status" "public"."partner_application_status" DEFAULT NULL::"public"."partner_application_status") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "student_id_number" "text", "class_year" "text", "email" "text", "status" "public"."partner_application_status", "student_id_image_path" "text", "face_image_path" "text", "is_available" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "documents_purge_after" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_list_partner_applications"("p_status" "public"."partner_application_status" DEFAULT NULL::"public"."partner_application_status") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "student_id_number" "text", "level" "text", "email" "text", "status" "public"."partner_application_status", "student_id_image_path" "text", "face_image_path" "text", "is_available" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "documents_purge_after" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select p.user_id, u.full_name, u.phone,
-         c.student_id_number, c.class_year, u.email, p.status,
-         c.student_id_image_path, p.face_image_path, p.is_available,
+         c.student_id_number, c.level, u.email, p.status,
+         p.student_id_image_path, p.face_image_path, p.is_available,
          p.applied_at, p.reviewed_at, r.full_name, p.review_notes,
          p.documents_purge_after
     from public.partner_profiles p
@@ -1495,7 +1559,7 @@ $$;
 ALTER FUNCTION "public"."admin_order_board_summary"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_order_money"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint, "payment_status" "public"."payment_status", "payment_id" "uuid", "payment_provider" "text", "payment_txn_status" "public"."payment_txn_status", "provider_transaction_id" "text", "paid_pesewas" bigint, "vendor_name" "text", "vendor_allocation" bigint, "platform_allocation" bigint, "partner_name" "text", "partner_allocation" bigint, "allocated_pesewas" bigint, "balances" boolean, "allocations" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."admin_order_money"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint, "payment_status" "public"."payment_status", "payment_id" "uuid", "payment_provider" "text", "payment_txn_status" "public"."payment_txn_status", "provider_transaction_id" "text", "paid_pesewas" bigint, "split_subaccount_code" "text", "split_vendor_pesewas" bigint, "vendor_name" "text", "vendor_allocation" bigint, "vendor_channel" "text", "platform_allocation" bigint, "partner_name" "text", "partner_allocation" bigint, "allocated_pesewas" bigint, "balances" boolean, "allocations" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -1508,10 +1572,15 @@ CREATE OR REPLACE FUNCTION "public"."admin_order_money"("p_order_id" "uuid") RET
          pay.status,
          pay.provider_transaction_id,
          coalesce(pay.amount_pesewas, 0),
+         pay.split_subaccount_code,
+         coalesce(pay.split_vendor_pesewas, 0),
          v.name,
          coalesce((select a.amount_pesewas from public.allocations a
                     where a.order_id = o.id and a.payee_type = 'VENDOR'
                       and a.status <> 'CANCELLED'), 0),
+         (select a.settlement_channel from public.allocations a
+           where a.order_id = o.id and a.payee_type = 'VENDOR'
+             and a.status <> 'CANCELLED'),
          coalesce((select a.amount_pesewas from public.allocations a
                     where a.order_id = o.id and a.payee_type = 'PLATFORM'
                       and a.status <> 'CANCELLED'), 0),
@@ -1530,6 +1599,7 @@ CREATE OR REPLACE FUNCTION "public"."admin_order_money"("p_order_id" "uuid") RET
                      'payee_type', a.payee_type,
                      'amount_pesewas', a.amount_pesewas,
                      'status', a.status,
+                     'settlement_channel', a.settlement_channel,
                      'settlement_run_id', a.settlement_run_id,
                      'settled_at', a.settled_at
                    ) order by a.payee_type)
@@ -1551,16 +1621,55 @@ $$;
 ALTER FUNCTION "public"."admin_order_money"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "class_year" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "has_face_image" boolean, "has_student_id" boolean, "deliveries_completed" bigint, "deliveries_failed" bigint, "earned_pesewas" bigint, "owed_pesewas" bigint, "paid_pesewas" bigint, "active_order_id" "uuid", "active_order_number" "text", "recent_deliveries" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."admin_partner_balances"() RETURNS TABLE("partner_id" "uuid", "partner_name" "text", "phone" "text", "delivered_count" bigint, "available_pesewas" bigint, "in_progress_pesewas" bigint, "settled_pesewas" bigint, "payout_threshold_pesewas" bigint, "eligible_for_payout" boolean, "has_destination" boolean, "transfers_ready" boolean, "last_paid_at" timestamp with time zone, "oldest_unpaid_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select p.user_id,
+         u.full_name,
+         u.phone,
+         count(a.id) filter (where a.id is not null),
+         coalesce(sum(a.amount_pesewas) filter (where a.status in ('PENDING','ELIGIBLE')), 0)::bigint,
+         coalesce(sum(a.amount_pesewas) filter (where a.status = 'SETTLING'), 0)::bigint,
+         coalesce(sum(a.amount_pesewas) filter (where a.status = 'SETTLED'), 0)::bigint,
+         public.payout_threshold_for('PARTNER'),
+         coalesce(sum(a.amount_pesewas) filter (where a.status in ('PENDING','ELIGIBLE')), 0)
+           >= public.payout_threshold_for('PARTNER'),
+         d.payee_id is not null,
+         d.provider_recipient_code is not null,
+         (select max(po.paid_at) from public.payouts po
+           where po.payee_type = 'PARTNER' and po.payee_id = p.user_id and po.status = 'PAID'),
+         min(o.created_at) filter (where a.status in ('PENDING','ELIGIBLE'))
+    from public.partner_profiles p
+    join public.users u on u.id = p.user_id
+    left join public.allocations a
+      on a.payee_type = 'PARTNER' and a.payee_id = p.user_id and a.status <> 'CANCELLED'
+    left join public.orders o on o.id = a.order_id
+    left join public.payout_destinations d
+      on d.payee_type = 'PARTNER' and d.payee_id = p.user_id
+   where public.is_admin()
+     and p.status = 'APPROVED'
+   group by p.user_id, u.full_name, u.phone, d.payee_id, d.provider_recipient_code
+   order by coalesce(sum(a.amount_pesewas) filter (where a.status in ('PENDING','ELIGIBLE')), 0) desc;
+$$;
+
+
+ALTER FUNCTION "public"."admin_partner_balances"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_partner_balances"() IS 'Every approved Partner, what they are owed, whether it clears the weekly threshold, and whether they can actually be paid. Never returns an account number.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "email" "text", "student_id_number" "text", "level" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "reviewed_by_name" "text", "review_notes" "text", "has_face_image" boolean, "has_student_id" boolean, "deliveries_completed" bigint, "deliveries_failed" bigint, "earned_pesewas" bigint, "owed_pesewas" bigint, "paid_pesewas" bigint, "active_order_id" "uuid", "active_order_number" "text", "recent_deliveries" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select u.id, u.full_name, u.phone, u.email,
-         c.student_id_number, c.class_year,
+         c.student_id_number, c.level,
          p.status, p.is_available, u.is_suspended,
          p.applied_at, p.reviewed_at, r.full_name, p.review_notes,
          p.face_image_path is not null,
-         c.student_id_image_path is not null,
+         p.student_id_image_path is not null,
          (select count(*) from public.orders o
            where o.partner_id = u.id and o.delivery_status = 'DELIVERED'),
          (select count(*) from public.orders o
@@ -1572,9 +1681,11 @@ CREATE OR REPLACE FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") R
          (select coalesce(sum(po.amount_pesewas),0)::bigint from public.payouts po
            where po.payee_type = 'PARTNER' and po.payee_id = u.id and po.status = 'PAID'),
          (select o.id from public.orders o
-           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP') limit 1),
+           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP')
+           order by o.assigned_at limit 1),
          (select o.order_number from public.orders o
-           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP') limit 1),
+           where o.partner_id = u.id and o.delivery_status in ('ASSIGNED','PICKED_UP')
+           order by o.assigned_at limit 1),
          coalesce((select jsonb_agg(jsonb_build_object(
                      'order_id', o.id, 'order_number', o.order_number,
                      'order_type', o.order_type, 'delivery_status', o.delivery_status,
@@ -1594,19 +1705,17 @@ $$;
 ALTER FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_partner_documents_due_for_purge"() RETURNS TABLE("user_id" "uuid", "face_image_path" "text", "status" "public"."partner_application_status", "documents_purge_after" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_partner_documents_due_for_purge"() RETURNS TABLE("user_id" "uuid", "student_id_image_path" "text", "face_image_path" "text", "status" "public"."partner_application_status", "documents_purge_after" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select p.user_id, p.face_image_path, p.status, p.documents_purge_after
+  select p.user_id, p.student_id_image_path, p.face_image_path,
+         p.status, p.documents_purge_after
     from public.partner_profiles p
    where public.is_admin()
      and p.documents_purge_after is not null
      and p.documents_purge_after <= now()
-     -- Only rows that still HAVE a face photograph. A profile already purged
-     -- has nothing due, and listing it invites a second delete of a file that
-     -- is gone.
-     and p.face_image_path is not null
+     and (p.student_id_image_path is not null or p.face_image_path is not null)
    order by p.documents_purge_after asc;
 $$;
 
@@ -1614,18 +1723,42 @@ $$;
 ALTER FUNCTION "public"."admin_partner_documents_due_for_purge"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."admin_partner_documents_due_for_purge"() IS 'Partner face photographs whose retention window has elapsed. Deliberately does NOT list customer_profiles.student_id_image_path: that document is retained while the account is active, and a delete queue must name only things that may be deleted.';
-
-
-CREATE OR REPLACE FUNCTION "public"."admin_partners"("p_status" "text" DEFAULT NULL::"text") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "class_year" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "deliveries" bigint, "owed_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."admin_partner_ratings"("p_partner_id" "uuid" DEFAULT NULL::"uuid", "p_max_stars" smallint DEFAULT NULL::smallint, "p_limit" integer DEFAULT 100) RETURNS TABLE("order_id" "uuid", "order_number" "text", "partner_id" "uuid", "partner_name" "text", "customer_id" "uuid", "customer_name" "text", "stars" smallint, "comment" "text", "created_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select u.id, u.full_name, u.phone, c.class_year, p.status, p.is_available, u.is_suspended,
+  select r.order_id, o.order_number,
+         r.partner_id, pu.full_name,
+         r.customer_id, cu.full_name,
+         r.stars, r.comment, r.created_at
+    from public.partner_ratings r
+    join public.orders o on o.id = r.order_id
+    join public.users pu on pu.id = r.partner_id
+    join public.users cu on cu.id = r.customer_id
+   where public.is_admin()
+     and (p_partner_id is null or r.partner_id = p_partner_id)
+     and (p_max_stars is null or r.stars <= p_max_stars)
+   order by r.created_at desc
+   limit least(coalesce(p_limit, 100), 500);
+$$;
+
+
+ALTER FUNCTION "public"."admin_partner_ratings"("p_partner_id" "uuid", "p_max_stars" smallint, "p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_partners"("p_status" "text" DEFAULT NULL::"text") RETURNS TABLE("user_id" "uuid", "full_name" "text", "phone" "text", "level" "text", "status" "public"."partner_application_status", "is_available" boolean, "is_suspended" boolean, "applied_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "deliveries" bigint, "owed_pesewas" bigint, "rating_count" bigint, "average_stars" numeric, "payout_ready" boolean)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select u.id, u.full_name, u.phone, c.level, p.status, p.is_available, u.is_suspended,
          p.applied_at, p.reviewed_at,
          (select count(*) from public.orders o where o.partner_id = u.id and o.delivery_status = 'DELIVERED'),
          (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
-           where a.payee_type = 'PARTNER' and a.payee_id = u.id and a.status in ('PENDING','ELIGIBLE'))
+           where a.payee_type = 'PARTNER' and a.payee_id = u.id and a.status in ('PENDING','ELIGIBLE')),
+         (select count(*) from public.partner_ratings r where r.partner_id = u.id),
+         (select round(avg(r.stars), 2) from public.partner_ratings r where r.partner_id = u.id),
+         exists (select 1 from public.payout_destinations d
+                  where d.payee_type = 'PARTNER' and d.payee_id = u.id)
     from public.partner_profiles p
     join public.users u on u.id = p.user_id
     left join public.customer_profiles c on c.user_id = u.id
@@ -1657,14 +1790,16 @@ $$;
 ALTER FUNCTION "public"."admin_payments"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_payout_destinations"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "momo_network" "text", "account_number" "text", "account_name" "text", "provider" "text", "provider_recipient_code" "text", "provider_synced_at" timestamp with time zone, "updated_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."admin_payout_destinations"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "momo_network" "text", "account_number" "text", "account_name" "text", "provider" "text", "provider_recipient_code" "text", "provider_synced_at" timestamp with time zone, "provider_subaccount_code" "text", "subaccount_synced_at" timestamp with time zone, "subaccount_error" "text", "updated_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select d.payee_type, d.payee_id,
          coalesce(v.name, u.full_name, u.phone),
          d.momo_network, d.account_number, d.account_name,
-         d.provider, d.provider_recipient_code, d.provider_synced_at, d.updated_at
+         d.provider, d.provider_recipient_code, d.provider_synced_at,
+         d.provider_subaccount_code, d.subaccount_synced_at, d.subaccount_error,
+         d.updated_at
     from public.payout_destinations d
     left join public.vendors v on d.payee_type = 'VENDOR'  and v.id = d.payee_id
     left join public.users   u on d.payee_type = 'PARTNER' and u.id = d.payee_id
@@ -1674,6 +1809,71 @@ $$;
 
 
 ALTER FUNCTION "public"."admin_payout_destinations"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_payout_history"("p_payee_type" "public"."payee_type" DEFAULT NULL::"public"."payee_type", "p_status" "text" DEFAULT NULL::"text", "p_limit" integer DEFAULT 100) RETURNS TABLE("payout_id" "uuid", "settlement_run_id" "uuid", "payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "amount_pesewas" bigint, "status" "public"."payout_status", "provider" "text", "provider_transfer_id" "text", "failure_reason" "text", "transfer_attempt" integer, "period_start" timestamp with time zone, "period_end" timestamp with time zone, "created_at" timestamp with time zone, "paid_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select p.id, p.settlement_run_id, p.payee_type, p.payee_id,
+         case p.payee_type
+           when 'VENDOR'  then (select v.name from public.vendors v where v.id = p.payee_id)
+           when 'PARTNER' then (select u.full_name from public.users u where u.id = p.payee_id)
+           else 'Campus Dash'
+         end,
+         p.amount_pesewas, p.status, p.provider, p.provider_transfer_id,
+         p.failure_reason, p.transfer_attempt,
+         r.period_start, r.period_end,
+         p.created_at, p.paid_at
+    from public.payouts p
+    left join public.settlement_runs r on r.id = p.settlement_run_id
+   where public.is_admin()
+     and (p_payee_type is null or p.payee_type = p_payee_type)
+     and (p_status is null or btrim(p_status) = '' or p.status::text = p_status)
+   order by p.created_at desc
+   limit least(coalesce(p_limit, 100), 500);
+$$;
+
+
+ALTER FUNCTION "public"."admin_payout_history"("p_payee_type" "public"."payee_type", "p_status" "text", "p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_payout_readiness"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "has_destination" boolean, "momo_network" "text", "account_last3" "text", "split_ready" boolean, "transfers_ready" boolean, "setup_error" "text", "owed_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  with payees as (
+    select 'VENDOR'::public.payee_type as payee_type, v.id as payee_id, v.name as payee_name
+      from public.vendors v
+     where v.status = 'ACTIVE' and v.owner_user_id is not null
+    union all
+    select 'PARTNER'::public.payee_type, p.user_id, u.full_name
+      from public.partner_profiles p
+      join public.users u on u.id = p.user_id
+     where p.status = 'APPROVED'
+  )
+  select k.payee_type, k.payee_id, k.payee_name,
+         d.payee_id is not null,
+         d.momo_network,
+         right(d.account_number, 3),
+         d.provider_subaccount_code is not null,
+         d.provider_recipient_code is not null,
+         d.subaccount_error,
+         coalesce((select sum(a.amount_pesewas) from public.allocations a
+                    where a.payee_type = k.payee_type and a.payee_id = k.payee_id
+                      and a.status in ('PENDING', 'ELIGIBLE', 'SETTLING')), 0)::bigint
+    from payees k
+    left join public.payout_destinations d
+      on d.payee_type = k.payee_type and d.payee_id = k.payee_id
+   where public.is_admin()
+   order by k.payee_type, (d.payee_id is not null), k.payee_name;
+$$;
+
+
+ALTER FUNCTION "public"."admin_payout_readiness"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_payout_readiness"() IS 'Every payee who could be owed money, and whether they can actually be paid. Shows the last three digits of an account and never the whole number — an operations screen needs to confirm a number is set, not read it out.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") RETURNS TABLE("payee_id" "uuid", "payee_name" "text", "order_count" bigint, "owed_pesewas" bigint, "oldest_at" timestamp with time zone)
@@ -1864,7 +2064,8 @@ begin
   select * into v_before from public.orders where id = p_order_id;
 
   update public.orders
-     set partner_id = null, delivery_status = 'SEARCHING', assigned_at = null, picked_up_at = null
+     set partner_id = null, partner_slot = null, delivery_status = 'SEARCHING',
+         assigned_at = null, picked_up_at = null
    where id = p_order_id
      and fulfilment_type = 'DELIVERY'
      -- FAILED_CUSTOMER_ABSENT deliberately excluded: that Partner is owed money.
@@ -2071,38 +2272,6 @@ $$;
 ALTER FUNCTION "public"."admin_reconciliation"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_remove_vendor_user"("p_vendor_id" "uuid", "p_user_id" "uuid", "p_reason" "text") RETURNS boolean
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-declare
-  v_removed integer;
-begin
-  if not public.is_admin() then
-    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
-  end if;
-
-  delete from public.vendor_users
-   where vendor_id = p_vendor_id and user_id = p_user_id;
-  get diagnostics v_removed = row_count;
-
-  if v_removed = 0 then
-    return false;
-  end if;
-
-  perform public.log_admin_action(
-    'VENDOR_STAFF_REMOVE', 'vendor', p_vendor_id, p_reason,
-    jsonb_build_object('user_id', p_user_id), null
-  );
-
-  return true;
-end;
-$$;
-
-
-ALTER FUNCTION "public"."admin_remove_vendor_user"("p_vendor_id" "uuid", "p_user_id" "uuid", "p_reason" "text") OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "public"."admin_resolve_dispute"("p_order_id" "uuid", "p_reason" "text", "p_notes" "text" DEFAULT NULL::"text") RETURNS "public"."orders"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -2186,13 +2355,63 @@ $$;
 ALTER FUNCTION "public"."admin_review_partner"("p_user_id" "uuid", "p_status" "public"."partner_application_status", "p_reason" "text", "p_notes" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_scan_order"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "customer_name" "text", "restaurant_name" "text", "destination" "text", "scan_status" "public"."scan_status", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "partner_name" "text", "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "partner_earnings_pesewas" bigint, "total_pesewas" bigint, "has_scan_image" boolean, "uploaded_at" timestamp with time zone, "released_at" timestamp with time zone, "redeemed_at" timestamp with time zone, "refused_at" timestamp with time zone, "refusal_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."admin_review_vendor"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_before public.vendors%rowtype;
+  v_after  public.vendors%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+  if p_status not in ('ACTIVE', 'REJECTED') then
+    raise exception 'a review decision is APPROVE (ACTIVE) or REJECT (REJECTED)'
+      using errcode = 'check_violation';
+  end if;
+  if length(btrim(coalesce(p_reason, ''))) < 3 then
+    raise exception 'a reason is required, and is recorded in the audit log'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_before from public.vendors where id = p_vendor_id;
+  if not found then
+    raise exception 'vendor not found' using errcode = 'no_data_found';
+  end if;
+
+  update public.vendors
+     set status = p_status,
+         rejection_reason = case when p_status = 'REJECTED' then btrim(p_reason) end,
+         reviewed_at = now(),
+         reviewed_by = auth.uid(),
+         -- APPROVAL DOES NOT OPEN THE STORE. Going live is the vendor's own
+         -- decision, made when they are actually standing behind the counter.
+         is_accepting_orders = false
+   where id = p_vendor_id
+  returning * into v_after;
+
+  perform public.log_admin_action(
+    case when p_status = 'ACTIVE' then 'VENDOR_APPROVED' else 'VENDOR_REJECTED' end,
+    'vendor', p_vendor_id, p_reason, to_jsonb(v_before), to_jsonb(v_after)
+  );
+
+  return v_after;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_review_vendor"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_scan_order"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "customer_name" "text", "restaurant_name" "text", "destination" "text", "details" "text", "scan_status" "public"."scan_status", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "partner_name" "text", "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "partner_earnings_pesewas" bigint, "total_pesewas" bigint, "has_scan_image" boolean, "uploaded_at" timestamp with time zone, "released_at" timestamp with time zone, "redeemed_at" timestamp with time zone, "refused_at" timestamp with time zone, "refusal_reason" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select
     o.id, o.order_number,
     c.full_name, v.name, public.location_path(o.destination_location_id),
+    s.details,
     o.scan_status, o.order_status, o.payment_status, o.delivery_status,
     p.full_name,
     o.service_fee_pesewas, o.delivery_fee_pesewas, o.partner_earnings_pesewas, o.total_pesewas,
@@ -2330,11 +2549,15 @@ CREATE TABLE IF NOT EXISTS "public"."payout_destinations" (
     "provider_synced_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "provider_subaccount_code" "text",
+    "subaccount_synced_at" timestamp with time zone,
+    "subaccount_error" "text",
     CONSTRAINT "payout_destinations_account_name_check" CHECK (("btrim"("account_name") <> ''::"text")),
     CONSTRAINT "payout_destinations_account_number_check" CHECK (("account_number" ~ '^0[0-9]{9}$'::"text")),
     CONSTRAINT "payout_destinations_code_needs_provider" CHECK ((("provider_recipient_code" IS NULL) OR ("provider" IS NOT NULL))),
     CONSTRAINT "payout_destinations_momo_network_check" CHECK (("momo_network" = ANY (ARRAY['MTN'::"text", 'VODAFONE'::"text", 'AIRTELTIGO'::"text"]))),
-    CONSTRAINT "payout_destinations_not_platform" CHECK (("payee_type" <> 'PLATFORM'::"public"."payee_type"))
+    CONSTRAINT "payout_destinations_not_platform" CHECK (("payee_type" <> 'PLATFORM'::"public"."payee_type")),
+    CONSTRAINT "payout_destinations_subaccount_needs_provider" CHECK ((("provider_subaccount_code" IS NULL) OR ("provider" IS NOT NULL)))
 );
 
 
@@ -2342,6 +2565,12 @@ ALTER TABLE "public"."payout_destinations" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."payout_destinations" IS 'Where settlement money goes. Server-only: no client role holds any grant.';
+
+
+COMMENT ON COLUMN "public"."payout_destinations"."provider_subaccount_code" IS 'Paystack subaccount code (ACCT_…) for this mobile money account. Present means the vendor''s share can be split off the charge itself; absent means their money is settled by the payout run instead. Never returned to a client.';
+
+
+COMMENT ON COLUMN "public"."payout_destinations"."subaccount_error" IS 'Why the last attempt to register a subaccount failed. Read by administrators; the vendor is told only that setup is incomplete.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text", "p_reason" "text") RETURNS "public"."payout_destinations"
@@ -2417,7 +2646,7 @@ ALTER FUNCTION "public"."admin_set_payout_destination"("p_payee_type" "public"."
 
 CREATE TABLE IF NOT EXISTS "public"."users" (
     "id" "uuid" NOT NULL,
-    "phone" "text" NOT NULL,
+    "phone" "text",
     "full_name" "text",
     "is_admin" boolean DEFAULT false NOT NULL,
     "is_suspended" boolean DEFAULT false NOT NULL,
@@ -2425,6 +2654,8 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "email" "text",
+    "first_name" "text",
+    "last_name" "text",
     CONSTRAINT "users_email_shape" CHECK ((("email" IS NULL) OR ("email" ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'::"text"))),
     CONSTRAINT "users_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text"))
 );
@@ -2433,7 +2664,19 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
 ALTER TABLE "public"."users" OWNER TO "postgres";
 
 
-COMMENT ON COLUMN "public"."users"."email" IS 'Applicant-declared contact address. No institutional domain is required.';
+COMMENT ON COLUMN "public"."users"."phone" IS 'Contact number in E.164. For a VENDOR this is also the sign-in credential; for a CUSTOMER it is the number a Partner rings on arrival; for an ADMIN it is NULL, because administrators sign in with a password and must not depend on SMS to reach the console. Unique when present — one number never backs two identities.';
+
+
+COMMENT ON COLUMN "public"."users"."full_name" IS 'DERIVED from first_name and last_name by users_sync_full_name(). Still the one column every read model selects for a display name; no longer a separate fact that can drift from the parts.';
+
+
+COMMENT ON COLUMN "public"."users"."email" IS 'For a CUSTOMER this is the verified @acity.edu.gh address that IS the sign-in credential. For an ADMIN it is the password login. For a VENDOR it is usually NULL — vendors sign in by phone and are never asked for an email.';
+
+
+COMMENT ON COLUMN "public"."users"."first_name" IS 'Given name. What a Partner is called to a customer and a customer to a Partner — never a surname, never a phone number.';
+
+
+COMMENT ON COLUMN "public"."users"."last_name" IS 'Family name. Shown to administrators and on the account screen; never to the other side of a delivery.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") RETURNS "public"."users"
@@ -2581,6 +2824,129 @@ $$;
 ALTER FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."customer_rewards" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "cycle" integer NOT NULL,
+    "goal_orders" integer NOT NULL,
+    "completed_orders_at_unlock" integer NOT NULL,
+    "status" "text" DEFAULT 'UNLOCKED'::"text" NOT NULL,
+    "unlocked_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "fulfilled_at" timestamp with time zone,
+    "fulfilled_by" "uuid",
+    "notes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "customer_rewards_cycle_check" CHECK (("cycle" > 0)),
+    CONSTRAINT "customer_rewards_fulfilled_pair" CHECK ((("status" = 'FULFILLED'::"text") = ("fulfilled_at" IS NOT NULL))),
+    CONSTRAINT "customer_rewards_goal_check" CHECK (("goal_orders" > 0)),
+    CONSTRAINT "customer_rewards_status_check" CHECK (("status" = ANY (ARRAY['UNLOCKED'::"text", 'FULFILLED'::"text", 'CANCELLED'::"text"])))
+);
+
+
+ALTER TABLE "public"."customer_rewards" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."customer_rewards" IS 'One row per customer per completed run of the order goal. Reaching the goal writes it once; every order after that finds the row already there. Campus Dash decides what the reward actually is — this records only that somebody qualified.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_settle_customer_reward"("p_reward_id" "uuid", "p_notes" "text") RETURNS "public"."customer_rewards"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_row public.customer_rewards%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin only' using errcode = 'insufficient_privilege';
+  end if;
+  if nullif(btrim(coalesce(p_notes, '')), '') is null then
+    raise exception 'say what was given' using errcode = 'check_violation';
+  end if;
+
+  update public.customer_rewards
+     set status = 'FULFILLED', fulfilled_at = now(), fulfilled_by = auth.uid(),
+         notes = btrim(p_notes)
+   where id = p_reward_id and status = 'UNLOCKED'
+  returning * into v_row;
+
+  if not found then
+    raise exception 'that reward is not open' using errcode = 'check_violation';
+  end if;
+
+  perform public.log_admin_action('SETTLE_CUSTOMER_REWARD', 'customer_reward', p_reward_id,
+    btrim(p_notes), jsonb_build_object('user_id', v_row.user_id, 'cycle', v_row.cycle));
+
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_settle_customer_reward"("p_reward_id" "uuid", "p_notes" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_settlement_overview"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "payee_contact" "text", "order_count" bigint, "owed_pesewas" bigint, "oldest_at" timestamp with time zone, "cadence" "text", "eligible_from" timestamp with time zone, "is_due" boolean, "below_minimum" boolean, "last_paid_at" timestamp with time zone, "failed_payouts" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  with cfg as (select * from public.pricing_config where id),
+  owed as (
+    select a.payee_type, a.payee_id,
+           count(*) as order_count,
+           sum(a.amount_pesewas)::bigint as owed_pesewas,
+           min(o.created_at) as oldest_at
+      from public.allocations a
+      join public.orders o on o.id = a.order_id
+     where a.payee_type in ('VENDOR', 'PARTNER')
+       and a.status = 'ELIGIBLE'
+       and a.settlement_run_id is null
+     group by a.payee_type, a.payee_id
+  )
+  select w.payee_type,
+         w.payee_id,
+         case w.payee_type
+           when 'VENDOR'  then (select v.name from public.vendors v where v.id = w.payee_id)
+           else                (select u.full_name from public.users u where u.id = w.payee_id)
+         end,
+         case w.payee_type
+           when 'VENDOR'  then (select coalesce(o.phone, v.phone) from public.vendors v
+                                  left join public.users o on o.id = v.owner_user_id
+                                 where v.id = w.payee_id)
+           else                (select u.phone from public.users u where u.id = w.payee_id)
+         end,
+         w.order_count,
+         w.owed_pesewas,
+         w.oldest_at,
+         -- The cadence, said out loud rather than implied by a helper in a
+         -- different language.
+         case w.payee_type when 'VENDOR' then 'DAILY' else 'WEEKLY' end,
+         -- When this money first becomes settleable: the end of the day it was
+         -- earned for a vendor, the end of that week for a Partner.
+         case w.payee_type
+           when 'VENDOR' then date_trunc('day', w.oldest_at) + interval '1 day'
+           else               date_trunc('week', w.oldest_at) + interval '1 week'
+         end,
+         now() >= case w.payee_type
+           when 'VENDOR' then date_trunc('day', w.oldest_at) + interval '1 day'
+           else               date_trunc('week', w.oldest_at) + interval '1 week'
+         end,
+         -- Below the threshold a transfer costs more in fees than it moves, so
+         -- a run would claim it and immediately hand it back. Saying so here
+         -- stops an operator wondering why the button did nothing.
+         w.owed_pesewas < greatest((select coalesce(min_payout_pesewas, 0) from cfg), 1),
+         (select max(p.paid_at) from public.payouts p
+           where p.payee_type = w.payee_type and p.payee_id = w.payee_id and p.status = 'PAID'),
+         (select count(*) from public.payouts p
+           where p.payee_type = w.payee_type and p.payee_id = w.payee_id and p.status = 'FAILED')
+    from owed w
+   where public.is_admin()
+   order by w.payee_type, w.owed_pesewas desc;
+$$;
+
+
+ALTER FUNCTION "public"."admin_settlement_overview"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_settlement_payouts"("p_run_id" "uuid") RETURNS TABLE("payout_id" "uuid", "payee_type" "public"."payee_type", "payee_id" "uuid", "payee_name" "text", "amount_pesewas" bigint, "status" "public"."payout_status", "provider" "text", "provider_transfer_id" "text", "failure_reason" "text", "paid_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -2661,13 +3027,21 @@ CREATE TABLE IF NOT EXISTS "public"."pricing_config" (
     "customer_poll_seconds" integer DEFAULT 6 NOT NULL,
     "service_fee_bps" integer DEFAULT 500 NOT NULL,
     "scan_service_fee_pesewas" bigint DEFAULT 200,
+    "max_active_deliveries_per_partner" smallint DEFAULT 2 NOT NULL,
+    "code_attempt_limit" integer DEFAULT 5 NOT NULL,
+    "code_lockout_seconds" integer DEFAULT 300 NOT NULL,
+    "partner_min_payout_pesewas" bigint DEFAULT 2000 NOT NULL,
     CONSTRAINT "pricing_config_approved_document_retention_days_check" CHECK (("approved_document_retention_days" > 0)),
+    CONSTRAINT "pricing_config_code_attempt_limit_check" CHECK ((("code_attempt_limit" >= 3) AND ("code_attempt_limit" <= 20))),
+    CONSTRAINT "pricing_config_code_lockout_seconds_check" CHECK ((("code_lockout_seconds" >= 30) AND ("code_lockout_seconds" <= 3600))),
     CONSTRAINT "pricing_config_customer_absent_wait_seconds_check" CHECK (("customer_absent_wait_seconds" > 0)),
     CONSTRAINT "pricing_config_customer_poll_seconds_check" CHECK ((("customer_poll_seconds" >= 2) AND ("customer_poll_seconds" <= 120))),
     CONSTRAINT "pricing_config_delivery_fee_pesewas_check" CHECK (("delivery_fee_pesewas" >= 0)),
     CONSTRAINT "pricing_config_document_signed_url_seconds_check" CHECK ((("document_signed_url_seconds" >= 30) AND ("document_signed_url_seconds" <= 900))),
+    CONSTRAINT "pricing_config_max_active_deliveries_check" CHECK ((("max_active_deliveries_per_partner" >= 1) AND ("max_active_deliveries_per_partner" <= 10))),
     CONSTRAINT "pricing_config_min_payout_pesewas_check" CHECK (("min_payout_pesewas" >= 0)),
     CONSTRAINT "pricing_config_notification_retry_limit_check" CHECK ((("notification_retry_limit" >= 0) AND ("notification_retry_limit" <= 10))),
+    CONSTRAINT "pricing_config_partner_min_payout_check" CHECK (("partner_min_payout_pesewas" >= 0)),
     CONSTRAINT "pricing_config_partner_poll_seconds_check" CHECK ((("partner_poll_seconds" >= 2) AND ("partner_poll_seconds" <= 120))),
     CONSTRAINT "pricing_config_partner_search_seconds_check" CHECK (("partner_search_seconds" > 0)),
     CONSTRAINT "pricing_config_partner_share_of_delivery_bps_check" CHECK ((("partner_share_of_delivery_bps" >= 0) AND ("partner_share_of_delivery_bps" <= 10000))),
@@ -2693,7 +3067,19 @@ COMMENT ON COLUMN "public"."pricing_config"."service_fee_bps" IS 'Campus Dash se
 COMMENT ON COLUMN "public"."pricing_config"."scan_service_fee_pesewas" IS 'Flat Campus Dash fee for one scan delivery, in pesewas. Currently 200 (GH₵2.00). NULL means not configured, and scan ordering is refused until an administrator sets it. NULL is not the same as 0: 0 would mean the errand is deliberately free.';
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer DEFAULT NULL::integer, "p_delivery_fee_pesewas" bigint DEFAULT NULL::bigint, "p_partner_share_of_delivery_bps" integer DEFAULT NULL::integer, "p_vendor_response_seconds" integer DEFAULT NULL::integer, "p_partner_search_seconds" integer DEFAULT NULL::integer, "p_customer_absent_wait_seconds" integer DEFAULT NULL::integer, "p_payment_pending_timeout_seconds" integer DEFAULT NULL::integer, "p_min_payout_pesewas" bigint DEFAULT NULL::bigint, "p_notification_retry_limit" integer DEFAULT NULL::integer, "p_vendor_poll_seconds" integer DEFAULT NULL::integer, "p_partner_poll_seconds" integer DEFAULT NULL::integer, "p_customer_poll_seconds" integer DEFAULT NULL::integer, "p_scan_service_fee_pesewas" bigint DEFAULT NULL::bigint) RETURNS "public"."pricing_config"
+COMMENT ON COLUMN "public"."pricing_config"."max_active_deliveries_per_partner" IS 'How many deliveries one Partner may carry at once. Default 2. The ceiling of 10 is a guard against a typo emptying the offer board into one person''s hands, not a product opinion.';
+
+
+COMMENT ON COLUMN "public"."pricing_config"."code_attempt_limit" IS 'Wrong handoff codes tolerated before a lockout. Five, because a counter is noisy and somebody mishearing a digit twice is normal.';
+
+
+COMMENT ON COLUMN "public"."pricing_config"."code_lockout_seconds" IS 'How long a locked-out handoff stays locked. Long enough to make scripting a four-digit code hopeless, short enough that a genuine mistake is not a ruined delivery.';
+
+
+COMMENT ON COLUMN "public"."pricing_config"."partner_min_payout_pesewas" IS 'What a Partner''s available earnings must reach before the weekly run pays them. GH₵20 (2000). A balance below it is NOT lost and NOT reset: the run releases its claim in the same transaction, so it is owed again immediately and carried into the next cycle.';
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer DEFAULT NULL::integer, "p_delivery_fee_pesewas" bigint DEFAULT NULL::bigint, "p_partner_share_of_delivery_bps" integer DEFAULT NULL::integer, "p_vendor_response_seconds" integer DEFAULT NULL::integer, "p_partner_search_seconds" integer DEFAULT NULL::integer, "p_customer_absent_wait_seconds" integer DEFAULT NULL::integer, "p_payment_pending_timeout_seconds" integer DEFAULT NULL::integer, "p_min_payout_pesewas" bigint DEFAULT NULL::bigint, "p_notification_retry_limit" integer DEFAULT NULL::integer, "p_vendor_poll_seconds" integer DEFAULT NULL::integer, "p_partner_poll_seconds" integer DEFAULT NULL::integer, "p_customer_poll_seconds" integer DEFAULT NULL::integer, "p_scan_service_fee_pesewas" bigint DEFAULT NULL::bigint, "p_max_active_deliveries_per_partner" smallint DEFAULT NULL::smallint, "p_partner_min_payout_pesewas" bigint DEFAULT NULL::bigint) RETURNS "public"."pricing_config"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -2703,6 +3089,17 @@ declare
 begin
   if not public.is_admin() then
     raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_max_active_deliveries_per_partner is not null
+     and (p_max_active_deliveries_per_partner < 1 or p_max_active_deliveries_per_partner > 10) then
+    raise exception 'a Partner may carry between 1 and 10 deliveries at once'
+      using errcode = 'check_violation';
+  end if;
+
+  if p_partner_min_payout_pesewas is not null and p_partner_min_payout_pesewas < 0 then
+    raise exception 'the Partner payout threshold cannot be negative'
+      using errcode = 'check_violation';
   end if;
 
   select * into v_before from public.pricing_config where id;
@@ -2721,6 +3118,9 @@ begin
          partner_poll_seconds            = coalesce(p_partner_poll_seconds, partner_poll_seconds),
          customer_poll_seconds           = coalesce(p_customer_poll_seconds, customer_poll_seconds),
          scan_service_fee_pesewas        = coalesce(p_scan_service_fee_pesewas, scan_service_fee_pesewas),
+         max_active_deliveries_per_partner =
+           coalesce(p_max_active_deliveries_per_partner, max_active_deliveries_per_partner),
+         partner_min_payout_pesewas      = coalesce(p_partner_min_payout_pesewas, partner_min_payout_pesewas),
          updated_at                      = now()
    where id
   returning * into v_after;
@@ -2735,7 +3135,7 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint) OWNER TO "postgres";
+ALTER FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint, "p_max_active_deliveries_per_partner" smallint, "p_partner_min_payout_pesewas" bigint) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_update_location"("p_location_id" "uuid", "p_reason" "text", "p_name" "text" DEFAULT NULL::"text", "p_is_deliverable" boolean DEFAULT NULL::boolean, "p_walk_minutes" integer DEFAULT NULL::integer, "p_sort_order" integer DEFAULT NULL::integer) RETURNS "public"."locations"
@@ -2822,7 +3222,7 @@ $$;
 ALTER FUNCTION "public"."admin_update_menu_item"("p_menu_item_id" "uuid", "p_reason" "text", "p_name" "text", "p_description" "text", "p_price_pesewas" bigint, "p_sort_order" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text" DEFAULT NULL::"text", "p_phone" "text" DEFAULT NULL::"text", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
+CREATE OR REPLACE FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text" DEFAULT NULL::"text", "p_phone" "text" DEFAULT NULL::"text", "p_category_id" "uuid" DEFAULT NULL::"uuid", "p_description" "text" DEFAULT NULL::"text", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -2844,6 +3244,8 @@ begin
   update public.vendors
      set name                   = coalesce(nullif(btrim(coalesce(p_name, '')), ''), name),
          phone                  = coalesce(p_phone, phone),
+         category_id            = coalesce(p_category_id, category_id),
+         description            = coalesce(nullif(btrim(coalesce(p_description, '')), ''), description),
          location_id            = coalesce(p_location_id, location_id),
          location_note          = coalesce(p_location_note, location_note),
          walk_minutes_to_campus = coalesce(p_walk_minutes_to_campus, walk_minutes_to_campus)
@@ -2859,27 +3261,96 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_category_id" "uuid", "p_description" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."admin_vendors"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "phone" "text", "status" "public"."vendor_status", "is_accepting_orders" boolean, "can_accept_scans" boolean, "location_path" "text", "staff_count" bigint, "menu_count" bigint, "order_count" bigint, "owed_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."admin_update_vendor_category"("p_category_id" "uuid", "p_name" "text", "p_sort_order" integer, "p_is_active" boolean, "p_reason" "text") RETURNS "public"."vendor_categories"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_before public.vendor_categories%rowtype;
+  v_after  public.vendor_categories%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  select * into v_before from public.vendor_categories where id = p_category_id;
+  if not found then
+    raise exception 'no such category' using errcode = 'no_data_found';
+  end if;
+
+  -- DISABLING IS NOT DELETING, and nothing about it touches a vendor row. A
+  -- disabled category disappears from the sign-up form and the customer filter;
+  -- the stalls already in it keep trading and every historical order keeps the
+  -- category it was placed under.
+  update public.vendor_categories
+     set name       = coalesce(nullif(btrim(coalesce(p_name, '')), ''), name),
+         sort_order = coalesce(p_sort_order, sort_order),
+         is_active  = coalesce(p_is_active, is_active)
+   where id = p_category_id
+  returning * into v_after;
+
+  perform public.log_admin_action(
+    'VENDOR_CATEGORY_UPDATE', 'vendor_category', p_category_id, p_reason,
+    to_jsonb(v_before), to_jsonb(v_after)
+  );
+  return v_after;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_update_vendor_category"("p_category_id" "uuid", "p_name" "text", "p_sort_order" integer, "p_is_active" boolean, "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_vendor_categories"() RETURNS TABLE("id" "uuid", "slug" "text", "name" "text", "sort_order" integer, "is_active" boolean, "vendor_count" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select k.id, k.slug, k.name, k.sort_order, k.is_active,
+         (select count(*) from public.vendors v where v.category_id = k.id)
+    from public.vendor_categories k
+   where public.is_admin()
+   order by k.sort_order, k.name;
+$$;
+
+
+ALTER FUNCTION "public"."admin_vendor_categories"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_vendors"("p_search" "text" DEFAULT NULL::"text", "p_status" "text" DEFAULT NULL::"text", "p_category_id" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("vendor_id" "uuid", "name" "text", "phone" "text", "status" "public"."vendor_status", "is_accepting_orders" boolean, "can_accept_scans" boolean, "location_path" "text", "category_id" "uuid", "category_name" "text", "description" "text", "applicant_name" "text", "owner_is_student" boolean, "owner_user_id" "uuid", "owner_name" "text", "owner_phone" "text", "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "image_count" bigint, "menu_count" bigint, "order_count" bigint, "owed_pesewas" bigint)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select v.id, v.name, v.phone, v.status, v.is_accepting_orders, v.can_accept_scans,
          public.location_path(v.location_id),
-         (select count(*) from public.vendor_users vu where vu.vendor_id = v.id),
+         v.category_id, k.name, v.description,
+         v.applicant_name, v.owner_is_student, v.owner_user_id,
+         o.full_name, o.phone, v.rejection_reason,
+         v.submitted_at, v.reviewed_at,
+         (select count(*) from public.vendor_images i where i.vendor_id = v.id),
          (select count(*) from public.menu_items m where m.vendor_id = v.id),
-         (select count(*) from public.orders o where o.vendor_id = v.id and o.order_status <> 'DRAFT'),
+         (select count(*) from public.orders ord where ord.vendor_id = v.id and ord.order_status <> 'DRAFT'),
          (select coalesce(sum(a.amount_pesewas),0)::bigint from public.allocations a
            where a.payee_type = 'VENDOR' and a.payee_id = v.id and a.status in ('PENDING','ELIGIBLE'))
     from public.vendors v
+    left join public.vendor_categories k on k.id = v.category_id
+    left join public.users o on o.id = v.owner_user_id
    where public.is_admin()
-   order by v.name;
+     and (p_status is null or btrim(p_status) = '' or v.status::text = p_status)
+     and (p_category_id is null or v.category_id = p_category_id)
+     and (p_search is null or btrim(p_search) = ''
+          or v.name ilike '%' || btrim(p_search) || '%'
+          or coalesce(v.phone,'') ilike '%' || btrim(p_search) || '%'
+          or coalesce(v.applicant_name,'') ilike '%' || btrim(p_search) || '%')
+   order by
+     case v.status when 'PENDING_APPROVAL' then 0 when 'ACTIVE' then 1 else 2 end,
+     v.name;
 $$;
 
 
-ALTER FUNCTION "public"."admin_vendors"() OWNER TO "postgres";
+ALTER FUNCTION "public"."admin_vendors"("p_search" "text", "p_status" "text", "p_category_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_webhook_events"("p_limit" integer DEFAULT 100) RETURNS TABLE("webhook_id" "uuid", "provider" "text", "event_id" "text", "status" "public"."webhook_event_status", "signature_valid" boolean, "error" "text", "received_at" timestamp with time zone, "processed_at" timestamp with time zone)
@@ -2928,12 +3399,59 @@ CREATE TABLE IF NOT EXISTS "public"."payments" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "succeeded_at" timestamp with time zone,
+    "split_subaccount_code" "text",
+    "split_vendor_pesewas" bigint DEFAULT 0 NOT NULL,
     CONSTRAINT "payments_amount_pesewas_check" CHECK (("amount_pesewas" > 0)),
-    CONSTRAINT "payments_currency_check" CHECK (("currency" = 'GHS'::"text"))
+    CONSTRAINT "payments_currency_check" CHECK (("currency" = 'GHS'::"text")),
+    CONSTRAINT "payments_split_amount_check" CHECK ((("split_vendor_pesewas" >= 0) AND ("split_vendor_pesewas" <= "amount_pesewas"))),
+    CONSTRAINT "payments_split_pair" CHECK ((("split_subaccount_code" IS NULL) = ("split_vendor_pesewas" = 0)))
 );
 
 
 ALTER TABLE "public"."payments" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."payments"."split_subaccount_code" IS 'The Paystack subaccount this charge was split to, or NULL when it was not split. Recorded at initialisation, so the ledger can say afterwards which orders settled themselves and which need a payout run.';
+
+
+COMMENT ON COLUMN "public"."payments"."split_vendor_pesewas" IS 'How much of this charge Paystack routed straight to the vendor. Zero when there was no split — including when the split was attempted and refused, because what matters to the ledger is what actually happened.';
+
+
+CREATE OR REPLACE FUNCTION "public"."attach_payment_split"("p_payment_id" "uuid", "p_subaccount_code" "text", "p_vendor_pesewas" bigint) RETURNS "public"."payments"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_payment public.payments%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  select * into v_payment from public.payments where id = p_payment_id;
+  if not found then
+    raise exception 'payment not found' using errcode = 'no_data_found';
+  end if;
+
+  -- A split is decided before the customer is sent to the checkout and never
+  -- afterwards. Rewriting it on a settled payment would rewrite history.
+  if v_payment.status <> 'PENDING' then
+    raise exception 'a split can only be recorded while the payment is pending'
+      using errcode = 'check_violation';
+  end if;
+
+  update public.payments
+     set split_subaccount_code = nullif(btrim(coalesce(p_subaccount_code, '')), ''),
+         split_vendor_pesewas  = case
+           when nullif(btrim(coalesce(p_subaccount_code, '')), '') is null then 0
+           else coalesce(p_vendor_pesewas, 0) end
+   where id = p_payment_id
+  returning * into v_payment;
+
+  return v_payment;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."attach_payment_split"("p_payment_id" "uuid", "p_subaccount_code" "text", "p_vendor_pesewas" bigint) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb" DEFAULT NULL::"jsonb") RETURNS "public"."payments"
@@ -3011,6 +3529,37 @@ $$;
 ALTER FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."attach_payout_subaccount"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_subaccount_code" "text", "p_error" "text" DEFAULT NULL::"text") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_row public.payout_destinations%rowtype;
+begin
+  perform public.assert_service_or_admin();
+
+  update public.payout_destinations
+     set provider = coalesce(p_provider, provider),
+         provider_subaccount_code = coalesce(nullif(btrim(coalesce(p_subaccount_code, '')), ''),
+                                             provider_subaccount_code),
+         subaccount_synced_at = case when nullif(btrim(coalesce(p_subaccount_code, '')), '') is not null
+                                     then now() else subaccount_synced_at end,
+         subaccount_error = nullif(btrim(coalesce(p_error, '')), '')
+   where payee_type = p_payee_type and payee_id = p_payee_id
+  returning * into v_row;
+
+  if not found then
+    raise exception 'no payout destination for that payee' using errcode = 'no_data_found';
+  end if;
+
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."attach_payout_subaccount"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_subaccount_code" "text", "p_error" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."check_allocations_balance"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3041,16 +3590,110 @@ $$;
 ALTER FUNCTION "public"."check_allocations_balance"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."check_handoff_code"("p_order_id" "uuid", "p_kind" "text", "p_supplied" "text") RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_stored  text;
+  v_tries   integer;
+  v_locked  timestamptz;
+  v_limit   integer;
+  v_seconds integer;
+begin
+  select code_attempt_limit, code_lockout_seconds into v_limit, v_seconds
+    from public.pricing_config where id;
+  v_limit   := coalesce(v_limit, 5);
+  v_seconds := coalesce(v_seconds, 300);
+
+  if p_kind = 'PICKUP' then
+    select s.pickup_code, s.pickup_attempts, s.pickup_locked_until
+      into v_stored, v_tries, v_locked
+      from public.order_secrets s where s.order_id = p_order_id
+      for update;
+  else
+    select s.delivery_code, s.delivery_attempts, s.delivery_locked_until
+      into v_stored, v_tries, v_locked
+      from public.order_secrets s where s.order_id = p_order_id
+      for update;
+  end if;
+
+  if not found then
+    return 'MISMATCH';
+  end if;
+
+  -- Locked out. Checked BEFORE the comparison, so a lockout is not a free
+  -- oracle that tells an attacker when they have finally guessed right.
+  if v_locked is not null and v_locked > now() then
+    return 'LOCKED';
+  end if;
+
+  -- The lockout has expired: the slate is clean, and the next wrong answer
+  -- starts counting again from one.
+  if v_locked is not null then
+    v_tries := 0;
+    if p_kind = 'PICKUP' then
+      update public.order_secrets
+         set pickup_attempts = 0, pickup_locked_until = null
+       where order_id = p_order_id;
+    else
+      update public.order_secrets
+         set delivery_attempts = 0, delivery_locked_until = null
+       where order_id = p_order_id;
+    end if;
+  end if;
+
+  -- A rotated (NULL) code never matches, so a code from a cancelled assignment
+  -- is worthless the moment the Partner walks away.
+  if v_stored is not null and p_supplied is not null
+     and v_stored = btrim(p_supplied) then
+    if p_kind = 'PICKUP' then
+      update public.order_secrets
+         set pickup_attempts = 0, pickup_locked_until = null
+       where order_id = p_order_id;
+    else
+      update public.order_secrets
+         set delivery_attempts = 0, delivery_locked_until = null
+       where order_id = p_order_id;
+    end if;
+    return 'OK';
+  end if;
+
+  v_tries := v_tries + 1;
+
+  if p_kind = 'PICKUP' then
+    update public.order_secrets
+       set pickup_attempts = v_tries,
+           pickup_locked_until = case when v_tries >= v_limit
+                                      then now() + make_interval(secs => v_seconds) end
+     where order_id = p_order_id;
+  else
+    update public.order_secrets
+       set delivery_attempts = v_tries,
+           delivery_locked_until = case when v_tries >= v_limit
+                                        then now() + make_interval(secs => v_seconds) end
+     where order_id = p_order_id;
+  end if;
+
+  return case when v_tries >= v_limit then 'LOCKED' else 'MISMATCH' end;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."check_handoff_code"("p_order_id" "uuid", "p_kind" "text", "p_supplied" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."check_handoff_code"("p_order_id" "uuid", "p_kind" "text", "p_supplied" "text") IS 'Compares a supplied handoff code and counts the failure. SERVER-ONLY: no client role may call it, because a client that could would have an oracle for the code it is meant to be told out loud.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."customer_profiles" (
     "user_id" "uuid" NOT NULL,
     "student_id_number" "text" NOT NULL,
-    "class_year" "text" NOT NULL,
-    "student_id_image_path" "text" NOT NULL,
+    "level" "text" NOT NULL,
     "onboarded_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "customer_class_year_shape" CHECK (("btrim"("class_year") <> ''::"text")),
-    CONSTRAINT "customer_id_image_shape" CHECK (("btrim"("student_id_image_path") <> ''::"text")),
+    CONSTRAINT "customer_level_shape" CHECK (("level" = ANY (ARRAY['100'::"text", '200'::"text", '300'::"text", '400'::"text"]))),
     CONSTRAINT "customer_student_id_shape" CHECK (("btrim"("student_id_number") <> ''::"text"))
 );
 
@@ -3061,16 +3704,17 @@ ALTER TABLE "public"."customer_profiles" OWNER TO "postgres";
 COMMENT ON TABLE "public"."customer_profiles" IS 'The CUSTOMER capability. A row here is the capability; there is no flag. Admin and vendor-staff accounts do not get one automatically.';
 
 
-COMMENT ON COLUMN "public"."customer_profiles"."student_id_image_path" IS 'CUSTOMER verification document, in the private partner-documents bucket. Retained while the account holds the CUSTOMER capability — it is evidence for a standing capability, not a record of a past review. NOT purged by the Partner document retention job. Subject to the account deletion policy when that exists. See docs/PILOT-QUESTIONS.md.';
+COMMENT ON COLUMN "public"."customer_profiles"."level" IS 'Academic City level: 100, 200, 300 or 400. A fixed set, so it can be filtered and reported on — the free-text class year it replaced could not.';
 
 
-CREATE OR REPLACE FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") RETURNS "public"."customer_profiles"
+CREATE OR REPLACE FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_student_id_number" "text", "p_level" "text", "p_phone" "text", "p_terms_id" "uuid") RETURNS "public"."customer_profiles"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $_$
 declare
   v_user    uuid := auth.uid();
-  v_email   text := lower(btrim(coalesce(p_email, '')));
+  v_email   text;
+  v_phone   text := nullif(btrim(coalesce(p_phone, '')), '');
   v_profile public.customer_profiles%rowtype;
   v_doc     public.terms_documents%rowtype;
 begin
@@ -3081,31 +3725,47 @@ begin
     raise exception 'account suspended' using errcode = 'insufficient_privilege';
   end if;
 
-  -- Every field is required. A half-filled identity record is not a lighter
-  -- version of this capability, it is an unusable one.
-  if nullif(btrim(coalesce(p_full_name, '')), '') is null then
-    raise exception 'your full name is required' using errcode = 'check_violation';
+  -- THE VERIFIED ADDRESS, read from auth. Not a parameter.
+  select lower(btrim(coalesce(u.email, ''))) into v_email
+    from auth.users u
+   where u.id = v_user and u.email_confirmed_at is not null;
+
+  if coalesce(v_email, '') = '' then
+    raise exception 'verify your Academic City email address before completing sign-up'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  -- EXACTLY the school domain. A lookalike (@acity.edu.gh.example.com) must not
+  -- pass, so this anchors the end of the string rather than searching for it.
+  if v_email !~ '@acity\.edu\.gh$' then
+    raise exception 'Campus Dash accounts use an @acity.edu.gh address'
+      using errcode = 'check_violation';
+  end if;
+
+  if nullif(btrim(coalesce(p_first_name, '')), '') is null then
+    raise exception 'your first name is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_last_name, '')), '') is null then
+    raise exception 'your last name is required' using errcode = 'check_violation';
   end if;
   if nullif(btrim(coalesce(p_student_id_number, '')), '') is null then
     raise exception 'a student ID number is required' using errcode = 'check_violation';
   end if;
-  if nullif(btrim(coalesce(p_class_year, '')), '') is null then
-    raise exception 'a class year is required' using errcode = 'check_violation';
+  if btrim(coalesce(p_level, '')) not in ('100', '200', '300', '400') then
+    raise exception 'choose your level: 100, 200, 300 or 400' using errcode = 'check_violation';
   end if;
-  if v_email = '' then
-    raise exception 'an email address is required' using errcode = 'check_violation';
-  end if;
-  if v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
-    raise exception 'that email address does not look like an address'
+
+  -- The phone is how a Partner reaches somebody standing outside their door
+  -- with cooling food. It is required for that reason, not as a credential.
+  if v_phone is null then
+    raise exception 'a phone number is required so a Partner can reach you'
       using errcode = 'check_violation';
   end if;
-  if nullif(btrim(coalesce(p_student_id_image_path, '')), '') is null then
-    raise exception 'a photograph of your student ID is required'
+  if v_phone !~ '^\+[1-9]\d{7,14}$' then
+    raise exception 'enter a valid phone number, e.g. 020 123 4567'
       using errcode = 'check_violation';
   end if;
 
-  -- The terms must be the CURRENT published customer terms. Accepting a
-  -- superseded version, or a Partner document, is not consent to these.
   select * into v_doc from public.terms_documents where id = p_terms_id;
   if not found or v_doc.published_at is null or v_doc.audience <> 'CUSTOMER' then
     raise exception 'the customer terms must be accepted to continue'
@@ -3119,32 +3779,36 @@ begin
       using errcode = 'check_violation';
   end if;
 
-  -- Identity fields live on public.users; capability evidence lives on the
-  -- profile. The split is the whole point of this migration.
   begin
     update public.users
-       set full_name = btrim(p_full_name),
-           email     = v_email
+       set first_name = btrim(p_first_name),
+           last_name  = btrim(p_last_name),
+           email      = v_email,
+           phone      = v_phone
      where id = v_user;
+
+    if not found then
+      raise exception 'no profile for this account' using errcode = 'no_data_found';
+    end if;
   exception when unique_violation then
+    -- Two different constraints, two different mistakes, two different fixes.
+    if sqlerrm like '%users_phone%' then
+      raise exception 'that phone number is already used by another Campus Dash account'
+        using errcode = 'unique_violation';
+    end if;
     raise exception 'that email address is already used by another Campus Dash account'
       using errcode = 'unique_violation';
   end;
 
   begin
-    insert into public.customer_profiles (
-      user_id, student_id_number, class_year, student_id_image_path
-    )
-    values (
-      v_user, btrim(p_student_id_number), btrim(p_class_year), btrim(p_student_id_image_path)
-    )
-    -- Re-running onboarding updates the declared facts. It never revokes the
-    -- capability, and it never moves onboarded_at: when someone became a
-    -- customer is a fact about the past.
+    insert into public.customer_profiles (user_id, student_id_number, level)
+    values (v_user, btrim(p_student_id_number), btrim(p_level))
+    -- Re-running sign-up updates the declared facts. It never revokes the
+    -- capability, and it never moves onboarded_at: when somebody became a
+    -- customer is a historical fact, not a field.
     on conflict (user_id) do update
-       set student_id_number     = excluded.student_id_number,
-           class_year            = excluded.class_year,
-           student_id_image_path = excluded.student_id_image_path
+       set student_id_number = excluded.student_id_number,
+           level             = excluded.level
     returning * into v_profile;
   exception when unique_violation then
     raise exception 'that student ID number is already registered to another account'
@@ -3161,7 +3825,7 @@ end;
 $_$;
 
 
-ALTER FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_student_id_number" "text", "p_level" "text", "p_phone" "text", "p_terms_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) RETURNS "public"."payments"
@@ -3256,6 +3920,8 @@ declare
   v_order    public.orders%rowtype;
   v_platform bigint;
   v_count    integer := 0;
+  v_split    bigint := 0;
+  v_code     text;
 begin
   perform public.assert_service_or_admin();
 
@@ -3268,6 +3934,19 @@ begin
   if exists (select 1 from public.allocations where order_id = p_order_id) then
     return 0;
   end if;
+
+  -- WHAT THE PROVIDER ACTUALLY SPLIT, read from the payment that succeeded —
+  -- not from what we intended, and not from the vendor's current setup. A
+  -- vendor who registered a subaccount after this order was charged is still
+  -- owed this order's money through a payout run.
+  select p.split_vendor_pesewas, p.split_subaccount_code
+    into v_split, v_code
+    from public.payments p
+   where p.order_id = p_order_id and p.status = 'SUCCEEDED'
+   order by p.created_at desc
+   limit 1;
+
+  v_split := coalesce(v_split, 0);
 
   -- At payment time NO PARTNER EXISTS YET — dispatch has not even opened. So we
   -- allocate in two rows now, and the Partner's share is carved out of the
@@ -3282,13 +3961,27 @@ begin
   -- SCAN ORDERS GET NO SUCH ROW. Campus Dash did not sell their food and owes
   -- them nothing for it.
   if v_order.order_type <> 'SCAN' then
-    insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status)
-    values (p_order_id, 'VENDOR', v_order.vendor_id, v_order.subtotal_pesewas, 'ELIGIBLE');
+    insert into public.allocations (
+      order_id, payee_type, payee_id, amount_pesewas, status,
+      settlement_channel, settled_at
+    )
+    values (
+      p_order_id, 'VENDOR', v_order.vendor_id, v_order.subtotal_pesewas,
+      -- A PARTIAL split would leave a remainder nobody was ever going to send,
+      -- so only a split that covers the whole subtotal settles the row. In
+      -- practice the split IS the subtotal; this is the guard, not a case.
+      (case when v_code is not null and v_split >= v_order.subtotal_pesewas
+            then 'SETTLED' else 'ELIGIBLE' end)::public.allocation_status,
+      case when v_code is not null and v_split >= v_order.subtotal_pesewas
+           then 'SPLIT' else 'TRANSFER' end,
+      case when v_code is not null and v_split >= v_order.subtotal_pesewas
+           then now() end
+    );
     v_count := v_count + 1;
   end if;
 
-  insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status)
-  values (p_order_id, 'PLATFORM', null, v_platform, 'ELIGIBLE');
+  insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status, settlement_channel)
+  values (p_order_id, 'PLATFORM', null, v_platform, 'ELIGIBLE', 'TRANSFER');
   v_count := v_count + 1;
 
   return v_count;
@@ -3309,7 +4002,6 @@ declare
 begin
   perform public.assert_service_or_admin();
 
-  -- Idempotent replay.
   select * into v_payment from public.payments where idempotency_key = p_idempotency_key;
   if found then
     if v_payment.order_id <> p_order_id then
@@ -3324,19 +4016,18 @@ begin
     raise exception 'order not found' using errcode = 'no_data_found';
   end if;
 
-  -- Payment is only collected AFTER the vendor accepts. An expired or rejected
-  -- order is never charged.
   if v_order.order_status <> 'ACCEPTED' then
     raise exception 'order must be ACCEPTED before payment (is %)', v_order.order_status
       using errcode = 'check_violation';
+  end if;
+  if v_order.fulfilment_type is null then
+    raise exception 'choose pickup or delivery before paying' using errcode = 'check_violation';
   end if;
   if v_order.payment_status not in ('UNPAID', 'FAILED') then
     raise exception 'order payment is already % ', v_order.payment_status
       using errcode = 'check_violation';
   end if;
 
-  -- The amount comes from the ORDER, which the server calculated and snapshotted.
-  -- No caller supplies it.
   insert into public.payments (order_id, provider, amount_pesewas, idempotency_key, status)
   values (p_order_id, p_provider, v_order.total_pesewas, p_idempotency_key, 'PENDING')
   returning * into v_payment;
@@ -3411,8 +4102,8 @@ begin
     return v_run;
   end if;
 
-  select coalesce(min_payout_pesewas, 0) into v_minimum
-    from public.pricing_config where id;
+  -- Partners have their own weekly floor; everybody else uses the general one.
+  v_minimum := public.payout_threshold_for(p_payee_type);
 
   -- A payout is only ever created for a positive amount, so the effective floor
   -- is at least one pesewa. Without this a payee summing to exactly zero would
@@ -3424,10 +4115,10 @@ begin
   values (p_payee_type, p_period_start, p_period_end, 'PROCESSING', auth.uid())
   returning * into v_run;
 
-  -- Claim everything eligible up to the end of the period. No lower bound: see
-  -- the header. Anything older than this period is either already claimed by
-  -- the run that took it, or was deliberately released back — deferred, failed
-  -- or reversed — and is exactly what should be swept up now.
+  -- Claim everything eligible up to the end of the period. No lower bound:
+  -- anything older than this period is either already claimed by the run that
+  -- took it, or was deliberately released back — deferred, failed or reversed —
+  -- and is exactly what should be swept up now. THAT RELEASE IS THE ROLLOVER.
   update public.allocations a
      set settlement_run_id = v_run.id, status = 'SETTLING'
     from public.orders o
@@ -3437,10 +4128,10 @@ begin
      and a.settlement_run_id is null
      and o.created_at < p_period_end;
 
-  -- Below the threshold a transfer costs more in fees than it moves. The claim
-  -- is released in the same transaction that took it, so the money is never
-  -- attached to a payout that will not be sent, and shows up as owed again the
-  -- moment this function returns.
+  -- Below the threshold the money stays owed. The claim is released in the same
+  -- transaction that took it, so nothing is ever attached to a payout that will
+  -- not be sent, and it shows up as owed again the moment this function
+  -- returns. It is not lost, not reset, and not paid.
   select count(*)::integer as payees, coalesce(sum(owed), 0)::bigint as pesewas
     into v_deferred
     from (
@@ -3556,6 +4247,103 @@ $$;
 ALTER FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid", "p_destination_note" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_order    public.orders%rowtype;
+  v_cfg      public.pricing_config%rowtype;
+  v_delivery bigint := 0;
+  v_earnings bigint := 0;
+  v_zone     uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+
+  if not found or v_order.customer_id <> auth.uid() then
+    raise exception 'that is not your order' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_fulfilment_type is null then
+    raise exception 'choose pickup or delivery' using errcode = 'check_violation';
+  end if;
+
+  select * into v_cfg from public.pricing_config where id;
+
+  if p_fulfilment_type = 'DELIVERY' then
+    if p_destination_location_id is null then
+      raise exception 'delivery orders require a destination' using errcode = 'check_violation';
+    end if;
+    if not exists (
+      select 1 from public.locations
+       where id = p_destination_location_id and is_deliverable and is_active
+    ) then
+      raise exception 'destination is not a valid delivery location'
+        using errcode = 'check_violation';
+    end if;
+
+    v_delivery := v_cfg.delivery_fee_pesewas;
+    v_earnings := (v_delivery * v_cfg.partner_share_of_delivery_bps) / 10000;
+    v_zone     := public.location_zone(p_destination_location_id);
+  end if;
+
+  update public.orders o
+     set fulfilment_type          = p_fulfilment_type,
+         destination_location_id  = case when p_fulfilment_type = 'DELIVERY'
+                                         then p_destination_location_id end,
+         destination_note         = case when p_fulfilment_type = 'DELIVERY'
+                                         then nullif(btrim(coalesce(p_destination_note, '')), '') end,
+         destination_zone_id      = v_zone,
+         delivery_fee_pesewas     = v_delivery,
+         partner_earnings_pesewas = v_earnings,
+         total_pesewas            = o.subtotal_pesewas + o.service_fee_pesewas + v_delivery
+   where o.id = p_order_id
+     and o.customer_id = auth.uid()
+     and o.order_status = 'ACCEPTED'
+     and o.payment_status in ('UNPAID', 'FAILED')
+     and o.order_type = 'FOOD'
+  returning * into v_order;
+
+  if not found then
+    perform public.log_order_event(p_order_id, 'FULFILMENT_CHOSEN', false, 'CUSTOMER',
+      null, null, p_fulfilment_type::text,
+      'order was not an accepted, unpaid food order');
+    return row(false, 'this order is past the point of choosing')::public.transition_result;
+  end if;
+
+  if p_fulfilment_type = 'PICKUP' then
+    update public.order_secrets
+       set pickup_code = public.generate_numeric_code(4),
+           pickup_code_version = pickup_code_version + 1,
+           pickup_code_set_at = now()
+     where order_secrets.order_id = p_order_id;
+  else
+    -- Switching back to delivery kills any collection code that was issued.
+    update public.order_secrets
+       set pickup_code = null,
+           pickup_code_version = pickup_code_version + 1,
+           pickup_code_set_at = null
+     where order_secrets.order_id = p_order_id;
+  end if;
+
+  perform public.log_order_event(p_order_id, 'FULFILMENT_CHOSEN', true, 'CUSTOMER',
+    null, null, p_fulfilment_type::text, null,
+    jsonb_build_object(
+      'delivery_fee_pesewas', v_delivery,
+      'total_pesewas', v_order.total_pesewas));
+
+  return row(true, null)::public.transition_result;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."customer_collect_instead"("p_order_id" "uuid") RETURNS "public"."transition_result"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3575,6 +4363,12 @@ begin
   if not found then
     return row(false, 'this order cannot be collected right now')::public.transition_result;
   end if;
+
+  update public.order_secrets
+     set pickup_code = public.generate_numeric_code(4),
+         pickup_code_version = pickup_code_version + 1,
+         pickup_code_set_at = now()
+   where order_secrets.order_id = p_order_id;
 
   perform public.log_order_event(p_order_id, 'CUSTOMER_WILL_COLLECT', true, 'CUSTOMER',
     'delivery_status', 'SEARCHING', 'NONE',
@@ -3660,13 +4454,13 @@ $$;
 ALTER FUNCTION "public"."customer_keep_waiting"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."customer_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_name" "text", "stage" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "destination" "text", "destination_note" "text", "submitted_at" timestamp with time zone, "seconds_to_deadline" integer, "accepted_at" timestamp with time zone, "ready_at" timestamp with time zone, "completed_at" timestamp with time zone, "cancellation_reason" "text", "payment_id" "uuid", "payment_txn_status" "public"."payment_txn_status", "partner_name" "text", "partner_phone" "text", "delivery_code" "text", "disputed" boolean, "dispute_reason" "text", "items" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."customer_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_name" "text", "vendor_location" "text", "stage" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "order_type" "public"."order_type", "subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "destination" "text", "destination_note" "text", "submitted_at" timestamp with time zone, "seconds_to_deadline" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "assigned_at" timestamp with time zone, "picked_up_at" timestamp with time zone, "completed_at" timestamp with time zone, "cancellation_reason" "text", "payment_id" "uuid", "payment_txn_status" "public"."payment_txn_status", "partner_name" "text", "partner_phone" "text", "delivery_code" "text", "pickup_code" "text", "disputed" boolean, "dispute_reason" "text", "can_rate_partner" boolean, "rated_stars" smallint, "items" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select o.id, o.order_number, v.name,
-         public.customer_order_stage(o.order_status, o.payment_status, o.delivery_status),
-         o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type,
+  select o.id, o.order_number, v.name, public.location_path(v.location_id),
+         public.customer_order_stage(o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type),
+         o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type, o.order_type,
          o.subtotal_pesewas, o.service_fee_pesewas, o.delivery_fee_pesewas, o.total_pesewas,
          case when o.fulfilment_type = 'DELIVERY'
               then public.location_path(o.destination_location_id) end,
@@ -3674,21 +4468,31 @@ CREATE OR REPLACE FUNCTION "public"."customer_order_detail"("p_order_id" "uuid")
          o.submitted_at,
          case when o.accept_deadline_at is not null
               then extract(epoch from (o.accept_deadline_at - now()))::integer end,
-         o.accepted_at, o.ready_at, o.completed_at, o.cancellation_reason,
+         o.accepted_at, o.preparing_at, o.ready_at,
+         o.assigned_at, o.picked_up_at, o.completed_at, o.cancellation_reason,
          (select p.id from public.payments p
            where p.order_id = o.id and p.status in ('PENDING', 'SUCCEEDED')
            order by p.created_at desc limit 1),
          (select p.status from public.payments p
            where p.order_id = o.id and p.status in ('PENDING', 'SUCCEEDED')
            order by p.created_at desc limit 1),
-         -- Only while a Partner is actually carrying this order.
-         case when o.delivery_status in ('ASSIGNED', 'PICKED_UP') then pu.full_name end,
+         -- THE PARTNER'S FIRST NAME, and only while they are carrying it. Once
+         -- the rating prompt is up the name is gone: the prompt says "your
+         -- Partner", because who it was is no longer the customer's business.
+         case when o.delivery_status in ('ASSIGNED', 'PICKED_UP')
+              then public.given_name(pu.first_name, pu.full_name) end,
          case when o.delivery_status in ('ASSIGNED', 'PICKED_UP') then pu.phone end,
-         -- The code the customer reads out on arrival. Shown from assignment,
-         -- and withheld once the delivery is over — it has no further use.
          case when o.delivery_status in ('ASSIGNED', 'PICKED_UP') then s.delivery_code end,
+         case when o.fulfilment_type = 'PICKUP' and o.payment_status = 'PAID'
+                   and o.order_status in ('PREPARING', 'READY')
+              then s.pickup_code end,
          o.disputed_at is not null and o.dispute_resolved_at is null,
          o.dispute_reason,
+         o.order_status = 'COMPLETED'
+           and o.delivery_status = 'DELIVERED'
+           and o.partner_id is not null
+           and rt.order_id is null,
+         rt.stars,
          coalesce(
            (select jsonb_agg(jsonb_build_object(
                      'name', oi.name_snapshot,
@@ -3701,6 +4505,7 @@ CREATE OR REPLACE FUNCTION "public"."customer_order_detail"("p_order_id" "uuid")
     join public.vendors v on v.id = o.vendor_id
     left join public.users pu on pu.id = o.partner_id
     left join public.order_secrets s on s.order_id = o.id
+    left join public.partner_ratings rt on rt.order_id = o.id
    where o.id = p_order_id
      and o.customer_id = auth.uid()
      and o.order_status <> 'DRAFT';
@@ -3715,7 +4520,7 @@ CREATE OR REPLACE FUNCTION "public"."customer_order_list"("p_limit" integer DEFA
     SET "search_path" TO ''
     AS $$
   select o.id, o.order_number, v.name,
-         public.customer_order_stage(o.order_status, o.payment_status, o.delivery_status),
+         public.customer_order_stage(o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type),
          o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type,
          (select count(*) from public.order_items oi where oi.order_id = o.id),
          o.total_pesewas, o.submitted_at,
@@ -3733,18 +4538,21 @@ $$;
 ALTER FUNCTION "public"."customer_order_list"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status" DEFAULT 'NONE'::"public"."delivery_status") RETURNS "text"
+CREATE OR REPLACE FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status" DEFAULT 'NONE'::"public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type" DEFAULT NULL::"public"."fulfilment_type") RETURNS "text"
     LANGUAGE "sql" IMMUTABLE
     AS $$
   select case
     when p_order_status = 'SUBMITTED'                                 then 'AWAITING_VENDOR'
+    -- Accepted, and the customer still has to say how they want it. This is the
+    -- screen the whole reordering exists for.
+    when p_order_status = 'ACCEPTED' and p_fulfilment_type is null
+     and p_payment_status = 'UNPAID'                                  then 'CHOOSE_FULFILMENT'
     when p_order_status = 'ACCEPTED' and p_payment_status = 'UNPAID'   then 'PAYMENT_REQUIRED'
     when p_order_status = 'ACCEPTED' and p_payment_status = 'FAILED'   then 'PAYMENT_FAILED'
     when p_order_status = 'ACCEPTED' and p_payment_status = 'PENDING'  then 'PAYMENT_PROCESSING'
     when p_order_status = 'ACCEPTED'                                  then 'PAID_AWAITING_KITCHEN'
     when p_order_status = 'PREPARING'                                 then 'PREPARING'
 
-    -- Once the food is READY, what matters to the customer is the delivery.
     when p_order_status = 'READY' and p_delivery_status = 'SEARCHING'         then 'SEARCHING_PARTNER'
     when p_order_status = 'READY' and p_delivery_status = 'ASSIGNED'          then 'PARTNER_ASSIGNED'
     when p_order_status = 'READY' and p_delivery_status = 'PICKED_UP'         then 'ON_THE_WAY'
@@ -3760,7 +4568,70 @@ CREATE OR REPLACE FUNCTION "public"."customer_order_stage"("p_order_status" "pub
 $$;
 
 
-ALTER FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status") OWNER TO "postgres";
+ALTER FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."customer_rate_partner"("p_order_id" "uuid", "p_stars" smallint, "p_comment" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_order public.orders%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  select * into v_order from public.orders
+   where id = p_order_id and customer_id = auth.uid();
+
+  -- AUTHORISATION failure: raise. A wrong order id and somebody else's order
+  -- get the same message, so probing tells the caller nothing.
+  if not found then
+    raise exception 'that is not your order' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_stars is null or p_stars < 1 or p_stars > 5 then
+    raise exception 'choose between one and five stars' using errcode = 'check_violation';
+  end if;
+
+  -- STATE failures return, so the caller can be told which one it was without
+  -- a rejected rating rolling back anything.
+  if v_order.partner_id is null then
+    return row(false, 'no Partner brought this order')::public.transition_result;
+  end if;
+  if v_order.order_status <> 'COMPLETED' or v_order.delivery_status <> 'DELIVERED' then
+    return row(false, 'you can rate a delivery once it is complete')::public.transition_result;
+  end if;
+
+  -- The Partner comes from the ORDER. Nothing the caller sent decides who is
+  -- being rated.
+  insert into public.partner_ratings (order_id, partner_id, customer_id, stars, comment)
+  values (p_order_id, v_order.partner_id, auth.uid(), p_stars,
+          nullif(btrim(coalesce(p_comment, '')), ''))
+  on conflict (order_id) do nothing;
+
+  if not found then
+    return row(false, 'you have already rated this delivery')::public.transition_result;
+  end if;
+
+  return row(true, null)::public.transition_result;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."customer_rate_partner"("p_order_id" "uuid", "p_stars" smallint, "p_comment" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."customer_reward_milestones"() RETURNS integer[]
+    LANGUAGE "sql" IMMUTABLE
+    AS $$ select array[25, 40, 50]::integer[]; $$;
+
+
+ALTER FUNCTION "public"."customer_reward_milestones"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."customer_reward_milestones"() IS 'The marks on the progress bar, ascending. The LAST one is the goal — reaching it is what creates a customer_rewards row.';
 
 
 CREATE OR REPLACE FUNCTION "public"."deliverable_locations"() RETURNS TABLE("location_id" "uuid", "path" "text", "zone" "text")
@@ -3974,6 +4845,28 @@ $$;
 ALTER FUNCTION "public"."forbid_mutation"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."fulfilment_options"("p_order_id" "uuid") RETURNS TABLE("fulfilment_type" "public"."fulfilment_type", "delivery_fee_pesewas" bigint, "total_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select f.fulfilment_type,
+         case when f.fulfilment_type = 'DELIVERY' then c.delivery_fee_pesewas else 0 end,
+         o.subtotal_pesewas + o.service_fee_pesewas
+           + case when f.fulfilment_type = 'DELIVERY' then c.delivery_fee_pesewas else 0 end
+    from public.orders o
+    cross join public.pricing_config c
+    cross join (values ('PICKUP'::public.fulfilment_type), ('DELIVERY'::public.fulfilment_type))
+                 as f(fulfilment_type)
+   where o.id = p_order_id
+     and o.customer_id = auth.uid()
+     and c.id
+   order by f.fulfilment_type;
+$$;
+
+
+ALTER FUNCTION "public"."fulfilment_options"("p_order_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."generate_numeric_code"("p_digits" integer DEFAULT 4) RETURNS "text"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3999,19 +4892,16 @@ CREATE OR REPLACE FUNCTION "public"."get_delivery_offers"() RETURNS TABLE("order
     SET "search_path" TO ''
     AS $$
   select
-    o.id,
-    o.order_number,
-    v.name,
-    public.location_path(v.location_id),
+    o.id, o.order_number, v.name, public.location_path(v.location_id),
+    -- ZONE, not the room. Every available Partner sees this list, and a student's
+    -- room number is not something to broadcast to a pool of people who have not
+    -- been given the job yet. The exact destination arrives with the assignment.
     coalesce(z.name, 'Campus'),
-    -- NULL when either leg is unknown: an estimate is omitted, never invented.
     case when v.walk_minutes_to_campus is not null and z.walk_minutes is not null
          then v.walk_minutes_to_campus + z.walk_minutes end,
     o.partner_earnings_pesewas,
     (select count(*) from public.order_items oi where oi.order_id = o.id),
     o.ready_at,
-    -- A food order reaches this list only after the vendor said READY. A scan
-    -- order reaches it on payment, and the food does not exist yet.
     (o.order_type = 'FOOD'),
     o.order_type
   from public.orders o
@@ -4020,27 +4910,20 @@ CREATE OR REPLACE FUNCTION "public"."get_delivery_offers"() RETURNS TABLE("order
   where o.delivery_status = 'SEARCHING'
     and o.order_status = 'READY'
     and o.payment_status = 'PAID'
-    -- The caller must be a dispatchable Partner...
     and public.is_approved_partner()
     and exists (
       select 1 from public.partner_profiles p
        where p.user_id = auth.uid() and p.is_available
     )
-    -- ...with no active delivery. One at a time in V1.
-    and not exists (
-      select 1 from public.orders a
+    -- TWO AT A TIME. A Partner already carrying two is shown nothing, rather
+    -- than shown offers that would be refused on acceptance.
+    and (
+      select count(*) from public.orders a
        where a.partner_id = auth.uid()
          and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
-    )
-    -- CONFLICT OF INTEREST 1: never your own order. Applies to scan orders
-    -- exactly as it does to food — you do not run your own errand for a fee.
+    ) < 2
     and o.customer_id <> auth.uid()
-    -- CONFLICT OF INTEREST 2: never a vendor you work for. A scan order names
-    -- the restaurant in the same column, so this needs no special case.
-    and not exists (
-      select 1 from public.vendor_users vu
-       where vu.vendor_id = o.vendor_id and vu.user_id = auth.uid()
-    )
+    and v.owner_user_id is distinct from auth.uid()
   order by o.ready_at asc;
 $$;
 
@@ -4083,11 +4966,14 @@ begin
     from public.order_secrets s
     join public.orders o on o.id = s.order_id
    where s.order_id = p_order_id
-     and o.partner_id = auth.uid()
-     and o.delivery_status in ('ASSIGNED', 'PICKED_UP');
+     and o.customer_id = auth.uid()
+     -- Only for an order they are actually collecting. A delivery order's
+     -- pickup code belongs to the vendor and the Partner, never to them.
+     and o.fulfilment_type = 'PICKUP'
+     and o.payment_status = 'PAID';
 
   if v_code is null then
-    raise exception 'no pickup code available for you on this order'
+    raise exception 'no collection code available for you on this order'
       using errcode = 'insufficient_privilege';
   end if;
   return v_code;
@@ -4098,12 +4984,29 @@ $$;
 ALTER FUNCTION "public"."get_my_pickup_code"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select coalesce(
+    nullif(btrim(coalesce(p_first, '')), ''),
+    nullif(split_part(btrim(coalesce(p_full, '')), ' ', 1), '')
+  );
+$$;
+
+
+ALTER FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") IS 'The first name to show, falling back to the first word of a legacy full_name. One definition, so every screen calls the same person the same thing.';
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_auth_user_phone_confirmed"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 begin
-  if new.phone_confirmed_at is not null and old.phone_confirmed_at is null then
+  if (new.phone_confirmed_at is not null and old.phone_confirmed_at is null)
+     or (new.email_confirmed_at is not null and old.email_confirmed_at is null) then
     perform public.handle_new_auth_user_for(new.id);
   end if;
   return new;
@@ -4114,6 +5017,9 @@ $$;
 ALTER FUNCTION "public"."handle_auth_user_phone_confirmed"() OWNER TO "postgres";
 
 
+COMMENT ON FUNCTION "public"."handle_auth_user_phone_confirmed"() IS 'Provisions public.users when a contact detail is CONFIRMED — a phone for a vendor, an address for a customer. Named for the phone case it was written for; it has handled both since email sign-in arrived. Only confirmation provisions: GoTrue inserts the auth.users row when a code is first requested, and creating a profile then would let anyone claim an address or a number they do not own simply by asking for a code.';
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -4121,28 +5027,26 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user"() RETURNS "trigger"
 declare
   v_phone text;
 begin
-  -- Only CONFIRMED phones get a profile. GoTrue inserts the auth.users row when
-  -- an OTP is first requested, before the number is proven — creating a profile
-  -- then would let anyone claim a phone number they do not own simply by asking
-  -- for a code. The real flow provisions via the phone-confirmed trigger below.
-  if new.phone_confirmed_at is null then
+  -- Only CONFIRMED contact details get a profile. GoTrue inserts the auth.users
+  -- row when a code is first requested, before anything is proven — creating a
+  -- profile then would let anyone claim a phone number or address they do not
+  -- own simply by asking for a code.
+  if new.phone_confirmed_at is null and new.email_confirmed_at is null then
     return new;
   end if;
 
   -- GoTrue stores phone numbers without the leading '+'. Our E.164 check
   -- requires it.
-  v_phone := new.phone;
-  if v_phone is null or v_phone = '' then
-    return new;  -- email-only account (admin tooling); no customer profile yet
-  end if;
-  if left(v_phone, 1) <> '+' then
+  v_phone := nullif(new.phone, '');
+  if v_phone is not null and left(v_phone, 1) <> '+' then
     v_phone := '+' || v_phone;
   end if;
 
-  insert into public.users (id, phone, full_name)
+  insert into public.users (id, phone, email, full_name)
   values (
     new.id,
-    v_phone,
+    case when new.phone_confirmed_at is not null then v_phone end,
+    case when new.email_confirmed_at is not null then lower(nullif(new.email, '')) end,
     nullif(btrim(coalesce(new.raw_user_meta_data ->> 'full_name', '')), '')
   )
   on conflict (id) do nothing;
@@ -4160,22 +5064,29 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user_for"("p_user_id" "uuid
     SET "search_path" TO ''
     AS $$
 declare
-  v_user auth.users%rowtype;
+  v_user  auth.users%rowtype;
   v_phone text;
 begin
   select * into v_user from auth.users where id = p_user_id;
-  if not found or v_user.phone is null or v_user.phone = '' then
+  if not found then
+    return;
+  end if;
+  if v_user.phone_confirmed_at is null and v_user.email_confirmed_at is null then
     return;
   end if;
 
-  v_phone := v_user.phone;
-  if left(v_phone, 1) <> '+' then
+  v_phone := nullif(v_user.phone, '');
+  if v_phone is not null and left(v_phone, 1) <> '+' then
     v_phone := '+' || v_phone;
   end if;
 
-  insert into public.users (id, phone, full_name)
-  values (p_user_id, v_phone,
-          nullif(btrim(coalesce(v_user.raw_user_meta_data ->> 'full_name', '')), ''))
+  insert into public.users (id, phone, email, full_name)
+  values (
+    p_user_id,
+    case when v_user.phone_confirmed_at is not null then v_phone end,
+    case when v_user.email_confirmed_at is not null then lower(nullif(v_user.email, '')) end,
+    nullif(btrim(coalesce(v_user.raw_user_meta_data ->> 'full_name', '')), '')
+  )
   on conflict (id) do nothing;
 end;
 $$;
@@ -4514,28 +5425,35 @@ CREATE OR REPLACE FUNCTION "public"."my_capabilities"() RETURNS "jsonb"
         'user_id',          u.id,
         'phone',            u.phone,
         'full_name',        u.full_name,
+        'first_name',       public.given_name(u.first_name, u.full_name),
+        'last_name',        u.last_name,
         'email',            u.email,
         'is_suspended',     u.is_suspended,
         'is_admin',         u.is_admin,
 
-        -- CUSTOMER: a completed onboarding, not merely an account.
         'is_customer',      (c.user_id is not null) and not u.is_suspended,
         'can_order',        (c.user_id is not null) and not u.is_suspended,
         'customer_status',  case when c.user_id is not null then 'ONBOARDED'
                                  else 'NOT_ONBOARDED' end,
         'student_id_number', c.student_id_number,
-        'class_year',       c.class_year,
+        'level',            c.level,
 
-        -- PARTNER: the same identity, one capability further on.
         'partner_status',   coalesce(p.status::text, 'NOT_APPLIED'),
         'is_partner',       coalesce(p.status = 'APPROVED', false) and not u.is_suspended,
         'partner_available', coalesce(p.is_available, false),
 
-        -- VENDOR: a business the account may operate. Never a customer grant.
         'vendor_ids',       coalesce(
-                              (select jsonb_agg(vu.vendor_id)
-                                 from public.vendor_users vu where vu.user_id = u.id),
-                              '[]'::jsonb)
+                              (select jsonb_agg(v.id)
+                                 from public.vendors v
+                                where v.owner_user_id = u.id
+                                  and v.status = 'ACTIVE'
+                                  and not u.is_suspended),
+                              '[]'::jsonb),
+        'vendor_status',    coalesce(
+                              (select v.status::text from public.vendors v
+                                where v.owner_user_id = u.id),
+                              'NOT_APPLIED'),
+        'vendor_id',        (select v.id from public.vendors v where v.owner_user_id = u.id)
       )
       from public.users u
       left join public.customer_profiles c on c.user_id = u.id
@@ -4549,13 +5467,11 @@ $$;
 ALTER FUNCTION "public"."my_capabilities"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."my_customer_profile"() RETURNS TABLE("student_id_number" "text", "class_year" "text", "has_student_id" boolean, "onboarded_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."my_customer_profile"() RETURNS TABLE("student_id_number" "text", "level" "text", "onboarded_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select c.student_id_number, c.class_year,
-         nullif(btrim(c.student_id_image_path), '') is not null,
-         c.onboarded_at
+  select c.student_id_number, c.level, c.onboarded_at
     from public.customer_profiles c
    where c.user_id = auth.uid();
 $$;
@@ -4573,7 +5489,7 @@ CREATE OR REPLACE FUNCTION "public"."my_outstanding_terms"() RETURNS TABLE("audi
      where exists (select 1 from public.customer_profiles c where c.user_id = auth.uid())
     union all
     select 'VENDOR'::public.terms_audience
-     where exists (select 1 from public.vendor_users vu where vu.user_id = auth.uid())
+     where exists (select 1 from public.vendors v where v.owner_user_id = auth.uid())
     union all
     select 'PARTNER'::public.terms_audience
      where exists (
@@ -4605,7 +5521,7 @@ CREATE OR REPLACE FUNCTION "public"."my_partner_application"() RETURNS TABLE("st
     SET "search_path" TO ''
     AS $$
   select p.status, p.applied_at, p.reviewed_at, p.review_notes, p.is_available,
-         nullif(btrim(coalesce(p.face_image_path, '')), '') is not null
+         nullif(btrim(coalesce(p.student_id_image_path, '')), '') is not null
     from public.partner_profiles p
    where p.user_id = auth.uid();
 $$;
@@ -4614,25 +5530,114 @@ $$;
 ALTER FUNCTION "public"."my_partner_application"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."my_payout_destination"() RETURNS TABLE("momo_network" "text", "account_number" "text", "account_name" "text", "is_ready" boolean)
+CREATE OR REPLACE FUNCTION "public"."my_partner_payouts"("p_limit" integer DEFAULT 20) RETURNS TABLE("payout_id" "uuid", "amount_pesewas" bigint, "status" "text", "period_start" timestamp with time zone, "period_end" timestamp with time zone, "created_at" timestamp with time zone, "paid_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select d.momo_network, d.account_number, d.account_name,
-         d.provider_recipient_code is not null
+  select p.id, p.amount_pesewas,
+         case p.status
+           when 'PAID' then 'PAID'
+           when 'REVERSED' then 'RETURNED'
+           -- PENDING, PROCESSING and FAILED all read as "being processed": a
+           -- failed transfer releases the money back into the next run, so from
+           -- the Partner's side nothing has gone wrong and nothing is lost.
+           else 'PROCESSING'
+         end,
+         r.period_start, r.period_end, p.created_at, p.paid_at
+    from public.payouts p
+    left join public.settlement_runs r on r.id = p.settlement_run_id
+   where p.payee_type = 'PARTNER' and p.payee_id = auth.uid()
+   order by p.created_at desc
+   limit least(coalesce(p_limit, 20), 100);
+$$;
+
+
+ALTER FUNCTION "public"."my_partner_payouts"("p_limit" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."my_partner_rating"() RETURNS TABLE("rating_count" bigint, "average_stars" numeric, "last_rated_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select count(*), round(avg(r.stars), 2), max(r.created_at)
+    from public.partner_ratings r
+   where r.partner_id = auth.uid();
+$$;
+
+
+ALTER FUNCTION "public"."my_partner_rating"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."my_partner_rating"() IS 'A Partner''s own average. An aggregate on purpose: a Partner who could read individual rows could work out who left which one.';
+
+
+CREATE OR REPLACE FUNCTION "public"."my_payout_destination"() RETURNS TABLE("payee_type" "public"."payee_type", "payee_id" "uuid", "momo_network" "text", "account_last3" "text", "account_name" "text", "transfers_ready" boolean, "split_ready" boolean, "setup_error" "text", "updated_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select d.payee_type, d.payee_id,
+         d.momo_network, right(d.account_number, 3), d.account_name,
+         d.provider_recipient_code is not null,
+         d.provider_subaccount_code is not null,
+         d.subaccount_error,
+         d.updated_at
     from public.payout_destinations d
-   where d.payee_type = 'PARTNER' and d.payee_id = auth.uid();
+   where (d.payee_type = 'PARTNER' and d.payee_id = auth.uid())
+      or (d.payee_type = 'VENDOR'
+          and exists (select 1 from public.vendors v
+                       where v.id = d.payee_id and v.owner_user_id = auth.uid()))
+   order by d.payee_type;
 $$;
 
 
 ALTER FUNCTION "public"."my_payout_destination"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."my_scan_order"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "scan_status" "public"."scan_status", "uploaded_at" timestamp with time zone, "released_at" timestamp with time zone, "redeemed_at" timestamp with time zone, "refused_at" timestamp with time zone, "refusal_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."my_reward_progress"() RETURNS TABLE("completed_orders" integer, "goal_orders" integer, "milestones" integer[], "milestones_reached" integer[], "next_milestone" integer, "orders_to_next" integer, "reward_unlocked" boolean, "reward_unlocked_at" timestamp with time zone, "reward_status" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select s.order_id, o.scan_status, s.uploaded_at, s.released_at,
+  with counted as (
+    select (select count(*)::integer from public.orders o
+             where o.customer_id = auth.uid() and o.order_status = 'COMPLETED') as done,
+           public.customer_reward_milestones() as marks
+  ),
+  shaped as (
+    select done, marks,
+           marks[array_length(marks, 1)] as goal,
+           array(select m from unnest(marks) m where m <= done order by m) as reached,
+           (select min(m) from unnest(marks) m where m > done) as next
+      from counted
+  ),
+  latest as (
+    select r.unlocked_at, r.status
+      from public.customer_rewards r
+     where r.user_id = auth.uid()
+     order by r.cycle desc
+     limit 1
+  )
+  select s.done, s.goal, s.marks, s.reached, s.next,
+         case when s.next is not null then s.next - s.done end,
+         l.unlocked_at is not null,
+         l.unlocked_at,
+         l.status
+    from shaped s
+    left join latest l on true
+   where auth.uid() is not null;
+$$;
+
+
+ALTER FUNCTION "public"."my_reward_progress"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."my_reward_progress"() IS 'The customer''s own progress towards the order goal. Counts COMPLETED orders and nothing else, so there is no second number that can disagree with the order list.';
+
+
+CREATE OR REPLACE FUNCTION "public"."my_scan_order"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "scan_status" "public"."scan_status", "details" "text", "uploaded_at" timestamp with time zone, "released_at" timestamp with time zone, "redeemed_at" timestamp with time zone, "refused_at" timestamp with time zone, "refusal_reason" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select s.order_id, o.scan_status, s.details, s.uploaded_at, s.released_at,
          s.redeemed_at, s.refused_at, s.refusal_reason
     from public.order_scans s
     join public.orders o on o.id = s.order_id
@@ -4644,14 +5649,32 @@ $$;
 ALTER FUNCTION "public"."my_scan_order"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "status" "public"."vendor_status", "description" "text", "category_id" "uuid", "category_name" "text", "applicant_name" "text", "owner_is_student" boolean, "is_accepting_orders" boolean, "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "location_id" "uuid", "location_note" "text", "walk_minutes_to_campus" integer, "can_accept_scans" boolean)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select v.id, v.name, v.status, v.description, v.category_id, k.name,
+         v.applicant_name, v.owner_is_student, v.is_accepting_orders,
+         v.rejection_reason, v.submitted_at, v.reviewed_at,
+         v.location_id, v.location_note, v.walk_minutes_to_campus,
+         v.can_accept_scans
+    from public.vendors v
+    left join public.vendor_categories k on k.id = v.category_id
+   where v.owner_user_id = auth.uid();
+$$;
+
+
+ALTER FUNCTION "public"."my_vendor_application"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."my_vendor_ids"() RETURNS SETOF "uuid"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select vu.vendor_id
-    from public.vendor_users vu
-    join public.users u on u.id = vu.user_id
-   where vu.user_id = auth.uid() and not u.is_suspended;
+  select v.id
+    from public.vendors v
+    join public.users u on u.id = v.owner_user_id
+   where v.owner_user_id = auth.uid() and not u.is_suspended;
 $$;
 
 
@@ -4706,32 +5729,61 @@ $$;
 ALTER FUNCTION "public"."notification_events_append_only"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") RETURNS TABLE("success" boolean, "reason" "text", "order_number" "text", "pickup_code" "text", "vendor_name" "text")
+CREATE OR REPLACE FUNCTION "public"."orders_award_customer_reward"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_goal      integer;
+  v_completed integer;
+  v_cycle     integer;
+begin
+  v_goal := (public.customer_reward_milestones())[array_length(public.customer_reward_milestones(), 1)];
+
+  select count(*) into v_completed
+    from public.orders
+   where customer_id = new.customer_id
+     and order_status = 'COMPLETED';
+
+  v_cycle := v_completed / v_goal;
+  if v_cycle < 1 then
+    return null;
+  end if;
+
+  -- ON CONFLICT DO NOTHING is the duplicate guard, and it is the unique index
+  -- doing the work rather than a read-then-write that two concurrent
+  -- completions could both pass.
+  insert into public.customer_rewards (user_id, cycle, goal_orders, completed_orders_at_unlock)
+  values (new.customer_id, v_cycle, v_goal, v_completed)
+  on conflict (user_id, cycle) do nothing;
+
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."orders_award_customer_reward"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") RETURNS TABLE("success" boolean, "reason" "text", "order_number" "text", "vendor_name" "text")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
   v_partner uuid := auth.uid();
   v_order   public.orders%rowtype;
-  v_code    text;
+  v_slot    smallint;
+  v_max     smallint;
+  v_full    text;
 begin
   if v_partner is null then
     raise exception 'authentication required' using errcode = 'insufficient_privilege';
   end if;
 
-  -- Authorisation failure: raise. Not a routine outcome.
-  --
-  -- FIRST, and it must stay first: somebody who is not a Partner at all is told
-  -- that, rather than being told about a conflict they could not have had.
   if not public.is_approved_partner() then
     raise exception 'partner is not approved' using errcode = 'insufficient_privilege';
   end if;
 
-  -- CONFLICT OF INTEREST. Also authorisation failures, so also raised: this is
-  -- a Partner attempting something policy forbids, not one losing a race.
-  --
-  -- Neither message tells the caller anything they did not already know — that
-  -- an order is theirs, or that they work for a vendor.
   if exists (
     select 1 from public.orders o
      where o.id = p_order_id and o.customer_id = v_partner
@@ -4741,82 +5793,101 @@ begin
   end if;
 
   if exists (
-    select 1
-      from public.orders o
-      join public.vendor_users vu on vu.vendor_id = o.vendor_id
-     where o.id = p_order_id and vu.user_id = v_partner
+    select 1 from public.orders o
+      join public.vendors v on v.id = o.vendor_id
+     where o.id = p_order_id and v.owner_user_id = v_partner
   ) then
-    raise exception 'you cannot deliver an order from a vendor you work for'
+    raise exception 'you cannot deliver an order from a store you own'
       using errcode = 'insufficient_privilege';
   end if;
 
-  v_code := public.generate_numeric_code(4);
+  select max_active_deliveries_per_partner into v_max from public.pricing_config where id;
+  v_max := coalesce(v_max, 2);
 
-  -- THE ATOMIC CLAIM.
-  --
-  -- A single statement checks every eligibility rule in its WHERE clause and
-  -- claims the row in the same breath. Postgres serialises the two racing
-  -- UPDATEs on the row lock; the loser re-evaluates the WHERE against the
-  -- winner's committed state, sees delivery_status is no longer SEARCHING, and
-  -- matches zero rows.
-  --
-  -- The one-active-delivery rule is belt AND braces: this NOT EXISTS plus the
-  -- partial unique index orders_one_active_delivery_per_partner, which would
-  -- reject a second claim even if this predicate were somehow bypassed.
-  --
-  -- The two conflict rules are repeated here for the same reason. The checks
-  -- above ran in an earlier statement; a staff row inserted in between would
-  -- otherwise slip through the gap.
-  update public.orders o
-     set partner_id = v_partner,
-         delivery_status = 'ASSIGNED',
-         assigned_at = now()
-   where o.id = p_order_id
-     and o.delivery_status = 'SEARCHING'
-     and o.order_status = 'READY'
-     and o.payment_status = 'PAID'
-     and o.partner_id is null
-     and exists (
-       select 1 from public.partner_profiles p
-        where p.user_id = v_partner and p.status = 'APPROVED' and p.is_available
-     )
-     and not exists (
-       select 1 from public.orders a
-        where a.partner_id = v_partner
-          and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
-     )
-     and o.customer_id <> v_partner
-     and not exists (
-       select 1 from public.vendor_users vu
-        where vu.vendor_id = o.vendor_id and vu.user_id = v_partner
-     )
-  returning * into v_order;
+  v_full := case
+    when v_max = 1 then 'You already have an active delivery. Finish it first.'
+    else 'You already have ' || v_max || ' active deliveries. Finish one first.'
+  end;
 
-  -- Losing the race is ROUTINE, so it returns rather than raising. That keeps
-  -- the rejection log committed instead of rolling it back.
+  select s into v_slot
+    from generate_series(1, v_max) s
+   where not exists (
+     select 1 from public.orders a
+      where a.partner_id = v_partner
+        and a.partner_slot = s
+        and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
+   )
+   order by s
+   limit 1;
+
+  if v_slot is null then
+    return query select false, v_full, null::text, null::text;
+    return;
+  end if;
+
+  begin
+    update public.orders o
+       set partner_id = v_partner,
+           partner_slot = v_slot,
+           delivery_status = 'ASSIGNED',
+           assigned_at = now()
+     where o.id = p_order_id
+       and o.delivery_status = 'SEARCHING'
+       and o.order_status = 'READY'
+       and o.payment_status = 'PAID'
+       and o.partner_id is null
+       and exists (
+         select 1 from public.partner_profiles p
+          where p.user_id = v_partner and p.status = 'APPROVED' and p.is_available
+       )
+       and (
+         select count(*) from public.orders a
+          where a.partner_id = v_partner
+            and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
+       ) < v_max
+       and o.customer_id <> v_partner
+       and not exists (
+         select 1 from public.vendors v
+          where v.id = o.vendor_id and v.owner_user_id = v_partner
+       )
+    returning * into v_order;
+  exception
+    when unique_violation then
+      perform public.log_order_event(p_order_id, 'PARTNER_ACCEPT', false, 'PARTNER',
+        'delivery_status', null, 'ASSIGNED', 'partner delivery slot already taken');
+      return query select false, v_full, null::text, null::text;
+      return;
+  end;
+
   if not found then
     perform public.log_order_event(p_order_id, 'PARTNER_ACCEPT', false, 'PARTNER',
       'delivery_status', null, 'ASSIGNED', 'offer already taken or partner ineligible');
     return query select false, 'This delivery has already been taken.'::text,
-                        null::text, null::text, null::text;
+                        null::text, null::text;
     return;
   end if;
 
-  -- Fresh code for this assignment. The version bump is what makes any earlier
-  -- code dead rather than merely unused.
+  -- Fresh codes, and a fresh attempt counter with them. A Partner who inherits
+  -- an order somebody else fumbled starts at zero failures, and the previous
+  -- Partner's lockout does not follow the order around.
   update public.order_secrets
-     set pickup_code = v_code,
+     set pickup_code = public.generate_numeric_code(4),
          pickup_code_version = pickup_code_version + 1,
          pickup_code_set_at = now(),
+         pickup_attempts = 0,
+         pickup_locked_until = null,
          delivery_code = coalesce(delivery_code, public.generate_numeric_code(4)),
-         delivery_code_set_at = coalesce(delivery_code_set_at, now())
+         delivery_code_set_at = coalesce(delivery_code_set_at, now()),
+         delivery_attempts = 0,
+         delivery_locked_until = null
    where order_secrets.order_id = p_order_id;
 
   perform public.log_order_event(p_order_id, 'PARTNER_ACCEPT', true, 'PARTNER',
-    'delivery_status', 'SEARCHING', 'ASSIGNED');
+    'delivery_status', 'SEARCHING', 'ASSIGNED', null,
+    jsonb_build_object('partner_slot', v_slot));
 
   return query
-    select true, null::text, v_order.order_number, v_code, v.name
+    select true, null::text, v_order.order_number, v.name
       from public.vendors v where v.id = v_order.vendor_id;
 end;
 $$;
@@ -4825,12 +5896,13 @@ $$;
 ALTER FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_active_delivery"() RETURNS TABLE("order_id" "uuid", "order_number" "text", "delivery_status" "public"."delivery_status", "vendor_name" "text", "vendor_location" "text", "vendor_phone" "text", "destination_zone" "text", "destination" "text", "destination_note" "text", "customer_name" "text", "customer_phone" "text", "earnings_pesewas" bigint, "item_count" bigint, "assigned_at" timestamp with time zone, "picked_up_at" timestamp with time zone, "customer_absent_reported_at" timestamp with time zone, "seconds_until_absent_allowed" integer, "order_type" "public"."order_type", "scan_status" "public"."scan_status")
+CREATE OR REPLACE FUNCTION "public"."partner_active_delivery"() RETURNS TABLE("order_id" "uuid", "order_number" "text", "partner_slot" smallint, "delivery_status" "public"."delivery_status", "vendor_name" "text", "vendor_location" "text", "vendor_phone" "text", "destination_zone" "text", "destination" "text", "destination_note" "text", "customer_name" "text", "customer_first_name" "text", "customer_phone" "text", "earnings_pesewas" bigint, "item_count" bigint, "assigned_at" timestamp with time zone, "picked_up_at" timestamp with time zone, "customer_absent_reported_at" timestamp with time zone, "seconds_until_absent_allowed" integer, "order_type" "public"."order_type", "scan_status" "public"."scan_status")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
   select o.id,
          o.order_number,
+         o.partner_slot,
          o.delivery_status,
          v.name,
          public.location_path(v.location_id),
@@ -4838,15 +5910,14 @@ CREATE OR REPLACE FUNCTION "public"."partner_active_delivery"() RETURNS TABLE("o
          -- to say they are running late.
          v.phone,
          coalesce(z.name, 'Campus'),
-         -- Released only after the food is actually in hand. For a scan order
-         -- that moment is the redemption report, which is what sets PICKED_UP —
-         -- so the room number is protected by exactly the same condition.
-         case when o.delivery_status in ('PICKED_UP', 'DELIVERED')
-              then public.location_path(o.destination_location_id) end,
-         case when o.delivery_status in ('PICKED_UP', 'DELIVERED')
-              then o.destination_note end,
-         case when o.delivery_status in ('PICKED_UP', 'DELIVERED') then c.full_name end,
-         case when o.delivery_status in ('PICKED_UP', 'DELIVERED') then c.phone end,
+         -- THE EXACT DESTINATION AND THE CUSTOMER'S NUMBER, from assignment.
+         -- A Partner who cannot find a room needs to ring before they are
+         -- holding food that is going cold, not after.
+         public.location_path(o.destination_location_id),
+         o.destination_note,
+         c.full_name,
+         public.given_name(c.first_name, c.full_name),
+         c.phone,
          o.partner_earnings_pesewas,
          (select count(*) from public.order_items oi where oi.order_id = o.id),
          o.assigned_at,
@@ -4868,14 +5939,18 @@ CREATE OR REPLACE FUNCTION "public"."partner_active_delivery"() RETURNS TABLE("o
     join public.users c on c.id = o.customer_id
     left join public.locations z on z.id = o.destination_zone_id
    where o.partner_id = auth.uid()
-     and o.delivery_status in ('ASSIGNED', 'PICKED_UP');
+     -- The window, in the one place it is actually enforced for this screen.
+     -- DELIVERED is absent on purpose: a finished delivery stops showing a
+     -- phone number, and partner_delivery_history never carried one.
+     and o.delivery_status in ('ASSIGNED', 'PICKED_UP')
+   order by o.partner_slot, o.assigned_at;
 $$;
 
 
 ALTER FUNCTION "public"."partner_active_delivery"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_face_image_path" "text") RETURNS "public"."partner_profiles"
+CREATE OR REPLACE FUNCTION "public"."partner_apply"("p_student_id_image_path" "text") RETURNS "public"."partner_profiles"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -4892,21 +5967,21 @@ begin
   end if;
 
   -- PARTNER ⇒ CUSTOMER. The foreign key would refuse this anyway; checking it
-  -- here is what turns a constraint violation into a sentence a person can act
-  -- on. This is an upgrade to an existing account, never a new one.
+  -- here turns a constraint violation into a sentence a person can act on. It
+  -- is also the reason no email verification happens here: holding the CUSTOMER
+  -- capability already means a verified @acity.edu.gh address.
   if not exists (select 1 from public.customer_profiles where user_id = v_user) then
-    raise exception 'complete your student onboarding before applying to be a Partner'
+    raise exception 'finish signing up as a customer before applying to be a Partner'
       using errcode = 'insufficient_privilege';
   end if;
 
-  if nullif(btrim(coalesce(p_face_image_path, '')), '') is null then
-    raise exception 'a live face photograph is required' using errcode = 'check_violation';
+  if nullif(btrim(coalesce(p_student_id_image_path, '')), '') is null then
+    raise exception 'a photograph of your student ID is required'
+      using errcode = 'check_violation';
   end if;
 
   select status into v_status from public.partner_profiles where user_id = v_user;
 
-  -- An approved or suspended Partner does not re-apply; that is an admin
-  -- decision, not a form.
   if v_status = 'APPROVED' then
     raise exception 'you are already an approved Partner' using errcode = 'check_violation';
   end if;
@@ -4916,16 +5991,17 @@ begin
   end if;
 
   insert into public.partner_profiles (
-    user_id, status, face_image_path, is_available, applied_at
+    user_id, status, student_id_image_path, is_available, applied_at
   )
-  values (v_user, 'PENDING_REVIEW', btrim(p_face_image_path), false, now())
+  values (v_user, 'PENDING_REVIEW', btrim(p_student_id_image_path), false, now())
   on conflict (user_id) do update
      set status                = 'PENDING_REVIEW',
-         face_image_path       = excluded.face_image_path,
+         student_id_image_path = excluded.student_id_image_path,
+         -- A re-application clears any photograph a previous one left behind.
+         -- Campus Dash no longer asks for one, so it should not keep one.
+         face_image_path       = null,
          is_available          = false,
          applied_at            = now(),
-         -- A re-application clears the previous decision so the queue shows a
-         -- fresh case rather than a stale rejection.
          reviewed_at           = null,
          reviewed_by           = null,
          review_notes          = null,
@@ -4937,7 +6013,7 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."partner_apply"("p_face_image_path" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."partner_apply"("p_student_id_image_path" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
@@ -4950,6 +6026,7 @@ declare
 begin
   update public.orders o
      set partner_id = null,
+         partner_slot = null,
          delivery_status = 'SEARCHING',
          assigned_at = null
    where o.id = p_order_id
@@ -4984,6 +6061,30 @@ $$;
 ALTER FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."partner_capacity"() RETURNS TABLE("max_active" integer, "active_now" integer, "slots_free" integer)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select c.max_active_deliveries_per_partner::integer,
+         v.live::integer,
+         greatest(0, c.max_active_deliveries_per_partner - v.live)::integer
+    from public.pricing_config c
+    cross join lateral (
+      select count(*)::integer as live
+        from public.orders o
+       where o.partner_id = auth.uid()
+         and o.delivery_status in ('ASSIGNED', 'PICKED_UP')
+    ) v
+   where c.id and auth.uid() is not null;
+$$;
+
+
+ALTER FUNCTION "public"."partner_capacity"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."partner_capacity"() IS 'How many deliveries this Partner may hold and how many they hold now. For display only — partner_accept_delivery() re-checks both, and the unique slot index is what actually enforces the limit.';
+
+
 CREATE OR REPLACE FUNCTION "public"."partner_complete_delivery"("p_order_id" "uuid", "p_delivery_code" "text") RETURNS "public"."transition_result"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -4991,7 +6092,7 @@ CREATE OR REPLACE FUNCTION "public"."partner_complete_delivery"("p_order_id" "uu
 declare
   v_partner  uuid := auth.uid();
   v_order    public.orders%rowtype;
-  v_stored   text;
+  v_check    text;
   v_assigned uuid;
   v_state    public.delivery_status;
 begin
@@ -5000,16 +6101,14 @@ begin
     from public.orders o
    where o.id = p_order_id;
 
-  -- AUTHORISATION failure: raise. Covers the wrong Partner, an order with no
-  -- Partner attached, and an order id that does not exist — all three get the
-  -- same message, so probing tells the caller nothing.
   if v_assigned is null or v_assigned is distinct from v_partner then
     raise exception 'you are not carrying this delivery' using errcode = 'insufficient_privilege';
   end if;
 
   -- STATE failure: the rightful Partner, at the wrong moment. Routine, so it is
   -- logged and returned rather than raised — a replayed completion is evidence,
-  -- and evidence that rolls itself back is no evidence at all.
+  -- and evidence that rolls itself back is no evidence at all. Checked before
+  -- the code, so a replay does not burn an attempt.
   if v_state <> 'PICKED_UP' then
     perform public.log_order_event(p_order_id, 'PARTNER_COMPLETE', false, 'PARTNER',
       'delivery_status', v_state::text, 'DELIVERED',
@@ -5017,10 +6116,16 @@ begin
     return row(false, 'this delivery is not awaiting completion')::public.transition_result;
   end if;
 
-  select delivery_code into v_stored from public.order_secrets where order_id = p_order_id;
+  v_check := public.check_handoff_code(p_order_id, 'DELIVERY', p_delivery_code);
+
+  if v_check = 'LOCKED' then
+    perform public.log_order_event(p_order_id, 'PARTNER_COMPLETE', false, 'PARTNER',
+      'delivery_status', 'PICKED_UP', 'DELIVERED', 'delivery code locked out after repeated failures');
+    return row(false, 'too many wrong codes. Wait a few minutes, then ask for the code again')::public.transition_result;
+  end if;
 
   -- A Partner cannot simply declare "delivered": the customer holds the code.
-  if v_stored is null or p_delivery_code is null or v_stored <> p_delivery_code then
+  if v_check <> 'OK' then
     perform public.log_order_event(p_order_id, 'PARTNER_COMPLETE', false, 'PARTNER',
       'delivery_status', 'PICKED_UP', 'DELIVERED', 'delivery code did not match');
     return row(false, 'delivery code does not match')::public.transition_result;
@@ -5104,6 +6209,76 @@ $$;
 ALTER FUNCTION "public"."partner_confirm_customer_absent"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."partner_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_partner  uuid := auth.uid();
+  v_assigned uuid;
+  v_state    public.delivery_status;
+  v_type     public.order_type;
+  v_check    text;
+  v_order    public.orders%rowtype;
+begin
+  select o.partner_id, o.delivery_status, o.order_type
+    into v_assigned, v_state, v_type
+    from public.orders o
+   where o.id = p_order_id;
+
+  -- AUTHORISATION failure: raise. Covers the wrong Partner, an order with no
+  -- Partner attached, and an order id that does not exist — all three get the
+  -- same message, so probing tells the caller nothing. It comes FIRST, so an
+  -- unauthorised caller never reaches the attempt counter and cannot lock a
+  -- delivery out from under the Partner actually carrying it.
+  if v_assigned is null or v_assigned is distinct from v_partner then
+    raise exception 'this delivery is not assigned to you' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- A scan delivery has no food to hand over. Its equivalent moment is the
+  -- redemption report, which is a different function and a different fact.
+  if v_type = 'SCAN' then
+    raise exception 'a scan delivery is collected by reporting the redemption'
+      using errcode = 'check_violation';
+  end if;
+
+  v_check := public.check_handoff_code(p_order_id, 'PICKUP', p_pickup_code);
+
+  if v_check = 'LOCKED' then
+    perform public.log_order_event(p_order_id, 'PARTNER_CONFIRM_PICKUP', false, 'PARTNER',
+      'delivery_status', v_state::text, 'PICKED_UP', 'pickup code locked out after repeated failures');
+    return row(false, 'too many wrong codes. Wait a few minutes, then ask the vendor to read it out again')::public.transition_result;
+  end if;
+
+  if v_check <> 'OK' then
+    perform public.log_order_event(p_order_id, 'PARTNER_CONFIRM_PICKUP', false, 'PARTNER',
+      'delivery_status', v_state::text, 'PICKED_UP', 'pickup code did not match');
+    return row(false, 'that pickup code does not match')::public.transition_result;
+  end if;
+
+  update public.orders o
+     set delivery_status = 'PICKED_UP', picked_up_at = now()
+   where o.id = p_order_id
+     and o.delivery_status = 'ASSIGNED'
+     and o.partner_id = v_partner
+  returning * into v_order;
+
+  if not found then
+    perform public.log_order_event(p_order_id, 'PARTNER_CONFIRM_PICKUP', false, 'PARTNER',
+      'delivery_status', v_state::text, 'PICKED_UP', 'delivery was not ASSIGNED');
+    return row(false, 'this order is not awaiting pickup')::public.transition_result;
+  end if;
+
+  perform public.log_order_event(p_order_id, 'PARTNER_CONFIRM_PICKUP', true, 'PARTNER',
+    'delivery_status', 'ASSIGNED', 'PICKED_UP');
+  return row(true, null)::public.transition_result;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."partner_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."partner_delivery_history"("p_limit" integer DEFAULT 30) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_name" "text", "destination_zone" "text", "delivery_status" "public"."delivery_status", "earnings_pesewas" bigint, "delivered_at" timestamp with time zone, "paid_out" boolean)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -5128,17 +6303,35 @@ $$;
 ALTER FUNCTION "public"."partner_delivery_history"("p_limit" integer) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."partner_earnings_summary"() RETURNS TABLE("delivered_count" bigint, "earned_pesewas" bigint, "awaiting_pesewas" bigint, "settled_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."partner_earnings_summary"() RETURNS TABLE("delivered_count" bigint, "earned_pesewas" bigint, "awaiting_pesewas" bigint, "settled_pesewas" bigint, "available_pesewas" bigint, "in_progress_pesewas" bigint, "payout_threshold_pesewas" bigint, "eligible_for_payout" boolean, "pesewas_to_threshold" bigint, "rating_count" bigint, "average_stars" numeric, "last_paid_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select count(*) filter (where a.status is not null),
-         coalesce(sum(a.amount_pesewas), 0)::bigint,
-         coalesce(sum(a.amount_pesewas) filter (where a.status <> 'SETTLED'), 0)::bigint,
-         coalesce(sum(a.amount_pesewas) filter (where a.status = 'SETTLED'), 0)::bigint
-    from public.allocations a
-   where a.payee_type = 'PARTNER' and a.payee_id = auth.uid()
-     and a.status <> 'CANCELLED';
+  with mine as (
+    select a.status, a.amount_pesewas
+      from public.allocations a
+     where a.payee_type = 'PARTNER' and a.payee_id = auth.uid()
+       and a.status <> 'CANCELLED'
+  ),
+  totals as (
+    select count(*)::bigint as delivered,
+           coalesce(sum(amount_pesewas), 0)::bigint as earned,
+           coalesce(sum(amount_pesewas) filter (where status <> 'SETTLED'), 0)::bigint as awaiting,
+           coalesce(sum(amount_pesewas) filter (where status = 'SETTLED'), 0)::bigint as settled,
+           coalesce(sum(amount_pesewas) filter (where status in ('PENDING', 'ELIGIBLE')), 0)::bigint as available,
+           coalesce(sum(amount_pesewas) filter (where status = 'SETTLING'), 0)::bigint as in_progress
+      from mine
+  )
+  select t.delivered, t.earned, t.awaiting, t.settled, t.available, t.in_progress,
+         public.payout_threshold_for('PARTNER'),
+         t.available >= public.payout_threshold_for('PARTNER'),
+         greatest(0, public.payout_threshold_for('PARTNER') - t.available),
+         (select count(*) from public.partner_ratings r where r.partner_id = auth.uid()),
+         (select round(avg(r.stars), 2) from public.partner_ratings r where r.partner_id = auth.uid()),
+         (select max(p.paid_at) from public.payouts p
+           where p.payee_type = 'PARTNER' and p.payee_id = auth.uid() and p.status = 'PAID')
+    from totals t
+   where auth.uid() is not null;
 $$;
 
 
@@ -5292,6 +6485,27 @@ $$;
 ALTER FUNCTION "public"."partner_report_scan_refused"("p_order_id" "uuid", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "restaurant_name" "text", "details" "text", "scan_status" "public"."scan_status")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select o.id, o.order_number, v.name, s.details, o.scan_status
+    from public.order_scans s
+    join public.orders o on o.id = s.order_id
+    join public.vendors v on v.id = o.vendor_id
+   where s.order_id = p_order_id
+     and s.released_to = auth.uid()
+     and o.partner_id = auth.uid()
+     and o.delivery_status in ('ASSIGNED', 'PICKED_UP');
+$$;
+
+
+ALTER FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") IS 'What the assigned Partner is told about a scan errand. Gated on the same release as the image itself — assignment opens it, and the end of the delivery closes it.';
+
+
 CREATE OR REPLACE FUNCTION "public"."partner_set_availability"("p_available" boolean) RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -5358,18 +6572,22 @@ begin
      set momo_network   = excluded.momo_network,
          account_number = excluded.account_number,
          account_name   = excluded.account_name,
-         provider                = case
-           when public.payout_destinations.account_number <> excluded.account_number
-             or public.payout_destinations.momo_network   <> excluded.momo_network
-           then null else public.payout_destinations.provider end,
-         provider_recipient_code = case
-           when public.payout_destinations.account_number <> excluded.account_number
-             or public.payout_destinations.momo_network   <> excluded.momo_network
-           then null else public.payout_destinations.provider_recipient_code end,
-         provider_synced_at      = case
-           when public.payout_destinations.account_number <> excluded.account_number
-             or public.payout_destinations.momo_network   <> excluded.momo_network
-           then null else public.payout_destinations.provider_synced_at end
+         provider                 = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider end,
+         provider_recipient_code  = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_recipient_code end,
+         provider_synced_at       = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_synced_at end,
+         provider_subaccount_code = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_subaccount_code end,
+         subaccount_synced_at     = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.subaccount_synced_at end,
+         subaccount_error         = null
   returning * into v_row;
 
   return v_row;
@@ -5378,6 +6596,41 @@ $_$;
 
 
 ALTER FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."partners_to_notify_of_offer"("p_order_id" "uuid") RETURNS TABLE("user_id" "uuid", "phone" "text", "full_name" "text")
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  perform public.assert_service_or_admin();
+
+  return query
+    select u.id, u.phone, u.full_name
+      from public.partner_profiles pp
+      join public.users u on u.id = pp.user_id
+      join public.orders o on o.id = p_order_id
+      join public.vendors v on v.id = o.vendor_id
+     where pp.status = 'APPROVED'
+       and pp.is_available
+       and not u.is_suspended
+       and u.phone is not null
+       and o.delivery_status = 'SEARCHING'
+       and o.order_status = 'READY'
+       and o.payment_status = 'PAID'
+       -- The same two conflicts of interest, and the same capacity limit.
+       and o.customer_id <> u.id
+       and v.owner_user_id is distinct from u.id
+       and (
+         select count(*) from public.orders a
+          where a.partner_id = u.id
+            and a.delivery_status in ('ASSIGNED', 'PICKED_UP')
+       ) < 2;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."partners_to_notify_of_offer"("p_order_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") RETURNS "text"
@@ -5448,6 +6701,53 @@ $$;
 ALTER FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."payout_recipient_contact"("p_payout_id" "uuid") RETURNS TABLE("payee_type" "public"."payee_type", "phone" "text", "display_name" "text", "amount_pesewas" bigint)
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  perform public.assert_service_or_admin();
+
+  return query
+    select p.payee_type,
+           case p.payee_type
+             when 'VENDOR'  then (select coalesce(ow.phone, v.phone) from public.vendors v
+                                    left join public.users ow on ow.id = v.owner_user_id
+                                   where v.id = p.payee_id)
+             when 'PARTNER' then (select u.phone from public.users u where u.id = p.payee_id)
+           end,
+           case p.payee_type
+             when 'VENDOR'  then (select v.name from public.vendors v where v.id = p.payee_id)
+             when 'PARTNER' then (select u.full_name from public.users u where u.id = p.payee_id)
+           end,
+           p.amount_pesewas
+      from public.payouts p
+     where p.id = p_payout_id and p.payee_type in ('VENDOR', 'PARTNER');
+end;
+$$;
+
+
+ALTER FUNCTION "public"."payout_recipient_contact"("p_payout_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") RETURNS bigint
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  select case p_payee_type
+           when 'PARTNER' then coalesce(c.partner_min_payout_pesewas, 0)
+           else coalesce(c.min_payout_pesewas, 0)
+         end
+    from public.pricing_config c where c.id;
+$$;
+
+
+ALTER FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") IS 'The minimum a payee must be owed before a run will pay them. Partners have their own weekly floor; everybody else uses the general one.';
+
+
 CREATE OR REPLACE FUNCTION "public"."platform_config"() RETURNS "public"."pricing_config"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -5459,7 +6759,7 @@ $$;
 ALTER FUNCTION "public"."platform_config"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "partner_earnings_pesewas" bigint, "total_pesewas" bigint, "destination_zone_id" "uuid", "lines" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_items" "jsonb") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "total_pesewas" bigint, "lines" "jsonb")
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -5467,15 +6767,14 @@ declare
   v_cfg      public.pricing_config%rowtype;
   v_subtotal bigint := 0;
   v_service  bigint := 0;
-  v_delivery bigint := 0;
-  v_earnings bigint := 0;
-  v_zone     uuid;
   v_lines    jsonb := '[]'::jsonb;
   v_item     jsonb;
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
   v_seen     uuid[] := '{}';
 begin
+  -- A CLOSED store takes no new orders. Existing ones are untouched: this
+  -- guards submission, not the lifecycle of work already in the kitchen.
   if not exists (
     select 1 from public.vendors
      where id = p_vendor_id and status = 'ACTIVE' and is_accepting_orders
@@ -5488,23 +6787,6 @@ begin
   end if;
 
   select * into v_cfg from public.pricing_config where id;
-
-  if p_fulfilment_type = 'DELIVERY' then
-    if p_destination_location_id is null then
-      raise exception 'delivery orders require a destination' using errcode = 'check_violation';
-    end if;
-    if not exists (
-      select 1 from public.locations
-       where id = p_destination_location_id and is_deliverable and is_active
-    ) then
-      raise exception 'destination is not a valid delivery location' using errcode = 'check_violation';
-    end if;
-
-    v_delivery := v_cfg.delivery_fee_pesewas;
-    -- Integer division floors, so the Partner's share can never exceed the fee.
-    v_earnings := (v_delivery * v_cfg.partner_share_of_delivery_bps) / 10000;
-    v_zone     := public.location_zone(p_destination_location_id);
-  end if;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     v_qty := (v_item ->> 'quantity')::integer;
@@ -5540,18 +6822,17 @@ begin
     v_subtotal := v_subtotal + (v_menu.price_pesewas * v_qty);
   end loop;
 
-  -- 10% of the food, rounded half-up, in whole pesewas.
+  -- 5% of the food, rounded half-up, in whole pesewas. UNCHANGED, and
+  -- deliberately restated rather than refactored away: this expression is the
+  -- platform's entire revenue model and it should be readable in one place.
   v_service := ((v_subtotal * v_cfg.service_fee_bps) + 5000) / 10000;
 
-  return query select
-    v_subtotal, v_service, v_delivery, v_earnings,
-    v_subtotal + v_service + v_delivery,
-    v_zone, v_lines;
+  return query select v_subtotal, v_service, v_subtotal + v_service, v_lines;
 end;
 $$;
 
 
-ALTER FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_items" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."price_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "partner_earnings_pesewas" bigint, "total_pesewas" bigint, "destination_zone_id" "uuid")
@@ -5618,17 +6899,16 @@ $$;
 ALTER FUNCTION "public"."price_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "lines" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_items" "jsonb") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "total_pesewas" bigint, "lines" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select p.subtotal_pesewas, p.service_fee_pesewas, p.delivery_fee_pesewas,
-         p.total_pesewas, p.lines
-    from public.price_order(p_vendor_id, p_fulfilment_type, p_items, p_destination_location_id) p;
+  select p.subtotal_pesewas, p.service_fee_pesewas, p.total_pesewas, p.lines
+    from public.price_order(p_vendor_id, p_items) p;
 $$;
 
 
-ALTER FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_items" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."quote_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") RETURNS TABLE("subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint)
@@ -6035,8 +7315,8 @@ begin
      set amount_pesewas = amount_pesewas - v_earnings
    where order_id = p_order_id and payee_type = 'PLATFORM';
 
-  insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status)
-  values (p_order_id, 'PARTNER', v_order.partner_id, v_earnings, 'ELIGIBLE');
+  insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status, settlement_channel)
+  values (p_order_id, 'PARTNER', v_order.partner_id, v_earnings, 'ELIGIBLE', 'TRANSFER');
 
   return 1;
 end;
@@ -6046,7 +7326,57 @@ $$;
 ALTER FUNCTION "public"."settle_partner_earnings"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid", "p_destination_note" "text" DEFAULT NULL::"text") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "location_note" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "images" "jsonb")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select v.id, v.name, v.description,
+         v.category_id, k.name, k.slug,
+         public.location_path(v.location_id), v.location_note, v.walk_minutes_to_campus,
+         v.is_accepting_orders, v.can_accept_scans,
+         coalesce((select jsonb_agg(jsonb_build_object(
+                     'id', i.id, 'storage_path', i.storage_path, 'caption', i.caption
+                   ) order by i.sort_order, i.created_at)
+                     from public.vendor_images i where i.vendor_id = v.id), '[]'::jsonb)
+    from public.vendors v
+    left join public.vendor_categories k on k.id = v.category_id
+   where v.id = p_vendor_id and v.status = 'ACTIVE';
+$$;
+
+
+ALTER FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."storefront_vendors"("p_category_id" "uuid" DEFAULT NULL::"uuid", "p_search" "text" DEFAULT NULL::"text") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "image_path" "text", "image_count" bigint, "menu_count" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select v.id, v.name, v.description,
+         v.category_id, k.name, k.slug,
+         public.location_path(v.location_id), v.walk_minutes_to_campus,
+         v.is_accepting_orders, v.can_accept_scans,
+         (select i.storage_path from public.vendor_images i
+           where i.vendor_id = v.id order by i.sort_order, i.created_at limit 1),
+         (select count(*) from public.vendor_images i where i.vendor_id = v.id),
+         (select count(*) from public.menu_items m where m.vendor_id = v.id and m.is_available)
+    from public.vendors v
+    left join public.vendor_categories k on k.id = v.category_id
+   where v.status = 'ACTIVE'
+     and (p_category_id is null or v.category_id = p_category_id)
+     and (p_search is null or btrim(p_search) = ''
+          or v.name ilike '%' || btrim(p_search) || '%'
+          or coalesce(v.description,'') ilike '%' || btrim(p_search) || '%')
+   -- Open stalls first. A CLOSED one still appears, with its menu, because
+   -- "they are closed right now" is information a customer wants; a stall that
+   -- vanishes at 9pm reads as one that has left the platform.
+   order by v.is_accepting_orders desc, v.name;
+$$;
+
+
+ALTER FUNCTION "public"."storefront_vendors"("p_category_id" "uuid", "p_search" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_items" "jsonb") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6056,18 +7386,15 @@ begin
   end if;
 
   return query
-    select * from public.submit_order_for(
-      auth.uid(), p_vendor_id, p_fulfilment_type, p_items,
-      p_destination_location_id, p_destination_note
-    );
+    select * from public.submit_order_for(auth.uid(), p_vendor_id, p_items);
 end;
 $$;
 
 
-ALTER FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_items" "jsonb") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid", "p_destination_note" "text" DEFAULT NULL::"text") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_items" "jsonb") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6076,11 +7403,8 @@ declare
   v_order_id uuid;
   v_number   text;
   v_subtotal bigint := 0;
-  v_delivery bigint := 0;
-  v_earnings bigint := 0;
-  v_total    bigint;
   v_service  bigint := 0;
-  v_zone     uuid;
+  v_total    bigint;
   v_item     jsonb;
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
@@ -6089,7 +7413,6 @@ begin
     raise exception 'authentication required' using errcode = 'insufficient_privilege';
   end if;
 
-  -- Placing an order AS someone else is a server-only capability.
   if p_customer_id <> coalesce(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid) then
     perform public.assert_service_or_admin();
   end if;
@@ -6098,14 +7421,8 @@ begin
     raise exception 'account suspended' using errcode = 'insufficient_privilege';
   end if;
 
-  -- THE CUSTOMER CAPABILITY. An authorisation failure, so it raises rather than
-  -- returning — this is not a lost race, it is an account that may not order.
-  --
-  -- Checked against p_customer_id rather than auth.uid() so that a server-side
-  -- order placed on somebody's behalf is held to the same rule. An
-  -- administrator ordering FOR a customer does not lend them the capability.
   if not public.is_customer(p_customer_id) then
-    raise exception 'this account has not completed student onboarding'
+    raise exception 'this account has not completed customer sign-up'
       using errcode = 'insufficient_privilege';
   end if;
 
@@ -6122,36 +7439,17 @@ begin
 
   select * into v_cfg from public.pricing_config where id;
 
-  if p_fulfilment_type = 'DELIVERY' then
-    if p_destination_location_id is null then
-      raise exception 'delivery orders require a destination' using errcode = 'check_violation';
-    end if;
-    if not exists (
-      select 1 from public.locations
-       where id = p_destination_location_id and is_deliverable and is_active
-    ) then
-      raise exception 'destination is not a valid delivery location' using errcode = 'check_violation';
-    end if;
-
-    v_delivery := v_cfg.delivery_fee_pesewas;
-    v_earnings := (v_delivery * v_cfg.partner_share_of_delivery_bps) / 10000;
-    v_zone     := public.location_zone(p_destination_location_id);
-  end if;
-
+  -- ONE ORDER, ONE VENDOR. Enforced by the column: there is no basket spanning
+  -- two kitchens and no way to express one.
   insert into public.orders (
     customer_id, vendor_id, fulfilment_type, order_status,
-    destination_location_id, destination_note, destination_zone_id,
     subtotal_pesewas, service_fee_pesewas, delivery_fee_pesewas,
     partner_earnings_pesewas, total_pesewas,
     delivery_status, submitted_at, accept_deadline_at
   )
   values (
-    p_customer_id, p_vendor_id, p_fulfilment_type, 'SUBMITTED',
-    case when p_fulfilment_type = 'DELIVERY' then p_destination_location_id end,
-    p_destination_note,
-    v_zone,
-    0, 0, v_delivery,
-    v_earnings, v_delivery,
+    p_customer_id, p_vendor_id, null, 'SUBMITTED',
+    0, 0, 0, 0, 0,
     'NONE', now(), now() + make_interval(secs => v_cfg.vendor_response_seconds)
   )
   returning id, orders.order_number into v_order_id, v_number;
@@ -6185,10 +7483,8 @@ begin
     v_subtotal := v_subtotal + (v_menu.price_pesewas * v_qty);
   end loop;
 
-  -- The service fee is a percentage of the food, so it cannot be known until
-  -- the item loop above has a subtotal. Half-up, integer arithmetic only.
   v_service := ((v_subtotal * v_cfg.service_fee_bps) + 5000) / 10000;
-  v_total   := v_subtotal + v_service + v_delivery;
+  v_total   := v_subtotal + v_service;
 
   update public.orders
      set subtotal_pesewas    = v_subtotal,
@@ -6208,10 +7504,10 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_items" "jsonb") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_note" "text" DEFAULT NULL::"text") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
+CREATE OR REPLACE FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_details" "text", "p_destination_note" "text" DEFAULT NULL::"text") RETURNS TABLE("order_id" "uuid", "order_number" "text", "total_pesewas" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6220,6 +7516,7 @@ declare
   v_price    record;
   v_order    public.orders%rowtype;
   v_prefix   text;
+  v_details  text := nullif(btrim(coalesce(p_details, '')), '');
 begin
   if v_customer is null then
     raise exception 'authentication required' using errcode = 'insufficient_privilege';
@@ -6234,6 +7531,17 @@ begin
 
   if nullif(btrim(coalesce(p_scan_image_path, '')), '') is null then
     raise exception 'a scan is required' using errcode = 'check_violation';
+  end if;
+
+  -- REQUIRED, and checked here rather than only in the form. A Partner who
+  -- reaches a counter with a scan and no instructions has to ring the customer
+  -- and ask, which is the call this field exists to prevent.
+  if v_details is null then
+    raise exception 'tell us what you want, so the Partner knows what to ask for'
+      using errcode = 'check_violation';
+  end if;
+  if length(v_details) > 1000 then
+    raise exception 'keep the details under 1000 characters' using errcode = 'check_violation';
   end if;
 
   -- THE PATH MUST BE THE CALLER'S OWN. Uploads land under <user_id>/scans/…,
@@ -6271,17 +7579,12 @@ begin
   )
   returning * into v_order;
 
-  insert into public.order_scans (order_id, customer_id, image_path, content_type, byte_size)
-  values (v_order.id, v_customer, p_scan_image_path, p_content_type, p_byte_size);
+  insert into public.order_scans (order_id, customer_id, image_path, content_type, byte_size, details)
+  values (v_order.id, v_customer, p_scan_image_path, p_content_type, p_byte_size, v_details);
 
   -- Same secrets row a food order gets. partner_accept_delivery() fills in both
   -- codes on assignment, and without this row that UPDATE would match nothing
   -- and the customer would never have a delivery code to hand over.
-  --
-  -- The pickup code is generated too and simply goes unused: there is no vendor
-  -- handover to confirm for a scan. Leaving it is cheaper than special-casing
-  -- the claim, and it is already there if the restaurants are ever brought into
-  -- the handover.
   insert into public.order_secrets (order_id) values (v_order.id);
 
   perform public.log_order_event(
@@ -6295,10 +7598,10 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_note" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_details" "text", "p_destination_note" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."update_my_profile"("p_full_name" "text") RETURNS "public"."users"
+CREATE OR REPLACE FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text") RETURNS "public"."users"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6309,8 +7612,13 @@ begin
     raise exception 'authentication required' using errcode = 'insufficient_privilege';
   end if;
 
+  if nullif(btrim(coalesce(p_first_name, '')), '') is null then
+    raise exception 'your first name is required' using errcode = 'check_violation';
+  end if;
+
   update public.users
-     set full_name = nullif(btrim(coalesce(p_full_name, '')), '')
+     set first_name = btrim(p_first_name),
+         last_name  = nullif(btrim(coalesce(p_last_name, '')), '')
    where id = auth.uid()
   returning * into v_user;
 
@@ -6319,7 +7627,32 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."update_my_profile"("p_full_name" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."users_sync_full_name"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+begin
+  new.first_name := nullif(btrim(coalesce(new.first_name, '')), '');
+  new.last_name  := nullif(btrim(coalesce(new.last_name,  '')), '');
+
+  -- The parts win when either is present. When neither is, full_name is left
+  -- exactly as the caller set it: an account created before this migration and
+  -- never edited keeps the name it has.
+  if new.first_name is not null or new.last_name is not null then
+    new.full_name := nullif(btrim(concat_ws(' ', new.first_name, new.last_name)), '');
+  else
+    new.full_name := nullif(btrim(coalesce(new.full_name, '')), '');
+  end if;
+
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."users_sync_full_name"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") RETURNS "public"."transition_result"
@@ -6382,16 +7715,92 @@ $$;
 ALTER FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid") RETURNS "public"."transition_result"
+CREATE TABLE IF NOT EXISTS "public"."vendor_images" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "vendor_id" "uuid" NOT NULL,
+    "storage_path" "text" NOT NULL,
+    "content_type" "text" NOT NULL,
+    "byte_size" bigint NOT NULL,
+    "caption" "text",
+    "sort_order" integer DEFAULT 0 NOT NULL,
+    "uploaded_by" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "vendor_images_byte_size_check" CHECK (("byte_size" > 0)),
+    CONSTRAINT "vendor_images_path_shape" CHECK (("btrim"("storage_path") <> ''::"text"))
+);
+
+
+ALTER TABLE "public"."vendor_images" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."vendor_images" IS 'A vendor''s storefront gallery. The objects live in the PUBLIC vendor-images bucket, because an unauthenticated visitor browsing the marketplace has to be able to see them and a signed URL per photo per page load is a cost with no matching secret. Nothing private is ever put here; the bucket takes no client writes, so what appears in it went through a server that checked who was asking.';
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text" DEFAULT NULL::"text") RETURNS "public"."vendor_images"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
-  v_order public.orders%rowtype;
+  v_image public.vendor_images%rowtype;
+  v_count integer;
+begin
+  if not public.is_vendor_staff(p_vendor_id) and not public.is_admin() then
+    raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
+  end if;
+  if nullif(btrim(coalesce(p_storage_path, '')), '') is null then
+    raise exception 'no image was received' using errcode = 'check_violation';
+  end if;
+
+  -- A gallery, not a photo dump. Twelve is more than any pilot stall will use
+  -- and small enough that the storefront stays a page rather than a scroll.
+  select count(*) into v_count from public.vendor_images where vendor_id = p_vendor_id;
+  if v_count >= 12 then
+    raise exception 'a store may have at most 12 images; delete one first'
+      using errcode = 'check_violation';
+  end if;
+
+  insert into public.vendor_images (
+    vendor_id, storage_path, content_type, byte_size, caption, sort_order, uploaded_by
+  )
+  values (
+    p_vendor_id, btrim(p_storage_path), p_content_type, p_byte_size,
+    nullif(btrim(coalesce(p_caption, '')), ''), v_count, auth.uid()
+  )
+  returning * into v_image;
+
+  return v_image;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_order  public.orders%rowtype;
+  v_check  text;
 begin
   if not public.is_vendor_staff((select vendor_id from public.orders where id = p_order_id))
      and not public.is_admin() then
     raise exception 'not authorised for this order' using errcode = 'insufficient_privilege';
+  end if;
+
+  v_check := public.check_handoff_code(p_order_id, 'PICKUP', p_pickup_code);
+
+  if v_check = 'LOCKED' then
+    perform public.log_order_event(p_order_id, 'PICKUP_COMPLETE', false, 'VENDOR',
+      'order_status', null, 'COMPLETED', 'collection code locked out after repeated failures');
+    return row(false, 'too many wrong codes. Wait a few minutes and try again')::public.transition_result;
+  end if;
+
+  if v_check <> 'OK' then
+    perform public.log_order_event(p_order_id, 'PICKUP_COMPLETE', false, 'VENDOR',
+      'order_status', null, 'COMPLETED', 'collection code did not match');
+    return row(false, 'that collection code does not match')::public.transition_result;
   end if;
 
   update public.orders o
@@ -6415,53 +7824,33 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") RETURNS "public"."transition_result"
+CREATE OR REPLACE FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") RETURNS "text"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
-  v_order  public.orders%rowtype;
-  v_stored text;
+  v_image public.vendor_images%rowtype;
 begin
-  if not public.is_vendor_staff((select vendor_id from public.orders where id = p_order_id))
-     and not public.is_admin() then
-    raise exception 'not authorised for this order' using errcode = 'insufficient_privilege';
-  end if;
-
-  select pickup_code into v_stored
-    from public.order_secrets where order_id = p_order_id;
-
-  -- A rotated (NULL) code never matches, so a code from a cancelled assignment
-  -- is worthless the moment the Partner walks away.
-  -- A rotated (NULL) code never matches. A wrong code is logged as evidence.
-  if v_stored is null or p_pickup_code is null or v_stored <> p_pickup_code then
-    perform public.log_order_event(p_order_id, 'VENDOR_CONFIRM_PICKUP', false, 'VENDOR',
-      'delivery_status', 'ASSIGNED', 'PICKED_UP', 'pickup code did not match');
-    return row(false, 'pickup code does not match')::public.transition_result;
-  end if;
-
-  update public.orders o
-     set delivery_status = 'PICKED_UP', picked_up_at = now()
-   where o.id = p_order_id and o.delivery_status = 'ASSIGNED' and o.partner_id is not null
-  returning * into v_order;
-
+  select * into v_image from public.vendor_images where id = p_image_id;
   if not found then
-    perform public.log_order_event(p_order_id, 'VENDOR_CONFIRM_PICKUP', false, 'VENDOR',
-      'delivery_status', null, 'PICKED_UP', 'delivery was not ASSIGNED');
-    return row(false, 'order is not awaiting pickup')::public.transition_result;
+    raise exception 'no such image' using errcode = 'no_data_found';
+  end if;
+  if not public.is_vendor_staff(v_image.vendor_id) and not public.is_admin() then
+    raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
   end if;
 
-  perform public.log_order_event(p_order_id, 'VENDOR_CONFIRM_PICKUP', true, 'VENDOR',
-    'delivery_status', 'ASSIGNED', 'PICKED_UP');
-  return row(true, null)::public.transition_result;
+  delete from public.vendor_images where id = p_image_id;
+
+  -- The caller deletes the object itself; SQL cannot reach the Storage API.
+  return v_image.storage_path;
 end;
 $$;
 
 
-ALTER FUNCTION "public"."vendor_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_earnings_summary"("p_vendor_id" "uuid") RETURNS TABLE("order_count" bigint, "earned_pesewas" bigint, "awaiting_pesewas" bigint, "settled_pesewas" bigint, "today_pesewas" bigint)
@@ -6584,7 +7973,7 @@ $$;
 ALTER FUNCTION "public"."vendor_mark_ready"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "accept_deadline_at" timestamp with time zone, "seconds_to_deadline" integer, "age_seconds" integer, "destination_zone" "text", "partner_assigned" boolean, "cancellation_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "accept_deadline_at" timestamp with time zone, "seconds_to_deadline" integer, "age_seconds" integer, "destination_zone" "text", "partner_assigned" boolean, "partner_waiting" boolean, "awaiting_collection" boolean, "cancellation_reason" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6593,7 +7982,6 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "
       from public.orders o
      where o.vendor_id = p_vendor_id
        and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
-       -- A DRAFT order has not been sent to anyone yet.
        and o.order_status <> 'DRAFT'
        -- A scan order asks nothing of the restaurant through Campus Dash.
        and o.order_type = 'FOOD'
@@ -6625,6 +8013,8 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "
          case when r.fulfilment_type = 'DELIVERY'
               then (select z.name from public.locations z where z.id = r.destination_zone_id) end,
          r.partner_id is not null,
+         (r.delivery_status = 'ASSIGNED'),
+         (r.fulfilment_type = 'PICKUP' and r.order_status = 'READY' and r.payment_status = 'PAID'),
          r.cancellation_reason
     from ranked r
    where r.bucket <> 'CLOSED' or r.rn <= greatest(coalesce(p_closed_limit, 20), 0)
@@ -6653,7 +8043,7 @@ $$;
 ALTER FUNCTION "public"."vendor_order_bucket"("p_order_status" "public"."order_status") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_id" "uuid", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "accept_deadline_at" timestamp with time zone, "seconds_to_deadline" integer, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "completed_at" timestamp with time zone, "destination_zone" "text", "partner_assigned" boolean, "cancellation_reason" "text", "items" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_id" "uuid", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "accept_deadline_at" timestamp with time zone, "seconds_to_deadline" integer, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "completed_at" timestamp with time zone, "destination_zone" "text", "partner_assigned" boolean, "partner_name" "text", "pickup_code_available" boolean, "cancellation_reason" "text", "items" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -6678,9 +8068,12 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") R
          o.preparing_at,
          o.ready_at,
          o.completed_at,
+         -- ZONE ONLY. The room number never leaves the database for a vendor.
          case when o.fulfilment_type = 'DELIVERY'
               then (select z.name from public.locations z where z.id = o.destination_zone_id) end,
          o.partner_id is not null,
+         p.full_name,
+         (o.delivery_status = 'ASSIGNED'),
          o.cancellation_reason,
          coalesce(
            (select jsonb_agg(
@@ -6695,6 +8088,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") R
            '[]'::jsonb
          )
     from public.orders o
+    left join public.users p on p.id = o.partner_id
    where o.id = p_order_id
      and o.order_status <> 'DRAFT'
      and (public.is_vendor_staff(o.vendor_id) or public.is_admin());
@@ -6702,6 +8096,25 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") RETURNS TABLE("user_id" "uuid", "phone" "text", "full_name" "text", "store_name" "text")
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  perform public.assert_service_or_admin();
+
+  return query
+    select u.id, u.phone, u.full_name, v.name
+      from public.vendors v
+      join public.users u on u.id = v.owner_user_id
+     where v.id = p_vendor_id and u.phone is not null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_pending_count"("p_vendor_id" "uuid") RETURNS integer
@@ -6718,6 +8131,36 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_pending_count"("p_vendor_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_pickup_code"("p_order_id" "uuid") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_code text;
+begin
+  if not public.is_vendor_staff((select vendor_id from public.orders where id = p_order_id))
+     and not public.is_admin() then
+    raise exception 'not authorised for this order' using errcode = 'insufficient_privilege';
+  end if;
+
+  select s.pickup_code into v_code
+    from public.order_secrets s
+    join public.orders o on o.id = s.order_id
+   where s.order_id = p_order_id
+     and o.delivery_status = 'ASSIGNED';
+
+  if v_code is null then
+    raise exception 'no pickup code on this order right now'
+      using errcode = 'no_data_found';
+  end if;
+  return v_code;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_pickup_code"("p_order_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_reject_order"("p_order_id" "uuid", "p_reason" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
@@ -6815,6 +8258,235 @@ $$;
 ALTER FUNCTION "public"."vendor_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") RETURNS "public"."payout_destinations"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  v_row    public.payout_destinations%rowtype;
+  v_number text := regexp_replace(coalesce(p_account_number, ''), '[^0-9+]', '', 'g');
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- OWNERSHIP, not membership. vendors.owner_user_id is the whole model.
+  if not exists (
+    select 1 from public.vendors v
+     where v.id = p_vendor_id and v.owner_user_id = auth.uid()
+  ) then
+    raise exception 'you do not own that store' using errcode = 'insufficient_privilege';
+  end if;
+
+  if left(v_number, 4) = '+233' then
+    v_number := '0' || substring(v_number from 5);
+  elsif left(v_number, 3) = '233' then
+    v_number := '0' || substring(v_number from 4);
+  end if;
+
+  if v_number !~ '^0[0-9]{9}$' then
+    raise exception 'a Ghanaian mobile money number is required, e.g. 0551234567'
+      using errcode = 'check_violation';
+  end if;
+  if p_momo_network not in ('MTN', 'VODAFONE', 'AIRTELTIGO') then
+    raise exception 'choose MTN, VODAFONE or AIRTELTIGO' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_account_name, '')), '') is null then
+    raise exception 'the name on the mobile money account is required'
+      using errcode = 'check_violation';
+  end if;
+
+  insert into public.payout_destinations (
+    payee_type, payee_id, momo_network, account_number, account_name
+  )
+  values ('VENDOR', p_vendor_id, p_momo_network, v_number, btrim(p_account_name))
+  -- CHANGING THE NUMBER INVALIDATES BOTH PROVIDER IDENTITIES. A subaccount code
+  -- points at the old account; keeping it would route the next order's food
+  -- money to a number the vendor has just told us is wrong.
+  on conflict (payee_type, payee_id) do update
+     set momo_network   = excluded.momo_network,
+         account_number = excluded.account_number,
+         account_name   = excluded.account_name,
+         provider                 = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider end,
+         provider_recipient_code  = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_recipient_code end,
+         provider_synced_at       = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_synced_at end,
+         provider_subaccount_code = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.provider_subaccount_code end,
+         subaccount_synced_at     = case when public.payout_destinations.account_number <> excluded.account_number
+                                          or public.payout_destinations.momo_network   <> excluded.momo_network
+                                         then null else public.payout_destinations.subaccount_synced_at end,
+         subaccount_error         = null
+  returning * into v_row;
+
+  return v_row;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_user   uuid := auth.uid();
+  v_phone  text;
+  v_vendor public.vendors%rowtype;
+  v_doc    public.terms_documents%rowtype;
+begin
+  if v_user is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+  if exists (select 1 from public.users where id = v_user and is_suspended) then
+    raise exception 'account suspended' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- The verified number IS the vendor's credential, so it is read from the
+  -- identity row rather than accepted as a parameter.
+  select phone into v_phone from public.users where id = v_user;
+  if coalesce(v_phone, '') = '' then
+    raise exception 'verify your phone number before registering a store'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if nullif(btrim(coalesce(p_applicant_name, '')), '') is null then
+    raise exception 'your name is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_store_name, '')), '') is null then
+    raise exception 'a store name is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_description, '')), '') is null then
+    raise exception 'describe what your store sells' using errcode = 'check_violation';
+  end if;
+  if p_is_student is null then
+    raise exception 'say whether you are a student' using errcode = 'check_violation';
+  end if;
+  if not exists (
+    select 1 from public.vendor_categories where id = p_category_id and is_active
+  ) then
+    raise exception 'choose a business category' using errcode = 'check_violation';
+  end if;
+
+  select * into v_doc from public.terms_documents where id = p_terms_id;
+  if not found or v_doc.published_at is null or v_doc.audience <> 'VENDOR' then
+    raise exception 'the vendor terms must be accepted to continue'
+      using errcode = 'check_violation';
+  end if;
+  if v_doc.version <> (
+    select max(t.version) from public.terms_documents t
+     where t.audience = 'VENDOR' and t.published_at is not null
+  ) then
+    raise exception 'those terms have been superseded; reload and try again'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_vendor from public.vendors where owner_user_id = v_user;
+
+  if found then
+    -- RESUBMISSION. A rejected applicant corrects what was wrong and comes
+    -- back; that is the whole point of telling them the reason. Anything else
+    -- is not a second application.
+    if v_vendor.status <> 'REJECTED' then
+      raise exception 'this account already has a store (%)' , v_vendor.status
+        using errcode = 'check_violation';
+    end if;
+
+    update public.vendors
+       set name             = btrim(p_store_name),
+           description      = btrim(p_description),
+           category_id      = p_category_id,
+           applicant_name   = btrim(p_applicant_name),
+           owner_is_student = p_is_student,
+           phone            = v_phone,
+           status           = 'PENDING_APPROVAL',
+           rejection_reason = null,
+           reviewed_at      = null,
+           reviewed_by      = null,
+           submitted_at     = now()
+     where id = v_vendor.id
+    returning * into v_vendor;
+  else
+    insert into public.vendors (
+      name, phone, status, is_accepting_orders,
+      owner_user_id, category_id, description, applicant_name, owner_is_student,
+      submitted_at
+    )
+    values (
+      btrim(p_store_name), v_phone, 'PENDING_APPROVAL', false,
+      v_user, p_category_id, btrim(p_description), btrim(p_applicant_name),
+      p_is_student, now()
+    )
+    returning * into v_vendor;
+  end if;
+
+  insert into public.terms_acceptances (user_id, terms_id, audience, version)
+  values (v_user, v_doc.id, v_doc.audience, v_doc.version)
+  on conflict (user_id, audience, version)
+    do update set accepted_at = public.terms_acceptances.accepted_at;
+
+  return v_vendor;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_vendor public.vendors%rowtype;
+begin
+  if not public.is_vendor_staff(p_vendor_id) and not public.is_admin() then
+    raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
+  end if;
+
+  if nullif(btrim(coalesce(p_name, '')), '') is null then
+    raise exception 'a store name is required' using errcode = 'check_violation';
+  end if;
+  if p_category_id is not null and not exists (
+    select 1 from public.vendor_categories where id = p_category_id
+  ) then
+    raise exception 'that category does not exist' using errcode = 'check_violation';
+  end if;
+  if p_walk_minutes is not null and p_walk_minutes < 0 then
+    raise exception 'walking time cannot be negative' using errcode = 'check_violation';
+  end if;
+  if p_location_id is not null and not exists (
+    select 1 from public.locations where id = p_location_id
+  ) then
+    raise exception 'that location does not exist' using errcode = 'check_violation';
+  end if;
+
+  update public.vendors
+     set name                   = btrim(p_name),
+         description            = nullif(btrim(coalesce(p_description, '')), ''),
+         category_id            = coalesce(p_category_id, category_id),
+         location_id            = p_location_id,
+         location_note          = nullif(btrim(coalesce(p_location_note, '')), ''),
+         walk_minutes_to_campus = p_walk_minutes
+   where id = p_vendor_id
+  returning * into v_vendor;
+
+  return v_vendor;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes" integer) OWNER TO "postgres";
+
+
 CREATE SEQUENCE IF NOT EXISTS "public"."admin_actions_id_seq"
     START WITH 1
     INCREMENT BY 1
@@ -6840,12 +8512,17 @@ CREATE TABLE IF NOT EXISTS "public"."allocations" (
     "settled_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "settlement_channel" "text",
     CONSTRAINT "allocations_amount_pesewas_check" CHECK (("amount_pesewas" >= 0)),
-    CONSTRAINT "allocations_payee_id_presence" CHECK (((("payee_type" = 'PLATFORM'::"public"."payee_type") AND ("payee_id" IS NULL)) OR (("payee_type" <> 'PLATFORM'::"public"."payee_type") AND ("payee_id" IS NOT NULL))))
+    CONSTRAINT "allocations_payee_id_presence" CHECK (((("payee_type" = 'PLATFORM'::"public"."payee_type") AND ("payee_id" IS NULL)) OR (("payee_type" <> 'PLATFORM'::"public"."payee_type") AND ("payee_id" IS NOT NULL)))),
+    CONSTRAINT "allocations_settlement_channel_check" CHECK ((("settlement_channel" IS NULL) OR ("settlement_channel" = ANY (ARRAY['SPLIT'::"text", 'TRANSFER'::"text"]))))
 );
 
 
 ALTER TABLE "public"."allocations" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."allocations"."settlement_channel" IS 'How this money reaches the payee. SPLIT means Paystack routed it at the moment of the charge and it was never in the Campus Dash balance; TRANSFER means a settlement run moves it. NULL on rows written before split settlement existed — historical, and deliberately not backfilled with a guess.';
 
 
 CREATE TABLE IF NOT EXISTS "public"."idempotency_keys" (
@@ -6956,7 +8633,9 @@ CREATE TABLE IF NOT EXISTS "public"."order_scans" (
     "refusal_reason" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "details" "text",
     CONSTRAINT "order_scans_byte_size_check" CHECK (("byte_size" > 0)),
+    CONSTRAINT "order_scans_details_length" CHECK ((("details" IS NULL) OR (("btrim"("details") <> ''::"text") AND ("length"("details") <= 1000)))),
     CONSTRAINT "order_scans_redeem_pair" CHECK ((("redeemed_by" IS NULL) = ("redeemed_at" IS NULL))),
     CONSTRAINT "order_scans_release_pair" CHECK ((("released_to" IS NULL) = ("released_at" IS NULL)))
 );
@@ -6968,6 +8647,9 @@ ALTER TABLE "public"."order_scans" OWNER TO "postgres";
 COMMENT ON TABLE "public"."order_scans" IS 'The customer''s uploaded scan image and its release/redemption audit. The image itself lives in the private scan-documents bucket; this row holds the path and decides who is currently allowed to be shown it.';
 
 
+COMMENT ON COLUMN "public"."order_scans"."details" IS 'What the customer wants done with this scan, in their own words. Required on every new errand; NULL only on errands created before the field existed.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."order_secrets" (
     "order_id" "uuid" NOT NULL,
     "pickup_code" "text",
@@ -6977,12 +8659,42 @@ CREATE TABLE IF NOT EXISTS "public"."order_secrets" (
     "delivery_code_set_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "pickup_attempts" integer DEFAULT 0 NOT NULL,
+    "pickup_locked_until" timestamp with time zone,
+    "delivery_attempts" integer DEFAULT 0 NOT NULL,
+    "delivery_locked_until" timestamp with time zone,
+    CONSTRAINT "order_secrets_attempts_nonneg" CHECK ((("pickup_attempts" >= 0) AND ("delivery_attempts" >= 0))),
     CONSTRAINT "order_secrets_delivery_code_format" CHECK ((("delivery_code" IS NULL) OR ("delivery_code" ~ '^\d{4}$'::"text"))),
     CONSTRAINT "order_secrets_pickup_code_format" CHECK ((("pickup_code" IS NULL) OR ("pickup_code" ~ '^\d{4}$'::"text")))
 );
 
 
 ALTER TABLE "public"."order_secrets" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."order_secrets"."pickup_attempts" IS 'Consecutive wrong pickup codes. Reset by a correct one and by a newly generated code. Server-only, like everything else on this table.';
+
+
+COMMENT ON COLUMN "public"."order_secrets"."delivery_attempts" IS 'Consecutive wrong delivery codes. Reset by a correct one.';
+
+
+CREATE TABLE IF NOT EXISTS "public"."partner_ratings" (
+    "order_id" "uuid" NOT NULL,
+    "partner_id" "uuid" NOT NULL,
+    "customer_id" "uuid" NOT NULL,
+    "stars" smallint NOT NULL,
+    "comment" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "partner_ratings_comment_length" CHECK ((("comment" IS NULL) OR ("length"("comment") <= 500))),
+    CONSTRAINT "partner_ratings_not_self" CHECK (("partner_id" <> "customer_id")),
+    CONSTRAINT "partner_ratings_stars_check" CHECK ((("stars" >= 1) AND ("stars" <= 5)))
+);
+
+
+ALTER TABLE "public"."partner_ratings" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."partner_ratings" IS 'One rating per completed delivery. The order is the primary key, so a duplicate is impossible rather than merely guarded against.';
 
 
 CREATE TABLE IF NOT EXISTS "public"."terms_documents" (
@@ -7037,6 +8749,14 @@ ALTER TABLE ONLY "public"."customer_profiles"
     ADD CONSTRAINT "customer_profiles_pkey" PRIMARY KEY ("user_id");
 
 
+ALTER TABLE ONLY "public"."customer_rewards"
+    ADD CONSTRAINT "customer_rewards_pkey" PRIMARY KEY ("id");
+
+
+ALTER TABLE ONLY "public"."customer_rewards"
+    ADD CONSTRAINT "customer_rewards_user_cycle_unique" UNIQUE ("user_id", "cycle");
+
+
 ALTER TABLE ONLY "public"."idempotency_keys"
     ADD CONSTRAINT "idempotency_keys_pkey" PRIMARY KEY ("key");
 
@@ -7077,6 +8797,10 @@ ALTER TABLE ONLY "public"."partner_profiles"
     ADD CONSTRAINT "partner_profiles_pkey" PRIMARY KEY ("user_id");
 
 
+ALTER TABLE ONLY "public"."partner_ratings"
+    ADD CONSTRAINT "partner_ratings_pkey" PRIMARY KEY ("order_id");
+
+
 ALTER TABLE ONLY "public"."payments"
     ADD CONSTRAINT "payments_pkey" PRIMARY KEY ("id");
 
@@ -7109,8 +8833,12 @@ ALTER TABLE ONLY "public"."users"
     ADD CONSTRAINT "users_pkey" PRIMARY KEY ("id");
 
 
-ALTER TABLE ONLY "public"."vendor_users"
-    ADD CONSTRAINT "vendor_users_pkey" PRIMARY KEY ("vendor_id", "user_id");
+ALTER TABLE ONLY "public"."vendor_categories"
+    ADD CONSTRAINT "vendor_categories_pkey" PRIMARY KEY ("id");
+
+
+ALTER TABLE ONLY "public"."vendor_images"
+    ADD CONSTRAINT "vendor_images_pkey" PRIMARY KEY ("id");
 
 
 ALTER TABLE ONLY "public"."vendors"
@@ -7130,6 +8858,9 @@ CREATE INDEX "admin_actions_created_idx" ON "public"."admin_actions" USING "btre
 CREATE INDEX "admin_actions_target_idx" ON "public"."admin_actions" USING "btree" ("target_type", "target_id", "created_at" DESC);
 
 
+CREATE INDEX "allocations_channel_idx" ON "public"."allocations" USING "btree" ("payee_type", "settlement_channel", "status");
+
+
 CREATE UNIQUE INDEX "allocations_order_payee_unique" ON "public"."allocations" USING "btree" ("order_id", "payee_type", COALESCE("payee_id", '00000000-0000-0000-0000-000000000000'::"uuid"));
 
 
@@ -7140,6 +8871,12 @@ CREATE INDEX "allocations_settlement_idx" ON "public"."allocations" USING "btree
 
 
 CREATE UNIQUE INDEX "customer_profiles_student_id_unique" ON "public"."customer_profiles" USING "btree" ("student_id_number");
+
+
+CREATE INDEX "customer_rewards_open_idx" ON "public"."customer_rewards" USING "btree" ("unlocked_at" DESC) WHERE ("status" = 'UNLOCKED'::"text");
+
+
+CREATE INDEX "customer_rewards_user_idx" ON "public"."customer_rewards" USING "btree" ("user_id", "unlocked_at" DESC);
 
 
 CREATE INDEX "idempotency_keys_expiry_idx" ON "public"."idempotency_keys" USING "btree" ("expires_at");
@@ -7199,10 +8936,10 @@ CREATE INDEX "orders_customer_idx" ON "public"."orders" USING "btree" ("customer
 CREATE INDEX "orders_disputed_idx" ON "public"."orders" USING "btree" ("disputed_at") WHERE (("disputed_at" IS NOT NULL) AND ("dispute_resolved_at" IS NULL));
 
 
-CREATE UNIQUE INDEX "orders_one_active_delivery_per_partner" ON "public"."orders" USING "btree" ("partner_id") WHERE (("partner_id" IS NOT NULL) AND ("delivery_status" = ANY (ARRAY['ASSIGNED'::"public"."delivery_status", 'PICKED_UP'::"public"."delivery_status"])));
-
-
 CREATE UNIQUE INDEX "orders_order_number_key" ON "public"."orders" USING "btree" ("order_number");
+
+
+CREATE UNIQUE INDEX "orders_partner_active_slot_unique" ON "public"."orders" USING "btree" ("partner_id", "partner_slot") WHERE (("partner_id" IS NOT NULL) AND ("partner_slot" IS NOT NULL) AND ("delivery_status" = ANY (ARRAY['ASSIGNED'::"public"."delivery_status", 'PICKED_UP'::"public"."delivery_status"])));
 
 
 CREATE INDEX "orders_partner_idx" ON "public"."orders" USING "btree" ("partner_id") WHERE ("partner_id" IS NOT NULL);
@@ -7226,6 +8963,12 @@ CREATE UNIQUE INDEX "partner_profiles_one_approved_per_user" ON "public"."partne
 CREATE INDEX "partner_profiles_status_idx" ON "public"."partner_profiles" USING "btree" ("status");
 
 
+CREATE INDEX "partner_ratings_low_idx" ON "public"."partner_ratings" USING "btree" ("created_at" DESC) WHERE ("stars" <= 2);
+
+
+CREATE INDEX "partner_ratings_partner_idx" ON "public"."partner_ratings" USING "btree" ("partner_id", "created_at" DESC);
+
+
 CREATE UNIQUE INDEX "payments_idempotency_key_unique" ON "public"."payments" USING "btree" ("idempotency_key");
 
 
@@ -7242,6 +8985,9 @@ CREATE UNIQUE INDEX "payments_provider_txn_unique" ON "public"."payments" USING 
 
 
 CREATE UNIQUE INDEX "payout_destinations_provider_code_unique" ON "public"."payout_destinations" USING "btree" ("provider", "provider_recipient_code") WHERE ("provider_recipient_code" IS NOT NULL);
+
+
+CREATE UNIQUE INDEX "payout_destinations_subaccount_unique" ON "public"."payout_destinations" USING "btree" ("provider", "provider_subaccount_code") WHERE ("provider_subaccount_code" IS NOT NULL);
 
 
 CREATE UNIQUE INDEX "payouts_idempotency_key_unique" ON "public"."payouts" USING "btree" ("idempotency_key");
@@ -7280,10 +9026,16 @@ CREATE INDEX "users_is_admin_idx" ON "public"."users" USING "btree" ("id") WHERE
 CREATE UNIQUE INDEX "users_phone_key" ON "public"."users" USING "btree" ("phone");
 
 
-CREATE INDEX "vendor_users_user_idx" ON "public"."vendor_users" USING "btree" ("user_id");
+CREATE UNIQUE INDEX "vendor_categories_slug_unique" ON "public"."vendor_categories" USING "btree" ("slug");
+
+
+CREATE INDEX "vendor_images_vendor_idx" ON "public"."vendor_images" USING "btree" ("vendor_id", "sort_order", "created_at");
 
 
 CREATE INDEX "vendors_open_idx" ON "public"."vendors" USING "btree" ("id") WHERE (("status" = 'ACTIVE'::"public"."vendor_status") AND "is_accepting_orders");
+
+
+CREATE UNIQUE INDEX "vendors_owner_unique" ON "public"."vendors" USING "btree" ("owner_user_id") WHERE ("owner_user_id" IS NOT NULL);
 
 
 CREATE UNIQUE INDEX "vendors_phone_key" ON "public"."vendors" USING "btree" ("phone");
@@ -7328,6 +9080,9 @@ CREATE OR REPLACE TRIGGER "order_scans_set_updated_at" BEFORE UPDATE ON "public"
 CREATE OR REPLACE TRIGGER "order_secrets_set_updated_at" BEFORE UPDATE ON "public"."order_secrets" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
+CREATE OR REPLACE TRIGGER "orders_award_customer_reward" AFTER UPDATE OF "order_status" ON "public"."orders" FOR EACH ROW WHEN ((("new"."order_status" = 'COMPLETED'::"public"."order_status") AND ("old"."order_status" IS DISTINCT FROM 'COMPLETED'::"public"."order_status"))) EXECUTE FUNCTION "public"."orders_award_customer_reward"();
+
+
 CREATE OR REPLACE TRIGGER "orders_release_scan_on_assignment" BEFORE UPDATE OF "partner_id", "delivery_status" ON "public"."orders" FOR EACH ROW EXECUTE FUNCTION "public"."release_scan_on_assignment"();
 
 
@@ -7349,10 +9104,19 @@ CREATE OR REPLACE TRIGGER "payouts_set_updated_at" BEFORE UPDATE ON "public"."pa
 CREATE OR REPLACE TRIGGER "pricing_config_set_updated_at" BEFORE UPDATE ON "public"."pricing_config" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."customer_rewards" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+CREATE OR REPLACE TRIGGER "set_vendor_categories_updated_at" BEFORE UPDATE ON "public"."vendor_categories" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
 CREATE OR REPLACE TRIGGER "settlement_runs_set_updated_at" BEFORE UPDATE ON "public"."settlement_runs" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
 CREATE OR REPLACE TRIGGER "users_set_updated_at" BEFORE UPDATE ON "public"."users" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+CREATE OR REPLACE TRIGGER "users_sync_full_name" BEFORE INSERT OR UPDATE OF "first_name", "last_name", "full_name" ON "public"."users" FOR EACH ROW EXECUTE FUNCTION "public"."users_sync_full_name"();
 
 
 CREATE OR REPLACE TRIGGER "vendors_set_updated_at" BEFORE UPDATE ON "public"."vendors" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
@@ -7372,6 +9136,14 @@ ALTER TABLE ONLY "public"."allocations"
 
 ALTER TABLE ONLY "public"."customer_profiles"
     ADD CONSTRAINT "customer_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY "public"."customer_rewards"
+    ADD CONSTRAINT "customer_rewards_fulfilled_by_fkey" FOREIGN KEY ("fulfilled_by") REFERENCES "public"."users"("id");
+
+
+ALTER TABLE ONLY "public"."customer_rewards"
+    ADD CONSTRAINT "customer_rewards_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
 ALTER TABLE ONLY "public"."idempotency_keys"
@@ -7458,6 +9230,18 @@ ALTER TABLE ONLY "public"."partner_profiles"
     ADD CONSTRAINT "partner_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
+ALTER TABLE ONLY "public"."partner_ratings"
+    ADD CONSTRAINT "partner_ratings_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."users"("id");
+
+
+ALTER TABLE ONLY "public"."partner_ratings"
+    ADD CONSTRAINT "partner_ratings_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY "public"."partner_ratings"
+    ADD CONSTRAINT "partner_ratings_partner_id_fkey" FOREIGN KEY ("partner_id") REFERENCES "public"."users"("id");
+
+
 ALTER TABLE ONLY "public"."partner_profiles"
     ADD CONSTRAINT "partner_requires_customer" FOREIGN KEY ("user_id") REFERENCES "public"."customer_profiles"("user_id") ON DELETE RESTRICT;
 
@@ -7489,16 +9273,28 @@ ALTER TABLE ONLY "public"."users"
     ADD CONSTRAINT "users_id_fkey" FOREIGN KEY ("id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
-ALTER TABLE ONLY "public"."vendor_users"
-    ADD CONSTRAINT "vendor_users_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+ALTER TABLE ONLY "public"."vendor_images"
+    ADD CONSTRAINT "vendor_images_uploaded_by_fkey" FOREIGN KEY ("uploaded_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
 
 
-ALTER TABLE ONLY "public"."vendor_users"
-    ADD CONSTRAINT "vendor_users_vendor_id_fkey" FOREIGN KEY ("vendor_id") REFERENCES "public"."vendors"("id") ON DELETE CASCADE;
+ALTER TABLE ONLY "public"."vendor_images"
+    ADD CONSTRAINT "vendor_images_vendor_id_fkey" FOREIGN KEY ("vendor_id") REFERENCES "public"."vendors"("id") ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY "public"."vendors"
+    ADD CONSTRAINT "vendors_category_id_fkey" FOREIGN KEY ("category_id") REFERENCES "public"."vendor_categories"("id") ON DELETE RESTRICT;
 
 
 ALTER TABLE ONLY "public"."vendors"
     ADD CONSTRAINT "vendors_location_fk" FOREIGN KEY ("location_id") REFERENCES "public"."locations"("id") ON DELETE SET NULL;
+
+
+ALTER TABLE ONLY "public"."vendors"
+    ADD CONSTRAINT "vendors_owner_user_id_fkey" FOREIGN KEY ("owner_user_id") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+ALTER TABLE ONLY "public"."vendors"
+    ADD CONSTRAINT "vendors_reviewed_by_fkey" FOREIGN KEY ("reviewed_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
 
 
 ALTER TABLE "public"."admin_actions" ENABLE ROW LEVEL SECURITY;
@@ -7523,6 +9319,15 @@ CREATE POLICY "customer_profiles_read_admin" ON "public"."customer_profiles" FOR
 
 
 CREATE POLICY "customer_profiles_read_self" ON "public"."customer_profiles" FOR SELECT TO "authenticated" USING (("user_id" = "auth"."uid"()));
+
+
+ALTER TABLE "public"."customer_rewards" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "customer_rewards_read_admin" ON "public"."customer_rewards" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
+
+
+CREATE POLICY "customer_rewards_read_self" ON "public"."customer_rewards" FOR SELECT TO "authenticated" USING (("user_id" = "auth"."uid"()));
 
 
 ALTER TABLE "public"."idempotency_keys" ENABLE ROW LEVEL SECURITY;
@@ -7600,6 +9405,15 @@ CREATE POLICY "partner_profiles_read_admin" ON "public"."partner_profiles" FOR S
 CREATE POLICY "partner_profiles_read_self" ON "public"."partner_profiles" FOR SELECT TO "authenticated" USING (("user_id" = "auth"."uid"()));
 
 
+ALTER TABLE "public"."partner_ratings" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "partner_ratings_read_admin" ON "public"."partner_ratings" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
+
+
+CREATE POLICY "partner_ratings_read_customer" ON "public"."partner_ratings" FOR SELECT TO "authenticated" USING (("customer_id" = "auth"."uid"()));
+
+
 ALTER TABLE "public"."payments" ENABLE ROW LEVEL SECURITY;
 
 
@@ -7655,7 +9469,7 @@ CREATE POLICY "users_read_admin" ON "public"."users" FOR SELECT TO "authenticate
 
 CREATE POLICY "users_read_customer_during_active_delivery" ON "public"."users" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."orders" "o"
-  WHERE (("o"."customer_id" = "users"."id") AND ("o"."partner_id" = "auth"."uid"()) AND ("o"."delivery_status" = 'PICKED_UP'::"public"."delivery_status")))));
+  WHERE (("o"."customer_id" = "users"."id") AND ("o"."partner_id" = "auth"."uid"()) AND ("o"."delivery_status" = ANY (ARRAY['ASSIGNED'::"public"."delivery_status", 'PICKED_UP'::"public"."delivery_status"]))))));
 
 
 CREATE POLICY "users_read_partner_during_active_delivery" ON "public"."users" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
@@ -7666,10 +9480,24 @@ CREATE POLICY "users_read_partner_during_active_delivery" ON "public"."users" FO
 CREATE POLICY "users_read_self" ON "public"."users" FOR SELECT TO "authenticated" USING (("id" = "auth"."uid"()));
 
 
-ALTER TABLE "public"."vendor_users" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."vendor_categories" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "vendor_users_read_self" ON "public"."vendor_users" FOR SELECT TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR "public"."is_admin"()));
+CREATE POLICY "vendor_categories_read_active" ON "public"."vendor_categories" FOR SELECT TO "authenticated", "anon" USING (("is_active" OR "public"."is_admin"()));
+
+
+ALTER TABLE "public"."vendor_images" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "vendor_images_read_admin" ON "public"."vendor_images" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
+
+
+CREATE POLICY "vendor_images_read_own" ON "public"."vendor_images" FOR SELECT TO "authenticated" USING ("public"."is_vendor_staff"("vendor_id"));
+
+
+CREATE POLICY "vendor_images_read_public" ON "public"."vendor_images" FOR SELECT TO "authenticated", "anon" USING ((EXISTS ( SELECT 1
+   FROM "public"."vendors" "v"
+  WHERE (("v"."id" = "vendor_images"."vendor_id") AND ("v"."status" = 'ACTIVE'::"public"."vendor_status")))));
 
 
 ALTER TABLE "public"."vendors" ENABLE ROW LEVEL SECURITY;
@@ -7702,13 +9530,10 @@ GRANT ALL ON FUNCTION "public"."accept_terms"("p_terms_id" "uuid") TO "service_r
 GRANT ALL ON FUNCTION "public"."accept_terms"("p_terms_id" "uuid") TO "authenticated";
 
 
-GRANT ALL ON TABLE "public"."vendor_users" TO "service_role";
-GRANT SELECT ON TABLE "public"."vendor_users" TO "authenticated";
-
-
-REVOKE ALL ON FUNCTION "public"."admin_add_vendor_user"("p_vendor_id" "uuid", "p_phone" "text", "p_reason" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_add_vendor_user"("p_vendor_id" "uuid", "p_phone" "text", "p_reason" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_add_vendor_user"("p_vendor_id" "uuid", "p_phone" "text", "p_reason" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."active_vendor_categories"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."active_vendor_categories"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."active_vendor_categories"() TO "anon";
+GRANT ALL ON FUNCTION "public"."active_vendor_categories"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."next_order_number"() FROM PUBLIC;
@@ -7763,14 +9588,29 @@ GRANT SELECT ON TABLE "public"."vendors" TO "authenticated";
 GRANT SELECT ON TABLE "public"."vendors" TO "anon";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
+
+
+GRANT ALL ON TABLE "public"."vendor_categories" TO "service_role";
+GRANT SELECT ON TABLE "public"."vendor_categories" TO "anon";
+GRANT SELECT ON TABLE "public"."vendor_categories" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_create_vendor_category"("p_slug" "text", "p_name" "text", "p_sort_order" integer, "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_create_vendor_category"("p_slug" "text", "p_name" "text", "p_sort_order" integer, "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_create_vendor_category"("p_slug" "text", "p_name" "text", "p_sort_order" integer, "p_reason" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_customer_detail"("p_user_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_customer_rewards"("p_status" "text", "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_customer_rewards"("p_status" "text", "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_customer_rewards"("p_status" "text", "p_limit" integer) TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" integer) FROM PUBLIC;
@@ -7854,6 +9694,11 @@ GRANT ALL ON FUNCTION "public"."admin_order_money"("p_order_id" "uuid") TO "serv
 GRANT ALL ON FUNCTION "public"."admin_order_money"("p_order_id" "uuid") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_partner_balances"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_partner_balances"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_partner_balances"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") TO "authenticated";
@@ -7862,6 +9707,11 @@ GRANT ALL ON FUNCTION "public"."admin_partner_detail"("p_user_id" "uuid") TO "au
 REVOKE ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_partner_documents_due_for_purge"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_partner_ratings"("p_partner_id" "uuid", "p_max_stars" smallint, "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_partner_ratings"("p_partner_id" "uuid", "p_max_stars" smallint, "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_partner_ratings"("p_partner_id" "uuid", "p_max_stars" smallint, "p_limit" integer) TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_partners"("p_status" "text") FROM PUBLIC;
@@ -7877,6 +9727,16 @@ GRANT ALL ON FUNCTION "public"."admin_payments"("p_limit" integer) TO "authentic
 REVOKE ALL ON FUNCTION "public"."admin_payout_destinations"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_payout_destinations"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_payout_destinations"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_payout_history"("p_payee_type" "public"."payee_type", "p_status" "text", "p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_payout_history"("p_payee_type" "public"."payee_type", "p_status" "text", "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_payout_history"("p_payee_type" "public"."payee_type", "p_status" "text", "p_limit" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_payout_readiness"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_payout_readiness"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_payout_readiness"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_pending_settlement"("p_payee_type" "public"."payee_type") FROM PUBLIC;
@@ -7909,11 +9769,6 @@ GRANT ALL ON FUNCTION "public"."admin_reconciliation"("p_limit" integer) TO "ser
 GRANT ALL ON FUNCTION "public"."admin_reconciliation"("p_limit" integer) TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_remove_vendor_user"("p_vendor_id" "uuid", "p_user_id" "uuid", "p_reason" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_remove_vendor_user"("p_vendor_id" "uuid", "p_user_id" "uuid", "p_reason" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_remove_vendor_user"("p_vendor_id" "uuid", "p_user_id" "uuid", "p_reason" "text") TO "authenticated";
-
-
 REVOKE ALL ON FUNCTION "public"."admin_resolve_dispute"("p_order_id" "uuid", "p_reason" "text", "p_notes" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_resolve_dispute"("p_order_id" "uuid", "p_reason" "text", "p_notes" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_resolve_dispute"("p_order_id" "uuid", "p_reason" "text", "p_notes" "text") TO "authenticated";
@@ -7922,6 +9777,11 @@ GRANT ALL ON FUNCTION "public"."admin_resolve_dispute"("p_order_id" "uuid", "p_r
 REVOKE ALL ON FUNCTION "public"."admin_review_partner"("p_user_id" "uuid", "p_status" "public"."partner_application_status", "p_reason" "text", "p_notes" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_review_partner"("p_user_id" "uuid", "p_status" "public"."partner_application_status", "p_reason" "text", "p_notes" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_review_partner"("p_user_id" "uuid", "p_status" "public"."partner_application_status", "p_reason" "text", "p_notes" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_review_vendor"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_review_vendor"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_review_vendor"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_scan_order"("p_order_id" "uuid") FROM PUBLIC;
@@ -7971,6 +9831,20 @@ GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "authenticated";
 
 
+GRANT ALL ON TABLE "public"."customer_rewards" TO "service_role";
+GRANT SELECT ON TABLE "public"."customer_rewards" TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_settle_customer_reward"("p_reward_id" "uuid", "p_notes" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_settle_customer_reward"("p_reward_id" "uuid", "p_notes" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_settle_customer_reward"("p_reward_id" "uuid", "p_notes" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_settlement_overview"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_settlement_overview"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_settlement_overview"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_settlement_payouts"("p_run_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_settlement_payouts"("p_run_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_settlement_payouts"("p_run_id" "uuid") TO "authenticated";
@@ -7991,9 +9865,9 @@ GRANT SELECT ON TABLE "public"."pricing_config" TO "authenticated";
 GRANT SELECT ON TABLE "public"."pricing_config" TO "anon";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint) TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint, "p_max_active_deliveries_per_partner" smallint, "p_partner_min_payout_pesewas" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint, "p_max_active_deliveries_per_partner" smallint, "p_partner_min_payout_pesewas" bigint) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_update_config"("p_reason" "text", "p_service_fee_bps" integer, "p_delivery_fee_pesewas" bigint, "p_partner_share_of_delivery_bps" integer, "p_vendor_response_seconds" integer, "p_partner_search_seconds" integer, "p_customer_absent_wait_seconds" integer, "p_payment_pending_timeout_seconds" integer, "p_min_payout_pesewas" bigint, "p_notification_retry_limit" integer, "p_vendor_poll_seconds" integer, "p_partner_poll_seconds" integer, "p_customer_poll_seconds" integer, "p_scan_service_fee_pesewas" bigint, "p_max_active_deliveries_per_partner" smallint, "p_partner_min_payout_pesewas" bigint) TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_update_location"("p_location_id" "uuid", "p_reason" "text", "p_name" "text", "p_is_deliverable" boolean, "p_walk_minutes" integer, "p_sort_order" integer) FROM PUBLIC;
@@ -8006,14 +9880,24 @@ GRANT ALL ON FUNCTION "public"."admin_update_menu_item"("p_menu_item_id" "uuid",
 GRANT ALL ON FUNCTION "public"."admin_update_menu_item"("p_menu_item_id" "uuid", "p_reason" "text", "p_name" "text", "p_description" "text", "p_price_pesewas" bigint, "p_sort_order" integer) TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_category_id" "uuid", "p_description" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_category_id" "uuid", "p_description" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_update_vendor"("p_vendor_id" "uuid", "p_reason" "text", "p_name" "text", "p_phone" "text", "p_category_id" "uuid", "p_description" "text", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."admin_vendors"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."admin_vendors"() TO "service_role";
-GRANT ALL ON FUNCTION "public"."admin_vendors"() TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."admin_update_vendor_category"("p_category_id" "uuid", "p_name" "text", "p_sort_order" integer, "p_is_active" boolean, "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_update_vendor_category"("p_category_id" "uuid", "p_name" "text", "p_sort_order" integer, "p_is_active" boolean, "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_update_vendor_category"("p_category_id" "uuid", "p_name" "text", "p_sort_order" integer, "p_is_active" boolean, "p_reason" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_vendor_categories"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_vendor_categories"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_vendor_categories"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_vendors"("p_search" "text", "p_status" "text", "p_category_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_vendors"("p_search" "text", "p_status" "text", "p_category_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_vendors"("p_search" "text", "p_status" "text", "p_category_id" "uuid") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_webhook_events"("p_limit" integer) FROM PUBLIC;
@@ -8029,6 +9913,10 @@ GRANT ALL ON TABLE "public"."payments" TO "service_role";
 GRANT SELECT ON TABLE "public"."payments" TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."attach_payment_split"("p_payment_id" "uuid", "p_subaccount_code" "text", "p_vendor_pesewas" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."attach_payment_split"("p_payment_id" "uuid", "p_subaccount_code" "text", "p_vendor_pesewas" bigint) TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."attach_payment_transaction"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_raw" "jsonb") TO "service_role";
 
@@ -8037,17 +9925,25 @@ REVOKE ALL ON FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public
 GRANT ALL ON FUNCTION "public"."attach_payout_recipient"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_recipient_code" "text") TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."attach_payout_subaccount"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_subaccount_code" "text", "p_error" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."attach_payout_subaccount"("p_payee_type" "public"."payee_type", "p_payee_id" "uuid", "p_provider" "text", "p_subaccount_code" "text", "p_error" "text") TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."check_allocations_balance"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."check_allocations_balance"() TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."check_handoff_code"("p_order_id" "uuid", "p_kind" "text", "p_supplied" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."check_handoff_code"("p_order_id" "uuid", "p_kind" "text", "p_supplied" "text") TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."customer_profiles" TO "service_role";
 GRANT SELECT ON TABLE "public"."customer_profiles" TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_full_name" "text", "p_student_id_number" "text", "p_class_year" "text", "p_email" "text", "p_student_id_image_path" "text", "p_terms_id" "uuid") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_student_id_number" "text", "p_level" "text", "p_phone" "text", "p_terms_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_student_id_number" "text", "p_level" "text", "p_phone" "text", "p_terms_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_student_id_number" "text", "p_level" "text", "p_phone" "text", "p_terms_id" "uuid") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) FROM PUBLIC;
@@ -8087,6 +9983,11 @@ GRANT ALL ON FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uu
 GRANT ALL ON FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uuid") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."customer_collect_instead"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."customer_collect_instead"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."customer_collect_instead"("p_order_id" "uuid") TO "authenticated";
@@ -8112,9 +10013,19 @@ GRANT ALL ON FUNCTION "public"."customer_order_list"("p_limit" integer) TO "serv
 GRANT ALL ON FUNCTION "public"."customer_order_list"("p_limit" integer) TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status") TO "service_role";
-GRANT ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type") TO "service_role";
+GRANT ALL ON FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."customer_rate_partner"("p_order_id" "uuid", "p_stars" smallint, "p_comment" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."customer_rate_partner"("p_order_id" "uuid", "p_stars" smallint, "p_comment" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."customer_rate_partner"("p_order_id" "uuid", "p_stars" smallint, "p_comment" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."customer_reward_milestones"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."customer_reward_milestones"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."customer_reward_milestones"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."deliverable_locations"() FROM PUBLIC;
@@ -8151,6 +10062,11 @@ REVOKE ALL ON FUNCTION "public"."forbid_mutation"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."forbid_mutation"() TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."fulfilment_options"("p_order_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."fulfilment_options"("p_order_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."fulfilment_options"("p_order_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."generate_numeric_code"("p_digits" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."generate_numeric_code"("p_digits" integer) TO "service_role";
 
@@ -8168,6 +10084,12 @@ GRANT ALL ON FUNCTION "public"."get_my_delivery_code"("p_order_id" "uuid") TO "a
 REVOKE ALL ON FUNCTION "public"."get_my_pickup_code"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_my_pickup_code"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."get_my_pickup_code"("p_order_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."given_name"("p_first" "text", "p_full" "text") TO "anon";
 
 
 REVOKE ALL ON FUNCTION "public"."handle_auth_user_phone_confirmed"() FROM PUBLIC;
@@ -8268,14 +10190,34 @@ GRANT ALL ON FUNCTION "public"."my_partner_application"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_partner_application"() TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."my_partner_payouts"("p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_partner_payouts"("p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_partner_payouts"("p_limit" integer) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."my_partner_rating"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_partner_rating"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_partner_rating"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."my_payout_destination"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."my_payout_destination"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_payout_destination"() TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."my_reward_progress"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_reward_progress"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_reward_progress"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."my_scan_order"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."my_scan_order"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."my_scan_order"("p_order_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."my_vendor_application"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."my_vendor_application"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."my_vendor_application"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."my_vendor_ids"() FROM PUBLIC;
@@ -8292,6 +10234,10 @@ REVOKE ALL ON FUNCTION "public"."notification_events_append_only"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notification_events_append_only"() TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."orders_award_customer_reward"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."orders_award_customer_reward"() TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_accept_delivery"("p_order_id" "uuid") TO "authenticated";
@@ -8302,14 +10248,19 @@ GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_active_delivery"() TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."partner_apply"("p_face_image_path" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."partner_apply"("p_student_id_image_path" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_image_path" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_apply"("p_student_id_image_path" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_cancel_delivery"("p_order_id" "uuid", "p_reason" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."partner_capacity"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_capacity"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_capacity"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."partner_complete_delivery"("p_order_id" "uuid", "p_delivery_code" "text") FROM PUBLIC;
@@ -8320,6 +10271,11 @@ GRANT ALL ON FUNCTION "public"."partner_complete_delivery"("p_order_id" "uuid", 
 REVOKE ALL ON FUNCTION "public"."partner_confirm_customer_absent"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."partner_confirm_customer_absent"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_confirm_customer_absent"("p_order_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."partner_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."partner_delivery_history"("p_limit" integer) FROM PUBLIC;
@@ -8347,6 +10303,11 @@ GRANT ALL ON FUNCTION "public"."partner_report_scan_refused"("p_order_id" "uuid"
 GRANT ALL ON FUNCTION "public"."partner_report_scan_refused"("p_order_id" "uuid", "p_reason" "text") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."partner_scan_brief"("p_order_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean) TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean) TO "authenticated";
@@ -8355,6 +10316,10 @@ GRANT ALL ON FUNCTION "public"."partner_set_availability"("p_available" boolean)
 REVOKE ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."partner_set_payout_destination"("p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."partners_to_notify_of_offer"("p_order_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."partners_to_notify_of_offer"("p_order_id" "uuid") TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."payment_checkout_url"("p_payment_id" "uuid") FROM PUBLIC;
@@ -8369,23 +10334,32 @@ REVOKE ALL ON FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_pr
 GRANT ALL ON FUNCTION "public"."payout_for_transfer"("p_provider" "text", "p_provider_transfer_id" "text", "p_reference" "text") TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."payout_recipient_contact"("p_payout_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."payout_recipient_contact"("p_payout_id" "uuid") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") TO "service_role";
+GRANT ALL ON FUNCTION "public"."payout_threshold_for"("p_payee_type" "public"."payee_type") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."platform_config"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_config"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."platform_config"() TO "anon";
 GRANT ALL ON FUNCTION "public"."platform_config"() TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_items" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."price_order"("p_vendor_id" "uuid", "p_items" "jsonb") TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."price_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."price_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") TO "service_role";
 
 
-REVOKE ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_items" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_items" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."quote_order"("p_vendor_id" "uuid", "p_items" "jsonb") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."quote_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid") FROM PUBLIC;
@@ -8424,8 +10398,8 @@ GRANT ALL ON FUNCTION "public"."scan_image_path"("p_order_id" "uuid") TO "authen
 
 REVOKE ALL ON FUNCTION "public"."scan_restaurants"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "service_role";
-GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "anon";
+GRANT ALL ON FUNCTION "public"."scan_restaurants"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."set_my_email"("p_email" "text") FROM PUBLIC;
@@ -8441,23 +10415,39 @@ REVOKE ALL ON FUNCTION "public"."settle_partner_earnings"("p_order_id" "uuid") F
 GRANT ALL ON FUNCTION "public"."settle_partner_earnings"("p_order_id" "uuid") TO "service_role";
 
 
-REVOKE ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_items" "jsonb", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."storefront_vendors"("p_category_id" "uuid", "p_search" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."storefront_vendors"("p_category_id" "uuid", "p_search" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."storefront_vendors"("p_category_id" "uuid", "p_search" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."storefront_vendors"("p_category_id" "uuid", "p_search" "text") TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_note" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_note" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_note" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_items" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_items" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."submit_order"("p_vendor_id" "uuid", "p_items" "jsonb") TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."update_my_profile"("p_full_name" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."update_my_profile"("p_full_name" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."update_my_profile"("p_full_name" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_items" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."submit_order_for"("p_customer_id" "uuid", "p_vendor_id" "uuid", "p_items" "jsonb") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_details" "text", "p_destination_note" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_details" "text", "p_destination_note" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_destination_location_id" "uuid", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_details" "text", "p_destination_note" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."users_sync_full_name"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."users_sync_full_name"() TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") FROM PUBLIC;
@@ -8465,14 +10455,24 @@ GRANT ALL ON FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") TO "se
 GRANT ALL ON FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid") TO "authenticated";
+GRANT ALL ON TABLE "public"."vendor_images" TO "service_role";
+GRANT SELECT ON TABLE "public"."vendor_images" TO "anon";
+GRANT SELECT ON TABLE "public"."vendor_images" TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."vendor_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."vendor_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."vendor_confirm_pickup"("p_order_id" "uuid", "p_pickup_code" "text") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_earnings_summary"("p_vendor_id" "uuid") FROM PUBLIC;
@@ -8505,9 +10505,18 @@ GRANT ALL ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") TO "se
 GRANT ALL ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."vendor_pending_count"("p_vendor_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_pending_count"("p_vendor_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_pending_count"("p_vendor_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_pickup_code"("p_order_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_pickup_code"("p_order_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_pickup_code"("p_order_id" "uuid") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_reject_order"("p_order_id" "uuid", "p_reason" "text") FROM PUBLIC;
@@ -8523,6 +10532,21 @@ GRANT ALL ON FUNCTION "public"."vendor_set_accepting_orders"("p_vendor_id" "uuid
 REVOKE ALL ON FUNCTION "public"."vendor_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean) TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_set_menu_item_available"("p_menu_item_id" "uuid", "p_available" boolean) TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes" integer) TO "authenticated";
 
 
 GRANT ALL ON SEQUENCE "public"."admin_actions_id_seq" TO "anon";
@@ -8567,6 +10591,10 @@ GRANT SELECT ON TABLE "public"."order_scans" TO "authenticated";
 GRANT ALL ON TABLE "public"."order_secrets" TO "service_role";
 
 
+GRANT ALL ON TABLE "public"."partner_ratings" TO "service_role";
+GRANT SELECT ON TABLE "public"."partner_ratings" TO "authenticated";
+
+
 GRANT ALL ON TABLE "public"."terms_documents" TO "service_role";
 GRANT SELECT ON TABLE "public"."terms_documents" TO "authenticated";
 GRANT SELECT ON TABLE "public"."terms_documents" TO "anon";
@@ -8585,16 +10613,23 @@ GRANT ALL ON TABLE "public"."webhook_events" TO "service_role";
 -- ---------------------------------------------------------------------------
 -- auth.users → public.users provisioning
 -- ---------------------------------------------------------------------------
--- A profile row is created by a trigger the moment a phone number is
+-- A profile row is created by a trigger the moment a contact detail is
 -- CONFIRMED, never when a code is merely requested. GoTrue inserts the
--- auth.users row as soon as someone asks for an OTP, before the number is
--- proven; provisioning then would let anyone claim a phone number they do not
--- own just by asking for a code.
+-- auth.users row as soon as somebody asks for a code, before anything is
+-- proven; provisioning then would let anyone claim a phone number or an address
+-- they do not own just by asking.
 --
 -- Doing it in a trigger rather than in application code means an account can
 -- never exist without a profile: there is no window, and no code path that
 -- forgets. Both trigger functions live in `public` (above) and are granted to
 -- nobody.
+--
+-- THE COLUMN LIST IS THE FIRING CONDITION, not documentation. This trigger was
+-- once declared `AFTER UPDATE OF phone_confirmed_at` alone, and when customers
+-- moved to email sign-in it silently stopped firing for them: GoTrue confirms
+-- an address by updating `email_confirmed_at`, so no profile was ever created
+-- and every customer sign-up died one step after the code was accepted. Both
+-- columns, always.
 
 DROP TRIGGER IF EXISTS "on_auth_user_created" ON "auth"."users";
 CREATE TRIGGER "on_auth_user_created"
@@ -8602,16 +10637,18 @@ CREATE TRIGGER "on_auth_user_created"
   FOR EACH ROW EXECUTE FUNCTION "public"."handle_new_auth_user"();
 
 DROP TRIGGER IF EXISTS "on_auth_user_phone_confirmed" ON "auth"."users";
-CREATE TRIGGER "on_auth_user_phone_confirmed"
-  AFTER UPDATE OF "phone_confirmed_at" ON "auth"."users"
+DROP TRIGGER IF EXISTS "on_auth_user_confirmed" ON "auth"."users";
+CREATE TRIGGER "on_auth_user_confirmed"
+  AFTER UPDATE OF "phone_confirmed_at", "email_confirmed_at" ON "auth"."users"
   FOR EACH ROW EXECUTE FUNCTION "public"."handle_auth_user_phone_confirmed"();
 
 
 -- ---------------------------------------------------------------------------
 -- Private storage for Partner verification documents
 -- ---------------------------------------------------------------------------
--- Holds the student ID photograph and the live face photograph an admin
--- compares during approval.
+-- Holds the student ID photograph and the live face photograph an admin holds
+-- next to each other during approval. Both belong to the PARTNER application;
+-- a customer holds no verification document at all.
 --
 -- The bucket is PRIVATE and deliberately has NO policies on storage.objects.
 -- Without a policy, RLS denies every client read and write — which is exactly
@@ -8629,6 +10666,64 @@ VALUES (
 )
 ON CONFLICT ("id") DO UPDATE
    SET "public"             = false,
+       "file_size_limit"    = EXCLUDED."file_size_limit",
+       "allowed_mime_types" = EXCLUDED."allowed_mime_types";
+
+
+-- ---------------------------------------------------------------------------
+-- Private storage for campus meal scans
+-- ---------------------------------------------------------------------------
+-- A different bucket from the verification documents, because it is a different
+-- subject with a different retention and a different set of readers: a
+-- verification document is looked at once by an administrator, whereas a scan is
+-- released to one assigned Partner for the length of one errand. Keeping them
+-- apart means a policy change to one can never widen the other.
+--
+-- Also NO policies on storage.objects, for the same reason as the other private
+-- bucket. PDF is allowed alongside images because the university issues some
+-- entitlements that way, and a student should not have to screenshot a PDF.
+--
+-- This was missing from this file, which meant a hosted project installed from
+-- schema.sql had no bucket to put a scan in and scan delivery failed there for
+-- a reason nothing in the application would name.
+
+INSERT INTO "storage"."buckets" ("id", "name", "public", "file_size_limit", "allowed_mime_types")
+VALUES (
+  'scan-documents',
+  'scan-documents',
+  false,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
+)
+ON CONFLICT ("id") DO UPDATE
+   SET "public"             = false,
+       "file_size_limit"    = EXCLUDED."file_size_limit",
+       "allowed_mime_types" = EXCLUDED."allowed_mime_types";
+
+
+-- ---------------------------------------------------------------------------
+-- PUBLIC storage for vendor storefront photographs
+-- ---------------------------------------------------------------------------
+-- The one public bucket, and deliberately so. An unauthenticated visitor
+-- browsing the marketplace has to see these, and minting a signed URL per photo
+-- per page load would be real cost for no secret: a picture of a plate of jollof
+-- is advertising.
+--
+-- What stays locked down is WRITING. Like the private buckets it has NO policies
+-- on storage.objects, so RLS denies every client write; reads on a public bucket
+-- are served without one. Every object in it went through
+-- lib/verification/documents.js, which checks who is asking before it uploads.
+
+INSERT INTO "storage"."buckets" ("id", "name", "public", "file_size_limit", "allowed_mime_types")
+VALUES (
+  'vendor-images',
+  'vendor-images',
+  true,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp']
+)
+ON CONFLICT ("id") DO UPDATE
+   SET "public"             = true,
        "file_size_limit"    = EXCLUDED."file_size_limit",
        "allowed_mime_types" = EXCLUDED."allowed_mime_types";
 

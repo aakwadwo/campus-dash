@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import AreaSwitcher from '@/app/area-switcher';
-import { StoreIcon, UserIcon } from '@/app/ui';
+import { UserIcon } from '@/app/ui';
+import { CampusDashMark } from '@/app/brand';
 
 export const metadata = { title: 'Vendor · Campus Dash' };
 
@@ -9,11 +10,11 @@ export const metadata = { title: 'Vendor · Campus Dash' };
  * Guards the SESSION here, and membership one level down.
  *
  * This layout used to call requireVendorStaff(), which bounced anyone with no
- * stall straight to landingFor() — for an administrator, /admin. That read as
+ * store straight to landingFor() — for an administrator, /admin. That read as
  * "/vendor shows the admin dashboard" and cost an afternoon of looking for a
  * routing bug that did not exist.
  *
- * Membership is checked where it can be explained: the index lists the stalls
+ * Membership is checked where it can be explained: the index lists the stores
  * you staff and says so when there are none, and every child route re-checks in
  * the database. /vendor/<someone else's id> still 404s, because getMyVendors()
  * and vendor_order_detail() both re-derive is_vendor_staff() server-side. This
@@ -29,14 +30,12 @@ export default async function VendorLayout({ children }) {
             href="/vendor"
             className="press-sm flex items-center gap-2 font-semibold tracking-tight"
           >
-            <span className="bg-brand-500 text-ink grid size-8 place-items-center rounded-full">
-              <StoreIcon className="size-4" />
-            </span>
-            <span>
+            <CampusDashMark height={26} />
+            <span className="text-[15px]">
               Campus Dash <span className="text-muted font-normal">Vendor</span>
             </span>
           </Link>
-          {/* Staffing a stall does not consume the account. Someone who also
+          {/* Owning a store does not consume the account. Someone who also
               orders or delivers reaches those areas from here, not from memory. */}
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
             <div className="hidden sm:block">

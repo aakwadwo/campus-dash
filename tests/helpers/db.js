@@ -119,7 +119,8 @@ export async function resetTransactionalState() {
         public.order_events, public.order_secrets, public.order_items,
         public.allocations, public.payouts, public.settlement_runs,
         public.payout_destinations,
-        public.payments, public.orders,
+        public.payments, public.orders, public.partner_ratings,
+        public.customer_rewards,
         public.webhook_events, public.idempotency_keys,
         public.notification_events
       restart identity cascade
@@ -129,13 +130,15 @@ export async function resetTransactionalState() {
     await c.query('truncate table public.admin_actions restart identity cascade');
     // Restore the seeded Partner states. Tests suspend and approve Partners, and
     // without this those changes leak into later tests as order-dependent flakes.
-    // The student ID photograph is no longer here — it is the Customer's
-    // document, restored with customer_profiles below.
+    // BOTH verification documents live here now — the student ID photograph
+    // moved back to the Partner application, which is the only review that
+    // looks at one.
     await c.query(`
       update public.partner_profiles
          set status = 'APPROVED', is_available = true,
              reviewed_at = now(), reviewed_by = '00000000-0000-4000-8000-000000000001',
              face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg',
+             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg',
              review_notes = null, documents_purge_after = null
        where user_id in (
          '00000000-0000-4000-8000-000000000031',
@@ -148,7 +151,8 @@ export async function resetTransactionalState() {
          set status = 'PENDING_REVIEW', is_available = false,
              reviewed_at = null, reviewed_by = null, documents_purge_after = null,
              review_notes = null,
-             face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg'
+             face_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/face.jpg',
+             student_id_image_path = 'partner-docs/dev/' || right(user_id::text, 4) || '/student-id.jpg'
        where user_id in (
          '00000000-0000-4000-8000-000000000033',
          '00000000-0000-4000-8000-000000000035'
@@ -186,21 +190,20 @@ export async function resetTransactionalState() {
        )
     `);
     await c.query(`
-      insert into public.customer_profiles (user_id, student_id_number, class_year, student_id_image_path)
+      insert into public.customer_profiles (user_id, student_id_number, level)
       values
-        ('00000000-0000-4000-8000-000000000021','TEST-STU-0021','Class of 2028','partner-docs/dev/0021/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000022','TEST-STU-0022','Class of 2028','partner-docs/dev/0022/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000023','TEST-STU-0023','Class of 2029','partner-docs/dev/0023/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000024','TEST-STU-0024','Class of 2029','partner-docs/dev/0024/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000031','TEST-STU-0031','Class of 2027','partner-docs/dev/0031/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000032','TEST-STU-0032','Class of 2027','partner-docs/dev/0032/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000033','TEST-STU-0033','Class of 2028','partner-docs/dev/0033/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000034','TEST-STU-0034','Class of 2026','partner-docs/dev/0034/student-id.jpg'),
-        ('00000000-0000-4000-8000-000000000035','TEST-STU-0035','Class of 2029','partner-docs/dev/0035/student-id.jpg')
+        ('00000000-0000-4000-8000-000000000021','TEST-STU-0021','200'),
+        ('00000000-0000-4000-8000-000000000022','TEST-STU-0022','200'),
+        ('00000000-0000-4000-8000-000000000023','TEST-STU-0023','100'),
+        ('00000000-0000-4000-8000-000000000024','TEST-STU-0024','100'),
+        ('00000000-0000-4000-8000-000000000031','TEST-STU-0031','300'),
+        ('00000000-0000-4000-8000-000000000032','TEST-STU-0032','300'),
+        ('00000000-0000-4000-8000-000000000033','TEST-STU-0033','200'),
+        ('00000000-0000-4000-8000-000000000034','TEST-STU-0034','400'),
+        ('00000000-0000-4000-8000-000000000035','TEST-STU-0035','100')
       on conflict (user_id) do update
-         set student_id_number     = excluded.student_id_number,
-             class_year            = excluded.class_year,
-             student_id_image_path = excluded.student_id_image_path
+         set student_id_number = excluded.student_id_number,
+             level             = excluded.level
     `);
     await c.query(`
       update public.pricing_config
@@ -208,7 +211,18 @@ export async function resetTransactionalState() {
              partner_share_of_delivery_bps = 10000,
              vendor_response_seconds = 60, partner_search_seconds = 600,
              customer_absent_wait_seconds = 300,
-             payment_pending_timeout_seconds = 900
+             payment_pending_timeout_seconds = 900,
+             scan_service_fee_pesewas = 200,
+             -- Operational limits a test may have changed and committed. Both
+             -- are read on every attempt they govern, so a value left behind by
+             -- one file changes what the next file's Partners and handoffs are
+             -- allowed to do.
+             max_active_deliveries_per_partner = 2,
+             -- The Partner weekly payout policy. A test that lowers it to
+             -- exercise payout mechanics must not lower it for the next file.
+             partner_min_payout_pesewas = 2000,
+             code_attempt_limit = 5,
+             code_lockout_seconds = 300
        where id
     `);
     // Restore the seeded CATALOGUE, not just its flags. Admin tests rename,
@@ -222,43 +236,63 @@ export async function resetTransactionalState() {
          '20000000-0000-4000-8000-000000000001',
          '20000000-0000-4000-8000-000000000002',
          '20000000-0000-4000-8000-000000000003',
-         '20000000-0000-4000-8000-000000000004'
+         '20000000-0000-4000-8000-000000000004',
+         '20000000-0000-4000-8000-000000000005',
+         '20000000-0000-4000-8000-000000000006'
        )
     `);
     // can_accept_scans is restored here too. Scan tests flip it to prove a
     // non-scan restaurant is refused, and without a restore that flag leaks
     // into the next file exactly as a renamed vendor once did.
+    // Ownership is restored with the row. It is the vendor capability, so a
+    // test that reassigns or clears it would otherwise silently un-vendor an
+    // account for every file that runs afterwards. Vendors 3 and 4 keep a NULL
+    // owner on purpose: they are catalogue-only scan restaurants.
     await c.query(`
-      insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, location_id, walk_minutes_to_campus)
+      insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans,
+                                  owner_user_id, category_id, description, applicant_name,
+                                  owner_is_student, submitted_at, reviewed_at, rejection_reason,
+                                  location_id, walk_minutes_to_campus)
       values
         ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One', '+233200000011', 'ACTIVE', true, false,
+         '00000000-0000-4000-8000-000000000011', '40000000-0000-4000-8000-000000000001',
+         'Hot Ghanaian staples cooked to order.', 'Muni Owner (test)', false, now(), now(), null,
          '10000000-0000-4000-8000-000000000030', 4),
         ('20000000-0000-4000-8000-000000000002', 'Test Grill Two', '+233200000012', 'ACTIVE', true, false,
+         '00000000-0000-4000-8000-000000000012', '40000000-0000-4000-8000-000000000002',
+         'Shawarma, burgers and pies from the grill.', 'Grill Owner (test)', true, now(), now(), null,
          '10000000-0000-4000-8000-000000000040', 6),
-        ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000013', 'ACTIVE', true, true,
+        ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000053', 'ACTIVE', true, true,
+         null, '40000000-0000-4000-8000-000000000004', null, null, null, null, null, null,
          '10000000-0000-4000-8000-000000000030', 3),
-        ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)', '+233200000014', 'ACTIVE', true, true,
-         '10000000-0000-4000-8000-000000000040', 5)
+        ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)', '+233200000054', 'ACTIVE', true, true,
+         null, '40000000-0000-4000-8000-000000000001', null, null, null, null, null, null,
+         '10000000-0000-4000-8000-000000000040', 5),
+        ('20000000-0000-4000-8000-000000000005', 'Pending Provisions (test)', '+233200000013', 'PENDING_APPROVAL', false, false,
+         '00000000-0000-4000-8000-000000000013', '40000000-0000-4000-8000-000000000005',
+         'Dry goods, toiletries and phone credit.', 'Pending Owner (test)', true, now(), null, null,
+         null, null),
+        ('20000000-0000-4000-8000-000000000006', 'Rejected Snacks (test)', '+233200000014', 'REJECTED', false, false,
+         '00000000-0000-4000-8000-000000000014', '40000000-0000-4000-8000-000000000002',
+         'Chips and sweets.', 'Rejected Owner (test)', true, now(), now(),
+         'The store name and the description do not match. Resubmit with the real trading name.',
+         null, null)
       on conflict (id) do update
          set name = excluded.name, phone = excluded.phone, status = excluded.status,
              is_accepting_orders = excluded.is_accepting_orders,
              can_accept_scans = excluded.can_accept_scans,
+             owner_user_id = excluded.owner_user_id,
+             category_id = excluded.category_id,
+             description = excluded.description,
+             applicant_name = excluded.applicant_name,
+             owner_is_student = excluded.owner_is_student,
+             submitted_at = excluded.submitted_at,
+             reviewed_at = excluded.reviewed_at,
+             rejection_reason = excluded.rejection_reason,
              location_id = excluded.location_id,
              walk_minutes_to_campus = excluded.walk_minutes_to_campus
     `);
-    await c.query(`
-      insert into public.vendor_users (vendor_id, user_id) values
-        ('20000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000011'),
-        ('20000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000012')
-      on conflict do nothing
-    `);
-    await c.query(`
-      delete from public.vendor_users
-       where (vendor_id, user_id) not in (
-         ('20000000-0000-4000-8000-000000000001'::uuid, '00000000-0000-4000-8000-000000000011'::uuid),
-         ('20000000-0000-4000-8000-000000000002'::uuid, '00000000-0000-4000-8000-000000000012'::uuid)
-       )
-    `);
+    await c.query(`delete from public.vendor_images`);
     await c.query(`
       insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order)
       values
@@ -296,59 +330,86 @@ export async function resetTransactionalState() {
            '30000000-0000-4000-8000-000000000031','30000000-0000-4000-8000-000000000032'
          )
     `);
-    // Locations: drop anything a test created, then restore the seeded rows'
-    // full state. is_deliverable in particular is toggled by admin tests, and
-    // restoring only is_active leaves the next file ordering to a floor.
+    // Locations: drop anything a test created, then restore the seeded rows in
+    // full. UPSERT, not UPDATE — a seeded row can now genuinely be DELETED by an
+    // admin test, because an order no longer names a destination at submission
+    // and therefore no longer pins one. An update-only restore left Room 204
+    // missing for every file that ran afterwards, and the failure it produced
+    // ("destination is not a valid delivery location") pointed nowhere near it.
     await c.query(`
       delete from public.locations
        where id::text not like '10000000-0000-4000-8000-%'
     `);
     await c.query(`
-      update public.locations l
-         set name = v.name, is_deliverable = v.deliverable,
-             walk_minutes = v.walk, is_active = true
-        from (values
-          ('10000000-0000-4000-8000-000000000001','Academic City',     false, 0),
-          ('10000000-0000-4000-8000-000000000010','Hostel Block A',    false, 5),
-          ('10000000-0000-4000-8000-000000000020','Hostel Block B',    false, 7),
-          ('10000000-0000-4000-8000-000000000030','Academic Block',    false, 3),
-          ('10000000-0000-4000-8000-000000000040','Sports Complex',    false, 9),
-          ('10000000-0000-4000-8000-000000000011','Floor 1',           false, null),
-          ('10000000-0000-4000-8000-000000000012','Floor 2',           false, null),
-          ('10000000-0000-4000-8000-000000000021','Floor 1',           false, null),
-          ('10000000-0000-4000-8000-000000000031','Ground Floor',      false, null),
-          ('10000000-0000-4000-8000-000000000111','Room 101',          true,  null),
-          ('10000000-0000-4000-8000-000000000112','Room 102',          true,  null),
-          ('10000000-0000-4000-8000-000000000121','Room 204',          true,  null),
-          ('10000000-0000-4000-8000-000000000122','Room 205',          true,  null),
-          ('10000000-0000-4000-8000-000000000211','Room 110',          true,  null),
-          ('10000000-0000-4000-8000-000000000311','Library Entrance',  true,  null),
-          ('10000000-0000-4000-8000-000000000411','Main Field',        true,  null)
-        ) as v(id, name, deliverable, walk)
-       where l.id = v.id::uuid
+      insert into public.locations (id, parent_id, kind, name, is_deliverable, walk_minutes, sort_order, is_active)
+      values
+        ('10000000-0000-4000-8000-000000000001', null, 'CAMPUS', 'Academic City', false, 0, 0, true),
+        ('10000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block A', false, 5, 10, true),
+        ('10000000-0000-4000-8000-000000000020', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block B', false, 7, 20, true),
+        ('10000000-0000-4000-8000-000000000030', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Academic Block', false, 3, 30, true),
+        ('10000000-0000-4000-8000-000000000040', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Sports Complex', false, 9, 40, true),
+        ('10000000-0000-4000-8000-000000000011', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 1', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000012', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 2', false, null, 2, true),
+        ('10000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000020', 'FLOOR', 'Floor 1', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000031', '10000000-0000-4000-8000-000000000030', 'FLOOR', 'Ground Floor', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000111', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 101', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000112', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 102', true, null, 2, true),
+        ('10000000-0000-4000-8000-000000000121', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 204', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000122', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 205', true, null, 2, true),
+        ('10000000-0000-4000-8000-000000000211', '10000000-0000-4000-8000-000000000021', 'ROOM', 'Room 110', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000311', '10000000-0000-4000-8000-000000000031', 'COMMON_AREA', 'Library Entrance', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000411', '10000000-0000-4000-8000-000000000040', 'FIELD', 'Main Field', true, null, 1, true)
+      on conflict (id) do update
+         set parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name,
+             is_deliverable = excluded.is_deliverable, walk_minutes = excluded.walk_minutes,
+             sort_order = excluded.sort_order, is_active = true
     `);
     await c.query(`update public.users set is_suspended = false`);
-    // Email is set by the payment tests and by partner applications. Clearing
-    // it keeps "this account has no address yet" a reachable starting state.
-    await c.query(`update public.users set email = null`);
-    // Restore seeded display names: tests rename accounts and commit.
+    // Restore seeded names AND addresses: tests rename accounts and commit.
+    //
+    // THE PARTS, NOT full_name. full_name is derived from first_name and
+    // last_name by a trigger, so restoring only the whole would be overwritten
+    // by the parts a test left behind — the fixture has to put back what the
+    // trigger reads.
+    //
+    // A customer's school address is their sign-in identity, so it is restored
+    // rather than cleared: blanking it would delete the identity, not reset a
+    // stray field. Vendor accounts have no address at all, which is the point —
+    // they sign in by phone and are never asked for one.
     await c.query(`
-      update public.users u set full_name = v.name
+      update public.users u
+         set first_name = v.first, last_name = v.last, email = v.email
         from (values
-          ('00000000-0000-4000-8000-000000000001','Dev Admin'),
-          ('00000000-0000-4000-8000-000000000011','Muni Owner (test)'),
-          ('00000000-0000-4000-8000-000000000012','Grill Owner (test)'),
-          ('00000000-0000-4000-8000-000000000021','Ama Test-Customer'),
-          ('00000000-0000-4000-8000-000000000022','Kwesi Test-Customer'),
-          ('00000000-0000-4000-8000-000000000023','Efua Test-Customer'),
-          ('00000000-0000-4000-8000-000000000031','Yaw Test-Partner'),
-          ('00000000-0000-4000-8000-000000000032','Adjoa Test-Partner'),
-          ('00000000-0000-4000-8000-000000000033','Kofi Test-Applicant'),
-          ('00000000-0000-4000-8000-000000000034','Esi Test-Partner'),
-          ('00000000-0000-4000-8000-000000000035','Kojo Test-Applicant'),
-          ('00000000-0000-4000-8000-000000000024','Abena Test-Customer')
-        ) as v(id, name)
+          ('00000000-0000-4000-8000-000000000001','Dev',     'Admin',           'admin@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000011','Muni',    'Owner (test)',    null),
+          ('00000000-0000-4000-8000-000000000012','Grill',   'Owner (test)',    null),
+          ('00000000-0000-4000-8000-000000000013','Pending', 'Owner (test)',    null),
+          ('00000000-0000-4000-8000-000000000014','Rejected','Owner (test)',    null),
+          ('00000000-0000-4000-8000-000000000021','Ama',     'Test-Customer',   'ama@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000022','Kwesi',   'Test-Customer',   'kwesi@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000023','Efua',    'Test-Customer',   'efua@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000031','Yaw',     'Test-Partner',    'yaw@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000032','Adjoa',   'Test-Partner',    'adjoa@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000033','Kofi',    'Test-Applicant',  'kofi@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000034','Esi',     'Test-Partner',    'esi@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000035','Kojo',    'Test-Applicant',  'kojo@acity.edu.gh'),
+          ('00000000-0000-4000-8000-000000000024','Abena',   'Test-Customer',   'abena@acity.edu.gh')
+        ) as v(id, first, last, email)
        where u.id = v.id::uuid
+    `);
+    // Addresses claimed by accounts the tests invented, so a re-run of the same
+    // fixture does not collide on users_email_unique.
+    await c.query(`
+      update public.users set email = null
+       where id not in (
+         '00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000011',
+         '00000000-0000-4000-8000-000000000012','00000000-0000-4000-8000-000000000013',
+         '00000000-0000-4000-8000-000000000014','00000000-0000-4000-8000-000000000021',
+         '00000000-0000-4000-8000-000000000022','00000000-0000-4000-8000-000000000023',
+         '00000000-0000-4000-8000-000000000024','00000000-0000-4000-8000-000000000031',
+         '00000000-0000-4000-8000-000000000032','00000000-0000-4000-8000-000000000033',
+         '00000000-0000-4000-8000-000000000034','00000000-0000-4000-8000-000000000035'
+       )
     `);
     // Remove accounts created by the auth provisioning tests.
     await c.query(`delete from auth.users where phone like '23320999%'`);
@@ -360,6 +421,8 @@ export const ACTORS = {
   admin: '00000000-0000-4000-8000-000000000001',
   vendor1Staff: '00000000-0000-4000-8000-000000000011',
   vendor2Staff: '00000000-0000-4000-8000-000000000012',
+  vendorPendingOwner: '00000000-0000-4000-8000-000000000013',
+  vendorRejectedOwner: '00000000-0000-4000-8000-000000000014',
   customerAma: '00000000-0000-4000-8000-000000000021',
   customerKwesi: '00000000-0000-4000-8000-000000000022',
   customerEfua: '00000000-0000-4000-8000-000000000023',
@@ -378,6 +441,20 @@ export const VENDORS = {
   // scan order is refused at a restaurant that does not take scans.
   wafflemania: '20000000-0000-4000-8000-000000000003',
   yellowBar: '20000000-0000-4000-8000-000000000004',
+  // Awaiting review and rejected-with-a-reason. Both are owned; neither is
+  // ACTIVE, so neither appears in the marketplace or grants a dashboard.
+  pending: '20000000-0000-4000-8000-000000000005',
+  rejected: '20000000-0000-4000-8000-000000000006',
+};
+
+/** Reference data from the migration, not the seed. Stable ids everywhere. */
+export const CATEGORIES = {
+  meals: '40000000-0000-4000-8000-000000000001',
+  snacks: '40000000-0000-4000-8000-000000000002',
+  drinks: '40000000-0000-4000-8000-000000000003',
+  bakery: '40000000-0000-4000-8000-000000000004',
+  groceries: '40000000-0000-4000-8000-000000000005',
+  other: '40000000-0000-4000-8000-00000000000c',
 };
 
 export const MENU = {

@@ -152,7 +152,9 @@ order, and would point a `NOT NULL` column at a missing file.
 - Whether a student may request deletion of the ID photograph while keeping the
   account, and what the account can still do afterwards.
 - Whether the photograph should be deleted once a student graduates out of the
-  pilot, and how that would be known — `class_year` is declared, never verified.
+  pilot, and how that would be known — `level` is declared, never verified. The
+  verified `@acity.edu.gh` address is now the closest thing to a check, and it
+  proves membership of the university rather than enrolment in a given year.
 - Whether it should be deleted after some period once the ID has been checked
   once, keeping only the checked-on date.
 
@@ -167,9 +169,10 @@ question by accident, and a wrong automatic delete of identity evidence is not
 recoverable.
 
 **19. Data Protection Commission requirements?**
-We hold phone numbers, government-adjacent ID photographs and live face
-photographs of students. Registration obligations, lawful basis and subject
-rights are all unaddressed.
+We hold phone numbers and student ID photographs of students. Registration
+obligations, lawful basis and subject rights are all unaddressed. (Live face
+photographs are no longer collected, which removes the most sensitive category
+but not the question.)
 
 **20. Partner contractor and liability structure?**
 Partners are treated as independent. Whether that survives contact with

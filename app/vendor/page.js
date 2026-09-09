@@ -1,61 +1,49 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getMyVendors } from '@/lib/vendor';
-import { myLanding } from '@/lib/auth/session';
+import { getCapabilities, myLanding } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Most people work for exactly one stall, so send them straight there. The
- * picker only appears for someone who genuinely staffs several.
+ * One account, one store — so this is almost always a redirect.
+ *
+ * The three other answers all matter, and all used to be the same silent bounce
+ * to landingFor(): an applicant waiting on review, an applicant who was turned
+ * down, and an account with no store at all. Each gets its own destination,
+ * because "you landed on /admin" is not an answer to "where is my store".
  */
 export default async function VendorIndexPage() {
-  const vendors = await getMyVendors();
+  const me = await getCapabilities();
 
-  if (vendors.length === 1) redirect(`/vendor/${vendors[0].id}`);
-
-  // Nobody has linked this account to a stall. Say so. Silently redirecting
-  // here is what made an administrator visiting /vendor look like a routing
-  // bug: they landed on /admin with no explanation and reasonably concluded
-  // the vendor area was resolving to the admin one.
-  if (vendors.length === 0) {
-    const home = await myLanding();
-    return (
-      <main className="mx-auto max-w-3xl px-5 py-10">
-        <h1 className="text-2xl font-semibold tracking-tight">No stall yet</h1>
-        <p className="text-muted mt-3 text-sm">
-          This account is not linked to a vendor, so there is no order board to show. An
-          administrator adds vendor staff by phone number under Admin → Vendors → the stall → Staff.
-        </p>
-        <Link href={home} className="text-brand-700 mt-6 inline-block text-sm font-medium">
-          Go to your own area →
-        </Link>
-      </main>
-    );
+  if (me.vendor_ids?.length) {
+    const vendors = await getMyVendors();
+    if (vendors.length > 0) redirect(`/vendor/${vendors[0].vendor_id}`);
   }
 
+  if (me.vendor_status && me.vendor_status !== 'NOT_APPLIED') {
+    redirect('/vendor/application');
+  }
+
+  const home = await myLanding();
   return (
     <main className="mx-auto max-w-3xl px-5 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Choose a stall</h1>
-      <ul className="mt-6 space-y-2">
-        {vendors.map((vendor) => (
-          <li key={vendor.id}>
-            <Link
-              href={`/vendor/${vendor.id}`}
-              className="rounded-card bg-surface ring-line flex items-center justify-between px-4 py-4 ring-1"
-            >
-              <span className="font-medium">{vendor.name}</span>
-              <span
-                className={
-                  vendor.is_accepting_orders ? 'text-brand-700 text-sm' : 'text-muted text-sm'
-                }
-              >
-                {vendor.is_accepting_orders ? 'Open' : 'Closed'}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <h1 className="text-2xl font-semibold tracking-tight">No store on this account</h1>
+      <p className="text-muted mt-3 text-sm leading-relaxed">
+        This account does not run a store yet, so there is no order board to show. Registering one
+        takes a minute and does not affect anything else this account can do.
+      </p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link
+          href="/vendor/signup"
+          className="bg-brand-700 rounded-full px-5 py-2.5 text-sm font-semibold text-white"
+        >
+          Register a store
+        </Link>
+        <Link href={home} className="text-brand-700 py-2.5 text-sm font-medium">
+          Go to your own area →
+        </Link>
+      </div>
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
-import { listVendors } from '@/lib/customer';
+import { listVendors, listCategories } from '@/lib/customer';
+import { vendorImageUrl } from '@/lib/verification/documents';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import VendorSearch from './vendor-search';
@@ -37,11 +38,15 @@ export const dynamic = 'force-dynamic';
  * filter is also simply the right tool.
  */
 export default async function VendorListPage() {
-  const me = await getCapabilities();
-  const vendors = await listVendors();
+  const [me, rows, categories] = await Promise.all([
+    getCapabilities(),
+    listVendors(),
+    listCategories(),
+  ]);
 
-  const open = vendors.filter((v) => v.is_accepting_orders);
-  const closed = vendors.filter((v) => !v.is_accepting_orders);
+  // The public URL is resolved here. A client component has no business reading
+  // configuration, and a server component cannot hand it a function.
+  const vendors = rows.map((v) => ({ ...v, image_url: vendorImageUrl(v.image_path) }));
 
   return (
     <div className="min-h-dvh">
@@ -75,13 +80,13 @@ export default async function VendorListPage() {
             <ChevronRightIcon className="text-faint ml-auto size-4 shrink-0" />
           </Link>
 
-          <VendorSearch open={open} closed={closed} />
+          <VendorSearch vendors={vendors} categories={categories} />
 
           {vendors.length === 0 ? (
             <EmptyState
               icon={<StoreIcon className="size-6" />}
               title="No vendors yet"
-              description="Campus Dash is still signing up stalls around Academic City. Check back shortly."
+              description="Campus Dash is still adding stores around Academic City. Check back shortly."
             />
           ) : null}
 
@@ -102,14 +107,14 @@ export function OrderingGate({ me, className = '' }) {
 
   const { href, label, body } = !me.authenticated
     ? {
-        href: '/login?next=%2Forder',
-        label: 'Sign in',
-        body: 'Browse as much as you like. To place an order you need a Campus Dash account.',
+        href: '/signup?next=%2Forder',
+        label: 'Create an account',
+        body: 'Browse as much as you like. To place an order you need a Campus Dash account. It takes a minute and uses your school email.',
       }
     : {
-        href: '/onboarding?next=%2Forder',
-        label: 'Add your student details',
-        body: 'Campus Dash is for Academic City students. Add your student details to this account and you can order.',
+        href: '/signup?next=%2Forder',
+        label: 'Finish signing up',
+        body: 'Campus Dash is for Academic City students. Finish signing up with your school email and you can order.',
       };
 
   return (

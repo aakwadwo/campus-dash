@@ -14,6 +14,8 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
+  chooseFulfilment,
   vendorAccept,
   payOrder,
   vendorPrepare,
@@ -71,13 +73,16 @@ describe('vendor module', () => {
     let card = rows.find((r) => r.order_id === order.order_id);
     assert.equal(card.bucket, 'NEW', 'it lands in the group that needs an answer');
     assert.equal(card.item_count, 1);
-    assert.equal(card.total_pesewas, 7850);
+    // 2 × GH₵35 + 5%. No delivery fee: the customer chooses after acceptance.
+    assert.equal(card.total_pesewas, 7350);
     assert.ok(card.seconds_to_deadline > 0 && card.seconds_to_deadline <= 60);
 
     await vendorAccept(order.order_id);
     rows = await board(ACTORS.vendor1Staff);
     assert.equal(rows.find((r) => r.order_id === order.order_id).bucket, 'PREPARING');
 
+    // The customer chooses how they want it before there is anything to charge.
+    await chooseFulfilment(order.order_id);
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -93,8 +98,7 @@ describe('vendor module', () => {
   });
 
   test('a pickup order runs the same path and completes without any Partner', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -102,10 +106,22 @@ describe('vendor module', () => {
     const beforeComplete = await getOrder(order.order_id);
     assert.equal(beforeComplete.delivery_status, 'NONE', 'dispatch never opens for pickup');
 
+    // The CUSTOMER holds the collection code and shows it at the counter; the
+    // vendor types in what they see. Reading it from order_secrets here stands
+    // in for that conversation — no client role can select that table.
+    const wrong = await tryTransition(
+      ACTORS.vendor1Staff,
+      'select public.vendor_complete_pickup_order($1, $2)',
+      [order.order_id, '0000']
+    );
+    assert.equal(wrong.success, false, 'a made-up code completes nothing');
+    assert.equal((await getOrder(order.order_id)).order_status, 'READY');
+
+    const code = (await getSecrets(order.order_id)).pickup_code;
     const result = await tryTransition(
       ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1)',
-      [order.order_id]
+      'select public.vendor_complete_pickup_order($1, $2)',
+      [order.order_id, code]
     );
     assert.equal(result.success, true);
     assert.equal((await getOrder(order.order_id)).order_status, 'COMPLETED');
@@ -113,10 +129,8 @@ describe('vendor module', () => {
 
   test('the board groups every state into exactly one bucket', async () => {
     const submitted = await submitOrder();
-    const accepted = await submitOrder({ customer: ACTORS.customerKwesi });
-    await vendorAccept(accepted.order_id);
-    const ready = await submitOrder({ customer: ACTORS.customerEfua });
-    await vendorAccept(ready.order_id);
+    const accepted = await acceptedOrder({ customer: ACTORS.customerKwesi });
+    const ready = await acceptedOrder({ customer: ACTORS.customerEfua });
     await payOrder(ready.order_id);
     await vendorPrepare(ready.order_id);
     await vendorReady(ready.order_id);
@@ -226,51 +240,27 @@ describe('vendor module', () => {
   });
 
   // =========================================================================
-  // Multiple staff on one stall
+  // Ownership
   // =========================================================================
-  test('two staff on the same stall both see and can act on its orders', async () => {
-    await asUser(
-      ACTORS.admin,
-      (c) =>
-        c.query('select public.admin_add_vendor_user($1, $2, $3)', [
-          VENDORS.one,
-          '+233200000022',
-          'second counter staff',
-        ]),
-      { commit: true }
-    );
-
+  // ONE ACCOUNT, ONE STORE. The staff join table is gone: "who may operate this
+  // business" is a single column on vendors, so there is no second person to
+  // add and no colleague to race. What replaced the old multi-staff tests is
+  // the question that actually matters — losing the store cuts off the board.
+  test('the owner sees the board, and nobody else does', async () => {
     const order = await submitOrder();
-    const asFirst = await board(ACTORS.vendor1Staff);
-    const asSecond = await board(ACTORS.customerKwesi);
-    assert.ok(asFirst.some((r) => r.order_id === order.order_id));
-    assert.ok(
-      asSecond.some((r) => r.order_id === order.order_id),
-      'the colleague sees it too'
-    );
 
-    // The second staff member accepts; the first sees the result.
-    const accepted = await tryTransition(
-      ACTORS.customerKwesi,
-      'select public.vendor_accept_order($1)',
-      [order.order_id]
-    );
-    assert.equal(accepted.success, true);
-    const after = await board(ACTORS.vendor1Staff);
-    assert.equal(after.find((r) => r.order_id === order.order_id).bucket, 'PREPARING');
+    assert.ok((await board(ACTORS.vendor1Staff)).some((r) => r.order_id === order.order_id));
+
+    for (const stranger of [ACTORS.vendor2Staff, ACTORS.customerKwesi, ACTORS.partnerYaw]) {
+      assert.deepEqual(await board(stranger), [], 'a stranger sees nothing');
+      assert.equal(await detail(stranger, order.order_id), null);
+    }
   });
 
-  test('removing a staff member cuts off the board immediately', async () => {
+  test('losing the store cuts off the board immediately', async () => {
     const order = await submitOrder();
-    await asUser(
-      ACTORS.admin,
-      (c) =>
-        c.query('select public.admin_remove_vendor_user($1, $2, $3)', [
-          VENDORS.one,
-          ACTORS.vendor1Staff,
-          'left the job',
-        ]),
-      { commit: true }
+    await asService((c) =>
+      c.query('update public.vendors set owner_user_id = null where id = $1', [VENDORS.one])
     );
 
     assert.deepEqual(await board(ACTORS.vendor1Staff), []);
@@ -285,23 +275,16 @@ describe('vendor module', () => {
   });
 
   // =========================================================================
-  // Concurrency between colleagues
+  // Concurrency
   // =========================================================================
-  test('two staff accepting the same order at once: one wins, the other is told plainly', async () => {
-    await asUser(
-      ACTORS.admin,
-      (c) =>
-        c.query('select public.admin_add_vendor_user($1, $2, $3)', [
-          VENDORS.one,
-          '+233200000022',
-          'second counter staff',
-        ]),
-      { commit: true }
-    );
+  // ONE OWNER, TWO DEVICES. The old version of this test used two staff
+  // accounts; with one account per store the realistic race is a phone and a
+  // tablet on the same counter, which is the same race and the same guarantee.
+  test('the same owner accepting twice at once: one wins, the other is told plainly', async () => {
     const order = await submitOrder();
 
     const one = await dedicatedClient(ACTORS.vendor1Staff);
-    const two = await dedicatedClient(ACTORS.customerKwesi);
+    const two = await dedicatedClient(ACTORS.vendor1Staff);
     try {
       const results = await Promise.all([
         one.query('select * from public.vendor_accept_order($1)', [order.order_id]),
@@ -360,12 +343,19 @@ describe('vendor module', () => {
     for (const [sql, expected] of [
       ['select public.vendor_mark_preparing($1)', /cannot start preparing from state SUBMITTED/],
       ['select public.vendor_mark_ready($1)', /cannot be marked ready from state SUBMITTED/],
-      ['select public.vendor_complete_pickup_order($1)', /not a ready pickup order/],
     ]) {
       const result = await tryTransition(ACTORS.vendor1Staff, sql, [order.order_id]);
       assert.equal(result.success, false);
       assert.match(result.reason, expected);
     }
+
+    // Completing a collection takes a code as well, so it is checked separately.
+    const collection = await tryTransition(
+      ACTORS.vendor1Staff,
+      'select public.vendor_complete_pickup_order($1, $2)',
+      [order.order_id, '0000']
+    );
+    assert.equal(collection.success, false);
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.order_status, 'SUBMITTED');
@@ -374,8 +364,7 @@ describe('vendor module', () => {
   });
 
   test('a vendor cannot start cooking before the money is in', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const result = await tryTransition(
       ACTORS.vendor1Staff,
@@ -438,8 +427,7 @@ describe('vendor module', () => {
   // Things a vendor must never be able to do
   // =========================================================================
   test('a vendor cannot mark an order PAID', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const direct = await expectRejection(
       asUser(ACTORS.vendor1Staff, (c) =>
@@ -477,7 +465,7 @@ describe('vendor module', () => {
     );
     assert.match(onLines.message, /permission denied/i);
 
-    assert.equal((await getOrder(order.order_id)).total_pesewas, 7850);
+    assert.equal((await getOrder(order.order_id)).total_pesewas, 7350);
   });
 
   test('repricing the MENU does not move an order already submitted', async () => {
@@ -495,7 +483,7 @@ describe('vendor module', () => {
     );
 
     const view = await detail(ACTORS.vendor1Staff, order.order_id);
-    assert.equal(view.total_pesewas, 7850);
+    assert.equal(view.total_pesewas, 7350);
     assert.equal(
       view.items[0].unit_price_pesewas,
       3500,
@@ -587,16 +575,34 @@ describe('vendor module', () => {
     );
     assert.match(error.message, /permission denied/i);
 
+    // get_my_pickup_code() is the CUSTOMER's collection code, for an order they
+    // are picking up themselves. A vendor is not its holder and gets nothing.
     const viaFunction = await expectRejection(
       asUser(ACTORS.vendor1Staff, (c) =>
         c.query('select public.get_my_pickup_code($1)', [order.order_id])
       )
     );
-    assert.match(viaFunction.message, /no pickup code available/);
+    assert.match(viaFunction.message, /no collection code available/);
+
+    // What a vendor CAN read is the handoff code for a Partner standing at
+    // their counter — and only while one actually is.
+    const handoff = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (await c.query('select public.vendor_pickup_code($1) as code', [order.order_id])).rows[0]
+          .code
+    );
+    assert.match(handoff, /^\d{4}$/);
+
+    // The delivery code stays out of reach: it is the customer's, and a vendor
+    // who held it could record a delivery that never happened.
+    assert.ok(
+      !JSON.stringify(await detail(ACTORS.vendor1Staff, order.order_id)).includes('delivery_code')
+    );
   });
 
   test('the board never carries the room number or the customer', async () => {
-    const order = await submitOrder({ destination: LOCATIONS.room204 });
+    const order = await acceptedOrder({ destination: LOCATIONS.room204 });
     const card = (await board(ACTORS.vendor1Staff)).find((r) => r.order_id === order.order_id);
 
     assert.equal(card.destination_zone, 'Hostel Block A', 'the zone is useful context');
@@ -656,8 +662,7 @@ describe('vendor module', () => {
   });
 
   test('closing the stall does not disturb orders already in flight', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     await asUser(
@@ -779,8 +784,7 @@ describe('vendor module', () => {
   // Privacy: the customer's phone number
   // =========================================================================
   test('a vendor cannot read the customer behind a live order', async () => {
-    const order = await submitOrder({ customer: ACTORS.customerAma });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ customer: ACTORS.customerAma });
 
     const rows = await asUser(
       ACTORS.vendor1Staff,
@@ -794,8 +798,7 @@ describe('vendor module', () => {
   // Audit
   // =========================================================================
   test('the whole vendor journey is reconstructable from the event log', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -814,6 +817,9 @@ describe('vendor module', () => {
       [
         'ORDER_SUBMITTED',
         'VENDOR_ACCEPT',
+        // The customer's choice is an event in its own right, between the
+        // vendor's answer and the money: it is what fixed the price.
+        'FULFILMENT_CHOSEN',
         'PAYMENT_INTENT_CREATED',
         'PAYMENT_CONFIRMED',
         'VENDOR_PREPARING',

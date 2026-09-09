@@ -21,7 +21,8 @@ application event → notify() → dedup → SmsProvider → Arkesel
 | `fake`    | Prints to the server console and `/dev/inbox`. No account, no cost. The default, and what development uses. |
 | `arkesel` | The real thing. **Every message spends credit.**                                                            |
 
-Phone OTP goes through whichever is configured, because Supabase Auth's Send
+Phone OTP — which is how VENDORS sign in — goes through whichever is
+configured, because Supabase Auth's Send
 SMS Hook hands the message to the same seam as every order notification. So
 switching to `arkesel` switches sign-in codes to real SMS at the same time.
 

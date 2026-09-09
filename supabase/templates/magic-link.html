@@ -1,0 +1,23 @@
+<!--
+  The email a customer gets when they sign in or sign up.
+
+  IT MUST CONTAIN {{ .Token }}. Supabase's default template offers only a magic
+  LINK, and Campus Dash asks for a six-digit code instead: a link opens in
+  whichever browser the mail app chooses, which on a phone is routinely not the
+  one holding the half-filled sign-up form. A code can be typed into the tab
+  that is already open.
+
+  A hosted project needs the same change, under Authentication → Email
+  Templates → Magic Link. Nothing in the application generates or checks this
+  code — Supabase Auth does — so the template is the whole integration.
+-->
+<h2>Your Campus Dash code</h2>
+
+<p style="font-size: 32px; font-weight: 700; letter-spacing: 0.3em; margin: 24px 0">{{ .Token }}</p>
+
+<p>Enter it on the Campus Dash tab you already have open. It expires shortly.</p>
+
+<p style="color: #666; font-size: 13px">
+  If you did not ask for this code, ignore this email. Somebody typed your address by mistake;
+  nothing has happened to your account.
+</p>

@@ -20,6 +20,7 @@ const NAV = [
   { href: '/admin/vendors', label: 'Vendors' },
   { href: '/admin/customers', label: 'Customers' },
   { href: '/admin/partners', label: 'Partners' },
+  { href: '/admin/community', label: 'Community' },
   { href: '/admin/payments', label: 'Payments' },
   { href: '/admin/finance', label: 'Finance' },
   { href: '/admin/settlements', label: 'Payouts' },
@@ -58,7 +59,7 @@ export default async function AdminLayout({ children }) {
           </nav>
           <div className="ml-auto flex items-center gap-6">
             {/* Admin is a capability, not an account type. If this account also
-                orders, staffs a stall or carries deliveries, those areas are
+                orders, owns a store or carries deliveries, those areas are
                 one click away rather than lost behind the landing precedence. */}
             <AreaSwitcher current="/admin" />
           </div>

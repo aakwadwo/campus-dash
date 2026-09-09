@@ -36,7 +36,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
   const pending = buckets.NEW.length;
 
   useNewOrderAlert({
-    vendorId: vendor.id,
+    vendorId: vendor.vendor_id,
     pending,
     initialPending,
     onChange: () => router.refresh(),
@@ -51,9 +51,15 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
             <p className="text-muted text-sm">
               {vendor.is_accepting_orders ? 'Open for orders' : 'Closed to new orders'}
             </p>
+            <Link
+              href="/vendor/profile"
+              className="text-brand-700 mt-1 inline-block text-sm font-medium"
+            >
+              Store details, photos and menu →
+            </Link>
           </div>
           <form action={toggleOpen}>
-            <input type="hidden" name="vendor_id" value={vendor.id} />
+            <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
             <input
               type="hidden"
               name="accepting"
@@ -65,10 +71,10 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               className={`rounded-full px-4 py-2 text-sm font-semibold ${
                 vendor.is_accepting_orders
                   ? 'text-ink bg-surface ring-line-strong ring-1'
-                  : 'bg-brand-500 text-ink'
+                  : 'bg-brand-700 text-white'
               }`}
             >
-              {vendor.is_accepting_orders ? 'Close stall' : 'Open stall'}
+              {vendor.is_accepting_orders ? 'Close store' : 'Open store'}
             </button>
           </form>
         </div>
@@ -102,7 +108,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               <ul className="space-y-2">
                 {orders.map((order) => (
                   <li key={order.order_id}>
-                    <OrderCard order={order} vendorId={vendor.id} tone={group.tone} />
+                    <OrderCard order={order} vendorId={vendor.vendor_id} tone={group.tone} />
                   </li>
                 ))}
               </ul>
@@ -133,9 +139,11 @@ function OrderCard({ order, vendorId, tone }) {
           {order.item_count} item{order.item_count === 1 ? '' : 's'}
         </span>
         <span>
-          {order.fulfilment_type === 'PICKUP'
-            ? 'Pickup'
-            : `Delivery · ${order.destination_zone ?? 'campus'}`}
+          {order.fulfilment_type === null
+            ? 'Choosing pickup or delivery'
+            : order.fulfilment_type === 'PICKUP'
+              ? 'Pickup'
+              : `Delivery · ${order.destination_zone ?? 'campus'}`}
         </span>
         <PaymentTag order={order} />
         {order.bucket === 'NEW' ? (
@@ -144,10 +152,19 @@ function OrderCard({ order, vendorId, tone }) {
           <Age key={order.age_seconds} seconds={order.age_seconds} />
         )}
       </div>
-      {order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
+      {/* THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. A Partner standing there
+          waiting for a code, or a customer about to walk up for a collection,
+          are the two things that require the vendor to do something right now. */}
+      {order.partner_waiting ? (
         <p className="text-brand-700 mt-1 text-sm font-medium">
-          {order.partner_assigned ? 'Partner assigned, coming to collect' : 'Finding a Partner…'}
+          Partner waiting — open to read out the pickup code
         </p>
+      ) : order.awaiting_collection ? (
+        <p className="text-brand-700 mt-1 text-sm font-medium">
+          Waiting for the customer to collect
+        </p>
+      ) : order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
+        <p className="text-muted mt-1 text-sm font-medium">Finding a Partner…</p>
       ) : null}
     </Link>
   );

@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react';
 import {
   cancelDeliveryAction,
   completeDeliveryAction,
+  confirmPickupAction,
   reportAbsentAction,
   confirmAbsentAction,
 } from '../actions';
@@ -15,19 +16,50 @@ import {
  * goes back to the pool with a fresh pickup code. After handoff they are
  * carrying food, so the only ways out are delivering it or the absence process.
  */
-export default function DeliveryActions({ delivery }) {
+export default function DeliveryActions({ delivery, isScan = false }) {
   const [cancelState, cancel, cancelling] = useActionState(cancelDeliveryAction, {});
   const [completeState, complete, completing] = useActionState(completeDeliveryAction, {});
+  const [pickupState, confirmPickup, confirmingPickup] = useActionState(confirmPickupAction, {});
   const [reportState, report, reporting] = useActionState(reportAbsentAction, {});
   const [confirmState, confirmAbsent, confirming] = useActionState(confirmAbsentAction, {});
   const [showCancel, setShowCancel] = useState(false);
 
   const hidden = <input type="hidden" name="order_id" value={delivery.order_id} />;
   const carrying = delivery.delivery_status === 'PICKED_UP';
-  const result = [completeState, reportState, confirmState, cancelState].find((s) => s.message);
+  const result = [completeState, pickupState, reportState, confirmState, cancelState].find(
+    (s) => s.message
+  );
 
   return (
     <div className="space-y-3">
+      {/* THE PICKUP CODE, entered by the Partner. The vendor reads it out; the
+          Partner types it in. A scan errand has no handover to prove, so it
+          uses the redemption report instead — see ScanCollection. */}
+      {!carrying && !isScan ? (
+        <form action={confirmPickup} className="rounded-card bg-surface ring-line p-4 ring-1">
+          {hidden}
+          <label className="block text-sm font-medium">
+            Pickup code from the vendor
+            <input
+              name="pickup_code"
+              inputMode="numeric"
+              required
+              pattern="\d{4}"
+              maxLength={4}
+              placeholder="1234"
+              className="border-line-strong mt-1 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={confirmingPickup}
+            className="press bg-brand-700 mt-3 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
+          >
+            {confirmingPickup ? 'Checking…' : 'Confirm pickup'}
+          </button>
+        </form>
+      ) : null}
+
       {carrying ? (
         <>
           <form action={complete} className="rounded-card bg-surface ring-line p-4 ring-1">
@@ -47,7 +79,7 @@ export default function DeliveryActions({ delivery }) {
             <button
               type="submit"
               disabled={completing}
-              className="press bg-brand-500 text-ink mt-3 w-full rounded-full py-4 text-base font-semibold transition-colors disabled:opacity-55"
+              className="press bg-brand-700 mt-3 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
             >
               {completing ? 'Confirming…' : 'Complete delivery'}
             </button>

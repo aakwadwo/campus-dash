@@ -13,6 +13,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   payOrder,
   vendorPrepare,
@@ -76,11 +77,10 @@ describe('the admin console', () => {
 
   /** A FOOD order carried all the way to COMPLETED, with a full ledger. */
   async function completedFoodOrder() {
-    const order = await submitOrder({
+    const order = await acceptedOrder({
       items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
       destination: LOCATIONS.room204,
     });
-    await vendorAccept(order.order_id);
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -96,12 +96,13 @@ describe('the admin console', () => {
       customer,
       async (c) =>
         (
-          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6)', [
+          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6, $7)', [
             vendorId,
             LOCATIONS.room204,
             `${customer}/scans/scan-1.jpg`,
             'image/jpeg',
             120000,
+            'Jollof with chicken from the hot counter.',
             null,
           ])
         ).rows[0],
@@ -229,7 +230,9 @@ describe('the admin console', () => {
       assert.equal(d.operations.needs_attention, 0);
       assert.equal(d.money.collected_pesewas, 0);
       assert.equal(d.money.vendor_owed, 0);
-      assert.equal(d.people.vendors, 4, 'the seeded catalogue');
+      // Six: two owned and live, two catalogue-only scan restaurants, one
+      // application awaiting review and one that was rejected.
+      assert.equal(d.people.vendors, 6, 'the seeded catalogue');
       assert.equal(d.people.vendors_scan, 2, 'only the two scan restaurants');
       assert.equal(d.system.scan_fee_configured, true);
     });
@@ -453,15 +456,19 @@ describe('the admin console', () => {
       assert.equal(none.length, 0);
     });
 
-    test('customer detail reports document EXISTENCE, not the path', async () => {
+    test('customer detail carries the declared facts, and no document at all', async () => {
       await completedFoodOrder();
       const c = await oneAsAdmin('select * from public.admin_customer_detail($1)', [
         ACTORS.customerAma,
       ]);
 
       assert.equal(c.full_name, 'Ama Test-Customer');
-      assert.equal(c.has_student_id, true);
+      assert.equal(c.level, '200');
+      assert.ok(c.student_id_number);
+      // A CUSTOMER holds no verification document. Signing up to order lunch
+      // never required one, so there is neither a path nor a flag to leak.
       assert.equal(Object.hasOwn(c, 'student_id_image_path'), false);
+      assert.equal(Object.hasOwn(c, 'has_student_id'), false);
       assert.equal(Number(c.order_count), 1);
       assert.equal(Number(c.completed_count), 1);
       assert.equal(Number(c.spent_pesewas), JOLLOF + FOOD_FEE + DELIVERY_FEE);
@@ -495,15 +502,38 @@ describe('the admin console', () => {
     });
 
     test('vendors are listed with the operational facts', async () => {
-      const rows = await rowsAsAdmin('select * from public.admin_vendors()');
-      assert.equal(rows.length, 4);
+      const rows = await rowsAsAdmin('select * from public.admin_vendors(null, null, null)');
+      assert.equal(rows.length, 6);
 
       const waffle = rows.find((v) => v.vendor_id === VENDORS.wafflemania);
       assert.equal(waffle.can_accept_scans, true);
+      assert.equal(waffle.owner_user_id, null, 'a catalogue entry has no owner');
+
       const kitchen = rows.find((v) => v.vendor_id === VENDORS.one);
       assert.equal(kitchen.can_accept_scans, false);
-      assert.equal(Number(kitchen.staff_count), 1);
+      assert.ok(kitchen.owner_user_id, 'an owned store names the identity that runs it');
+      assert.equal(kitchen.owner_name, 'Muni Owner (test)');
+      assert.ok(kitchen.category_name, 'and what kind of business it is');
       assert.ok(Number(kitchen.menu_count) >= 4);
+
+      // Applications awaiting review sort first: they are the only rows here
+      // with somebody waiting on the other end.
+      assert.equal(rows[0].status, 'PENDING_APPROVAL');
+      assert.equal(rows[0].vendor_id, VENDORS.pending);
+    });
+
+    test('the vendor list filters in the database, by status and by category', async () => {
+      const pending = await rowsAsAdmin('select * from public.admin_vendors(null, $1, null)', [
+        'PENDING_APPROVAL',
+      ]);
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].vendor_id, VENDORS.pending);
+
+      const byName = await rowsAsAdmin('select * from public.admin_vendors($1, null, null)', [
+        'Wafflemania',
+      ]);
+      assert.equal(byName.length, 1);
+      assert.equal(byName[0].vendor_id, VENDORS.wafflemania);
     });
   });
 
@@ -639,11 +669,10 @@ describe('the admin console', () => {
   describe('platform revenue is not the platform allocation', () => {
     /** A paid FOOD order that has NOT been delivered: still searching. */
     async function paidUndeliveredOrder() {
-      const order = await submitOrder({
+      const order = await acceptedOrder({
         items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
         destination: LOCATIONS.room204,
       });
-      await vendorAccept(order.order_id);
       await payOrder(order.order_id);
       await vendorPrepare(order.order_id);
       await vendorReady(order.order_id);
@@ -811,11 +840,10 @@ describe('the admin console', () => {
     });
 
     test('a pickup order holds no delivery money at all', async () => {
-      const order = await submitOrder({
+      const order = await acceptedOrder({
         items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
         fulfilment: 'PICKUP',
       });
-      await vendorAccept(order.order_id);
       await payOrder(order.order_id);
 
       const t = (await oneAsAdmin('select public.admin_ledger_totals() v')).v;

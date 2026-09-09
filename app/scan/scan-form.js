@@ -1,16 +1,16 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import CameraCapture from '@/app/camera-capture';
 import { quoteScanAction, submitScanOrderAction } from './actions';
 
 /**
  * Scan delivery, in one screen.
  *
  * THE ONE THING THIS SCREEN HAS TO GET ACROSS: the food is already paid for.
- * Everything about the money panel is built around not letting anyone think
- * they are buying the meal a second time — the scan line reads GH₵0.00 and
- * says why, and the total is labelled as what Campus Dash charges, not what the
- * meal costs.
+ * The money panel is built around not letting anyone think they are buying the
+ * meal a second time — the scan line reads GH₵0.00 and says why, and the total
+ * is labelled as what Campus Dash charges rather than what the meal costs.
  *
  * The quote comes from the server every time the restaurant or destination
  * changes. Nothing here computes a price; it only displays one.
@@ -19,7 +19,7 @@ export default function ScanForm({ restaurants, locations }) {
   const [scan, setScan] = useState(null); // { path, contentType, byteSize }
   const [vendorId, setVendorId] = useState(restaurants[0]?.id ?? '');
   const [locationId, setLocationId] = useState(locations[0]?.location_id ?? '');
-  const [note, setNote] = useState('');
+  const [details, setDetails] = useState('');
 
   const [state, submit, submitting] = useActionState(submitScanOrderAction, {});
 
@@ -56,7 +56,7 @@ export default function ScanForm({ restaurants, locations }) {
   const quoteError = fresh ? priced.error : null;
   const quoting = !fresh;
 
-  const ready = Boolean(scan && vendorId && locationId && quote);
+  const ready = Boolean(scan && vendorId && locationId && quote && details.trim());
 
   return (
     <form action={submit} className="mt-6 space-y-5">
@@ -68,13 +68,13 @@ export default function ScanForm({ restaurants, locations }) {
 
       <ScanUpload scan={scan} onUploaded={setScan} />
 
-      <section className="rounded-card bg-surface ring-line p-4 ring-1">
+      <section className="rounded-card bg-surface border-line border p-4">
         <label className="block">
           <span className="text-sm font-medium">Which restaurant?</span>
           <select
             value={vendorId}
             onChange={(event) => setVendorId(event.target.value)}
-            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
+            className="rounded-input border-line-strong bg-surface mt-2 h-11 w-full border px-3 text-sm"
           >
             {restaurants.map((r) => (
               <option key={r.id} value={r.id} disabled={!r.is_accepting_orders}>
@@ -90,7 +90,7 @@ export default function ScanForm({ restaurants, locations }) {
           <select
             value={locationId}
             onChange={(event) => setLocationId(event.target.value)}
-            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
+            className="rounded-input border-line-strong bg-surface mt-2 h-11 w-full border px-3 text-sm"
           >
             {locations.map((l) => (
               <option key={l.location_id} value={l.location_id}>
@@ -99,15 +99,29 @@ export default function ScanForm({ restaurants, locations }) {
             ))}
           </select>
         </label>
+      </section>
 
-        <label className="mt-4 block">
-          <span className="text-sm font-medium">Anything else? (optional)</span>
-          <input
-            name="destination_note"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="Call when you reach the gate"
-            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
+      {/* REQUIRED, and the field the Partner actually reads at the counter.
+          Without it they arrive holding a scan and have to ring and ask what to
+          collect, which is the phone call this box exists to prevent. */}
+      <section className="rounded-card bg-surface border-line border p-4">
+        <label className="block">
+          <span className="text-sm font-medium">
+            Give us details about your order <span className="text-bad">*</span>
+          </span>
+          <span className="text-muted mt-1 block text-xs leading-relaxed">
+            What should the Partner ask for? Name the meal, the counter, and what to do if it has
+            run out.
+          </span>
+          <textarea
+            name="details"
+            required
+            maxLength={1000}
+            rows={4}
+            value={details}
+            onChange={(event) => setDetails(event.target.value)}
+            placeholder="Jollof with chicken from the hot counter. If the chicken is finished, fish is fine."
+            className="rounded-input border-line-strong bg-surface mt-2 w-full border px-3 py-2.5 text-sm"
           />
         </label>
       </section>
@@ -115,13 +129,15 @@ export default function ScanForm({ restaurants, locations }) {
       <MoneyPanel quote={quote} quoting={quoting} error={quoteError} />
 
       {state?.message && !state.ok ? (
-        <p className="rounded-card bg-bad-bg text-bad px-4 py-3 text-sm">{state.message}</p>
+        <p role="alert" className="rounded-card bg-bad-bg text-bad px-4 py-3 text-sm">
+          {state.message}
+        </p>
       ) : null}
 
       <button
         type="submit"
         disabled={!ready || submitting}
-        className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
+        className="press bg-brand-700 hover:bg-brand-800 w-full rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
       >
         {submitting ? 'Creating…' : 'Continue to payment'}
       </button>
@@ -147,8 +163,8 @@ function MoneyPanel({ quote, quoting, error }) {
   }
 
   return (
-    <section className="rounded-card bg-surface ring-line p-4 ring-1">
-      <h2 className="text-muted text-xs font-medium tracking-wide uppercase">What you pay</h2>
+    <section className="rounded-card bg-surface border-line border p-4">
+      <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">What you pay</h2>
 
       <dl className="mt-3 space-y-2 text-sm">
         <div className="flex items-baseline justify-between gap-4">
@@ -180,58 +196,79 @@ function MoneyPanel({ quote, quoting, error }) {
   );
 }
 
+/**
+ * The scan itself, by either route.
+ *
+ * A photo taken now and a screenshot saved last week are the same evidence, so
+ * neither is privileged. What matters is that the image is readable, which is
+ * why the preview is shown at full width rather than as a thumbnail.
+ */
 function ScanUpload({ scan, onUploaded }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [preview, setPreview] = usePreview();
 
+  async function accept(file) {
+    setBusy(true);
+    setError(null);
+    try {
+      const uploaded = await uploadScan(file);
+      setPreview(file.type === 'application/pdf' ? null : URL.createObjectURL(file));
+      onUploaded(uploaded);
+    } catch (caught) {
+      setError(caught.message);
+      throw caught;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <section className="rounded-card bg-surface ring-line p-4 ring-1">
+    <section className="rounded-card bg-surface border-line border p-4">
       <h2 className="text-sm font-medium">
         Your scan <span className="text-bad">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs leading-relaxed">
-        A photo, screenshot or PDF of the scan you want redeemed. It is stored privately. Only you
-        can see it until a Partner takes the job, and then only that Partner.
+        A photo, screenshot or PDF. It stays private: only you can see it until a Partner takes the
+        errand, and then only that Partner.
       </p>
 
-      <input
-        type="file"
-        accept="image/jpeg,image/png,image/webp,application/pdf"
-        disabled={busy}
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          setBusy(true);
-          setError(null);
-          try {
-            const uploaded = await uploadScan(file);
-            setPreview(file.type === 'application/pdf' ? null : URL.createObjectURL(file));
-            onUploaded(uploaded);
-          } catch (caught) {
-            setError(caught.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-        className="mt-3 w-full text-sm"
-      />
-
-      {busy ? <p className="text-muted mt-2 text-sm">Uploading…</p> : null}
       {preview ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={preview}
           alt="The scan you selected"
-          className="ring-line mt-3 w-full rounded ring-1"
+          className="border-line rounded-card mt-3 w-full border"
         />
       ) : null}
-      {scan && !preview ? <p className="text-muted mt-2 text-sm">PDF received.</p> : null}
+      {scan && !preview ? <p className="text-muted mt-3 text-sm">PDF received.</p> : null}
       {scan ? (
-        <p className="text-brand-700 mt-2 text-sm font-medium">
-          ✓ Scan received. Check it is readable, and choose another file above if not.
+        <p className="text-good mt-2 text-sm font-medium">
+          Scan received. Check it is readable, and choose another if not.
         </p>
       ) : null}
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors">
+          Choose a file
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            disabled={busy}
+            className="sr-only"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              await accept(file).catch(() => {});
+            }}
+          />
+        </label>
+
+        <CameraCapture onCaptured={accept} label="Take a photo" />
+      </div>
+
+      {busy ? <p className="text-muted mt-2 text-sm">Uploading…</p> : null}
       {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </section>
   );

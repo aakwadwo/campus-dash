@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { CampusDashLogo } from './brand';
 
 /**
  * The consumer footer.
@@ -61,9 +62,12 @@ export default function SiteFooter() {
           ))}
         </div>
 
-        <p className="text-faint border-line mt-8 border-t pt-6 text-xs">
-          Campus Dash, Academic City University &middot; &copy; {new Date().getFullYear()}
-        </p>
+        <div className="border-line mt-8 flex flex-wrap items-center justify-between gap-4 border-t pt-6">
+          <CampusDashLogo height={24} />
+          <p className="text-faint text-xs">
+            Academic City University, Accra &middot; &copy; {new Date().getFullYear()}
+          </p>
+        </div>
       </div>
     </footer>
   );

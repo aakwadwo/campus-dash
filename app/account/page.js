@@ -4,6 +4,8 @@ import { outstandingTerms } from '@/lib/terms';
 import { signOut } from '@/app/(auth)/login/actions';
 import { setPartnerAvailability } from './actions';
 import EmailForm from './email-form';
+import NameForm from './name-form';
+import RewardProgress from '../reward-progress';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import { Container } from '../ui';
@@ -12,9 +14,12 @@ export const metadata = { title: 'Account · Campus Dash' };
 export const dynamic = 'force-dynamic';
 
 /**
- * Minimal account screen. It exists to prove the auth work: that a session is
- * real, that capabilities come from the database, and that one account can hold
- * both Customer and Partner roles. It is not the finished UI.
+ * The account.
+ *
+ * ONE IDENTITY, SEVERAL CAPABILITIES, and this screen is where that is made
+ * legible: Customer, Partner, Vendor and Admin are rows on the same account,
+ * additive, and holding one never takes another away. Every one of them is read
+ * from my_capabilities(), which derives from the database on each request.
  */
 export default async function AccountPage() {
   const me = await requireUser();
@@ -26,8 +31,8 @@ export default async function AccountPage() {
       <main className="pb-24 sm:pb-0">
         <Container size="narrow" className="pt-8 sm:pt-12">
           <div className="flex items-center gap-4">
-            <span className="bg-brand-500 text-ink grid size-14 shrink-0 place-items-center rounded-full text-lg font-bold">
-              {(me.full_name ?? '?').trim().charAt(0).toUpperCase()}
+            <span className="bg-brand-700 grid size-14 shrink-0 place-items-center rounded-full text-lg font-bold text-white">
+              {(me.first_name ?? me.full_name ?? '?').trim().charAt(0).toUpperCase()}
             </span>
             <div className="min-w-0">
               <h1 className="text-display truncate text-2xl font-semibold sm:text-3xl">
@@ -46,6 +51,17 @@ export default async function AccountPage() {
               and accept.
             </Link>
           ) : null}
+
+          {me.can_order ? <RewardProgress className="mt-8" /> : null}
+
+          <section className="mt-8">
+            <h2 className="text-sm font-semibold tracking-wide uppercase">Your name</h2>
+            <p className="text-muted mt-1 text-sm">
+              Your first name is what a Partner sees when they bring your order, and what you see
+              when one accepts it.
+            </p>
+            <NameForm firstName={me.first_name ?? null} lastName={me.last_name ?? null} />
+          </section>
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold tracking-wide uppercase">Email</h2>
@@ -90,8 +106,8 @@ export default async function AccountPage() {
                 enabled={Boolean(me.vendor_ids?.length)}
                 detail={
                   me.vendor_ids?.length
-                    ? `Staff at ${me.vendor_ids.length} stall${me.vendor_ids.length === 1 ? '' : 's'}.`
-                    : 'Not linked to a stall. An administrator adds vendor staff.'
+                    ? `You own ${me.vendor_ids.length} store${me.vendor_ids.length === 1 ? '' : 's'}.`
+                    : 'You do not own a store on Campus Dash.'
                 }
                 action={me.vendor_ids?.length ? { href: '/vendor', label: 'Order board' } : null}
               />
@@ -109,7 +125,7 @@ export default async function AccountPage() {
 
             {me.can_order ? (
               <p className="text-muted mt-3 text-xs">
-                Student ID {me.student_id_number} · {me.class_year}
+                Student ID {me.student_id_number} · Level {me.level}
               </p>
             ) : null}
           </section>
@@ -138,18 +154,7 @@ export default async function AccountPage() {
             </section>
           ) : null}
 
-          <section className="mt-10">
-            <details className="text-sm">
-              <summary className="text-muted cursor-pointer">
-                Capabilities (from the database)
-              </summary>
-              <pre className="rounded-card bg-surface-2 mt-2 overflow-x-auto p-3 text-xs">
-                {JSON.stringify(me, null, 2)}
-              </pre>
-            </details>
-          </section>
-
-          <form action={signOut} className="mt-8">
+          <form action={signOut} className="mt-10">
             <button
               type="submit"
               className="text-bad text-sm font-semibold underline underline-offset-4"
@@ -186,9 +191,9 @@ function partnerDetail(status) {
 
 function ModeRow({ title, enabled, detail, action = null }) {
   return (
-    <div className="rounded-card bg-surface ring-line flex items-start gap-3 px-4 py-3 ring-1">
+    <div className="rounded-card bg-surface border-line flex items-start gap-3 border px-4 py-3">
       <span
-        className={`mt-0.5 size-2.5 shrink-0 rounded-full ${enabled ? 'bg-brand-700' : 'bg-black/20'}`}
+        className={`mt-0.5 size-2.5 shrink-0 rounded-full ${enabled ? 'bg-good' : 'bg-surface-3'}`}
         aria-hidden
       />
       <div className="min-w-0">
@@ -200,7 +205,7 @@ function ModeRow({ title, enabled, detail, action = null }) {
           href={action.href}
           className="text-brand-700 mt-0.5 ml-auto shrink-0 text-sm font-medium"
         >
-          {action.label} →
+          {action.label}
         </Link>
       ) : null}
     </div>

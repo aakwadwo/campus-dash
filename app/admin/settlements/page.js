@@ -1,11 +1,14 @@
 import {
-  pendingSettlement,
+  settlementOverview,
   settlementRuns,
   settlementPayouts,
   payoutDestinations,
+  payoutReadiness,
+  partnerBalances,
+  payoutHistory,
 } from '@/lib/admin';
 import { formatPesewas } from '@/lib/util/money';
-import { Panel, Badge, Empty, Unavailable } from '../ui';
+import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
 import SettlementControls from './settlement-controls';
 import PayoutDestinations from './payout-destinations';
 
@@ -21,12 +24,20 @@ export const dynamic = 'force-dynamic';
  * operator who reads the second as the first concludes the week is settled.
  */
 export default async function AdminSettlementsPage() {
-  const [vendorPending, partnerPending, runs, destinations] = await Promise.all([
-    pendingSettlement('VENDOR').catch(() => null),
-    pendingSettlement('PARTNER').catch(() => null),
+  const [overview, runs, destinations, readiness, history] = await Promise.all([
+    settlementOverview().catch(() => null),
     settlementRuns(20).catch(() => null),
     payoutDestinations().catch(() => null),
+    payoutReadiness().catch(() => null),
+    payoutHistory({ limit: 100 }).catch(() => null),
   ]);
+
+  const balances = await partnerBalances().catch(() => null);
+
+  const vendorPending =
+    overview === null ? null : overview.filter((r) => r.payee_type === 'VENDOR');
+  const partnerPending =
+    overview === null ? null : overview.filter((r) => r.payee_type === 'PARTNER');
 
   const latestRun = runs?.[0];
   const latestPayouts = latestRun
@@ -36,9 +47,11 @@ export default async function AdminSettlementsPage() {
   return (
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settlements</h1>
-      <p className="text-muted mb-6 text-sm">
-        Vendors are settled daily, Partners weekly. Campus Dash does not hold anyone&apos;s money. a
-        run gathers what is already owed and moves it out.
+      <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
+        A vendor with a registered subaccount is paid by Paystack as each order is charged, and
+        never appears in a run at all. Everything else is settled by transfer: vendors daily,
+        Partners weekly. Campus Dash holds nobody&apos;s money — a run gathers what is already owed
+        and moves it out.
       </p>
 
       <SettlementControls />
@@ -46,14 +59,152 @@ export default async function AdminSettlementsPage() {
       <PayoutDestinations destinations={destinations} />
 
       <Panel
-        title="Owed to vendors"
-        description="Eligible allocations not yet claimed by a run, including anything a run held back for being under the minimum payout."
+        title="Partner balances"
+        description="Every approved Partner and what they are owed. ELIGIBLE means the weekly run will pay them; anything under the threshold is carried forward, not lost. Change the threshold at /admin/pilot."
+      >
+        {balances === null ? (
+          <Unavailable>Partner balances could not be loaded.</Unavailable>
+        ) : balances.length === 0 ? (
+          <Empty>No approved Partners yet.</Empty>
+        ) : (
+          <Table
+            head={[
+              'Partner',
+              'Orders',
+              'Available',
+              'In flight',
+              'Paid',
+              'Payable',
+              'Destination',
+              'Last paid',
+            ]}
+            minWidth="60rem"
+          >
+            {balances.map((row) => (
+              <Row key={row.partner_id}>
+                <Cell>{row.partner_name ?? '-'}</Cell>
+                <Cell numeric muted>
+                  {row.delivered_count}
+                </Cell>
+                <Cell>
+                  <Cedis pesewas={row.available_pesewas} />
+                </Cell>
+                <Cell muted>
+                  <Cedis pesewas={row.in_progress_pesewas} />
+                </Cell>
+                <Cell muted>
+                  <Cedis pesewas={row.settled_pesewas} />
+                </Cell>
+                <Cell>
+                  {row.eligible_for_payout ? (
+                    <Badge tone="good">Eligible</Badge>
+                  ) : (
+                    <Badge tone="neutral">Carries forward</Badge>
+                  )}
+                </Cell>
+                <Cell>
+                  {!row.has_destination ? (
+                    <Badge tone="bad">None</Badge>
+                  ) : row.transfers_ready ? (
+                    <Badge tone="good">Ready</Badge>
+                  ) : (
+                    <Badge tone="warn">Not registered</Badge>
+                  )}
+                </Cell>
+                <Cell muted>{row.last_paid_at ? when(row.last_paid_at) : 'never'}</Cell>
+              </Row>
+            ))}
+          </Table>
+        )}
+      </Panel>
+
+      <Panel
+        title="Payout setup"
+        description="Every vendor and Partner who could be owed money, and whether they can actually be paid. The rows with nothing set are the ones that matter."
+      >
+        {readiness === null ? (
+          <Unavailable>Payout setup could not be loaded.</Unavailable>
+        ) : readiness.length === 0 ? (
+          <Empty>No active vendors or approved Partners yet.</Empty>
+        ) : (
+          <Table head={['Payee', 'Type', 'Account', 'Split', 'Transfers', 'Owed']} minWidth="44rem">
+            {readiness.map((row) => (
+              <Row key={`${row.payee_type}:${row.payee_id}`}>
+                <Cell>{row.payee_name ?? '-'}</Cell>
+                <Cell muted>{row.payee_type}</Cell>
+                <Cell muted>
+                  {row.has_destination ? `${row.momo_network} ···${row.account_last3}` : 'none'}
+                </Cell>
+                <Cell>
+                  {row.split_ready ? (
+                    <Badge tone="good">Automatic</Badge>
+                  ) : row.setup_error ? (
+                    <Badge tone="bad">Failed</Badge>
+                  ) : (
+                    <Badge tone="neutral">By run</Badge>
+                  )}
+                </Cell>
+                <Cell>
+                  {row.transfers_ready ? (
+                    <Badge tone="good">Ready</Badge>
+                  ) : (
+                    <Badge tone="neutral">Not registered</Badge>
+                  )}
+                </Cell>
+                <Cell>
+                  <Cedis pesewas={row.owed_pesewas} />
+                </Cell>
+              </Row>
+            ))}
+          </Table>
+        )}
+      </Panel>
+
+      <Panel
+        title="Owed to vendors, settled daily"
+        description="Eligible allocations not yet claimed by a run, including anything a run held back for being under the minimum payout. DUE says whether today is the day; owed money that is not yet due is normal, not stuck."
       >
         <PendingTable rows={vendorPending} />
       </Panel>
 
-      <Panel title="Owed to Partners">
+      <Panel title="Owed to Partners, settled weekly">
         <PendingTable rows={partnerPending} />
+      </Panel>
+
+      <Panel
+        title="Payout history"
+        description="Every payout ever, not only those in the run below. PROCESSING means the provider accepted a transfer; only its own success event makes one PAID."
+      >
+        {history === null ? (
+          <Unavailable>The payout history could not be loaded.</Unavailable>
+        ) : history.length === 0 ? (
+          <Empty>No payouts yet.</Empty>
+        ) : (
+          <Table
+            head={['Payee', 'Type', 'Amount', 'Status', 'Attempt', 'Reference', 'Created', 'Paid']}
+            minWidth="56rem"
+          >
+            {history.map((payout) => (
+              <Row key={payout.payout_id}>
+                <Cell>{payout.payee_name ?? '-'}</Cell>
+                <Cell>{payout.payee_type}</Cell>
+                <Cell numeric>
+                  <Cedis pesewas={payout.amount_pesewas} />
+                </Cell>
+                <Cell>
+                  <Badge tone={PAYOUT_TONE[payout.status] ?? 'neutral'}>{payout.status}</Badge>
+                  {payout.failure_reason ? (
+                    <span className="text-muted block text-xs">{payout.failure_reason}</span>
+                  ) : null}
+                </Cell>
+                <Cell numeric>{payout.transfer_attempt}</Cell>
+                <Cell mono>{payout.provider_transfer_id ?? '-'}</Cell>
+                <Cell muted>{when(payout.created_at)}</Cell>
+                <Cell muted>{payout.paid_at ? when(payout.paid_at) : '-'}</Cell>
+              </Row>
+            ))}
+          </Table>
+        )}
       </Panel>
 
       <Panel title="Settlement runs">
@@ -170,31 +321,54 @@ export default async function AdminSettlementsPage() {
   );
 }
 
+const PAYOUT_TONE = {
+  PAID: 'good',
+  FAILED: 'bad',
+  REVERSED: 'bad',
+  CANCELLED: 'neutral',
+  PROCESSING: 'warn',
+  PENDING: 'warn',
+};
+
+/**
+ * What is owed, AND whether it is due.
+ *
+ * "GH₵240 owed" on its own tells an operator nothing about whether pressing the
+ * button will do anything — the cadence used to live only in JavaScript. DUE
+ * and BELOW MINIMUM are both computed in SQL now, so a run that would hold the
+ * money back says so before it is started rather than afterwards.
+ */
 function PendingTable({ rows }) {
   if (rows === null) return <Unavailable>What is owed could not be read.</Unavailable>;
   if (!rows.length) return <Empty>Nothing owed.</Empty>;
   return (
-    <table className="w-full text-sm">
-      <thead className="text-muted text-left text-xs uppercase">
-        <tr>
-          <th className="pb-2 font-medium">Payee</th>
-          <th className="pb-2 font-medium">Orders</th>
-          <th className="pb-2 font-medium">Owed</th>
-          <th className="pb-2 font-medium">Oldest</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.payee_id} className="border-line border-t">
-            <td className="py-2">{row.payee_name ?? row.payee_id?.slice(0, 8)}</td>
-            <td className="py-2 tabular-nums">{row.order_count}</td>
-            <td className="py-2 tabular-nums">{formatPesewas(row.owed_pesewas)}</td>
-            <td className="text-muted py-2 text-xs">
-              {row.oldest_at ? new Date(row.oldest_at).toLocaleDateString() : '-'}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <Table head={['Payee', 'Orders', 'Owed', 'Oldest', 'Due', 'Last paid']} minWidth="44rem">
+      {rows.map((row) => (
+        <Row key={`${row.payee_type}:${row.payee_id}`}>
+          <Cell>
+            {row.payee_name ?? row.payee_id?.slice(0, 8)}
+            {row.payee_contact ? (
+              <span className="text-muted block text-xs tabular-nums">{row.payee_contact}</span>
+            ) : null}
+          </Cell>
+          <Cell numeric>{row.order_count}</Cell>
+          <Cell numeric>
+            <Cedis pesewas={row.owed_pesewas} />
+          </Cell>
+          <Cell muted>{row.oldest_at ? new Date(row.oldest_at).toLocaleDateString() : '-'}</Cell>
+          <Cell>
+            {row.below_minimum ? (
+              <Badge tone="neutral">below minimum</Badge>
+            ) : row.is_due ? (
+              <Badge tone="good">due now</Badge>
+            ) : (
+              <Badge tone="warn">from {new Date(row.eligible_from).toLocaleDateString()}</Badge>
+            )}
+            {row.failed_payouts > 0 ? <Badge tone="bad">{row.failed_payouts} failed</Badge> : null}
+          </Cell>
+          <Cell muted>{row.last_paid_at ? when(row.last_paid_at) : 'never'}</Cell>
+        </Row>
+      ))}
+    </Table>
   );
 }

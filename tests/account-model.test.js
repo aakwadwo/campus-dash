@@ -21,9 +21,9 @@ import { expectRejection, orderReadyForDispatch, partnerAccept } from './helpers
  * ever the key. On top of that identity sit capabilities that are ADDITIVE and
  * independently granted:
  *
- *   CUSTOMER  a customer_profiles row, earned by completing student onboarding
+ *   CUSTOMER  a customer_profiles row, earned by completing customer sign-up
  *   PARTNER   an APPROVED partner_profiles row, which REQUIRES the above
- *   VENDOR    a vendor_users link to a business
+ *   VENDOR    vendors.owner_user_id pointing at this identity
  *   ADMIN     users.is_admin
  *
  * The rules this file exists to pin:
@@ -35,6 +35,11 @@ import { expectRejection, orderReadyForDispatch, partnerAccept } from './helpers
  *   one email → one identity
  *   the stable key is auth.users.id, never email, phone or student ID
  *
+ * THREE PROOFS, ONE IDENTITY TABLE. A customer proves a verified
+ * @acity.edu.gh address, a vendor proves a phone number, an administrator
+ * proves a password and has NO PHONE AT ALL. Which door somebody came through
+ * has no bearing on what they may then do.
+ *
  * Everything here runs against the DATABASE — the RPCs and the constraints, as
  * `authenticator`, the role PostgREST itself uses. None of it asserts what a
  * screen renders. A capability that is only enforced in the UI is not enforced.
@@ -43,7 +48,11 @@ describe('account model — identity and capabilities', () => {
   before(resetTransactionalState);
   beforeEach(resetTransactionalState);
   after(async () => {
-    await asService((c) => c.query("delete from auth.users where phone like '23320888%'"));
+    await asService((c) =>
+      c.query(
+        "delete from auth.users where phone like '23320888%' or email like 'fixture%@acity.edu.gh'"
+      )
+    );
     await resetTransactionalState();
     await closePools();
   });
@@ -52,7 +61,10 @@ describe('account model — identity and capabilities', () => {
   // Helpers
   // =========================================================================
 
-  /** A brand-new signed-in identity: a confirmed phone and nothing else. */
+  /**
+   * A brand-new signed-in identity, proved by a PHONE. This is the vendor's
+   * door, and it grants nothing on its own.
+   */
   async function newIdentity(phoneDigits, fullName = null) {
     const id = randomUUID();
     await asService(async (c) => {
@@ -71,6 +83,43 @@ describe('account model — identity and capabilities', () => {
     return id;
   }
 
+  /**
+   * A brand-new signed-in identity, proved by a VERIFIED SCHOOL ADDRESS. This is
+   * the customer's door — and it still grants nothing until sign-up completes.
+   *
+   * complete_customer_onboarding() reads the address from auth.users rather than
+   * taking it as a parameter, so a fixture that only wrote public.users would be
+   * testing a path that cannot happen.
+   */
+  async function newEmailIdentity(email, fullName = null) {
+    const id = randomUUID();
+    await asService(async (c) => {
+      await c.query(
+        `insert into auth.users (instance_id, id, aud, role, email, email_confirmed_at,
+                                 raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+                                 confirmation_token, recovery_token, email_change_token_new,
+                                 email_change, email_change_token_current, phone_change,
+                                 phone_change_token, reauthentication_token)
+         values ('00000000-0000-0000-0000-000000000000', $1, 'authenticated', 'authenticated',
+                 $2, now(), '{"provider":"email","providers":["email"]}', $3, now(), now(),
+                 '', '', '', '', '', '', '', '')`,
+        [id, email, JSON.stringify(fullName ? { full_name: fullName } : {})]
+      );
+    });
+    return id;
+  }
+
+  // Unique per call, and unique across re-runs: these rows outlive a single
+  // test (they are committed) and public.users is unique on BOTH phone and
+  // lower(email), so a fixture that reuses either collides on the second run
+  // with an error that says nothing about the rule under test.
+  let fixtureSeq = 0;
+  const fixtureRun = Date.now() % 100000;
+  const next = () => ++fixtureSeq;
+  const nextSchoolEmail = (local = 'fixture') => `${local}${fixtureRun}.${next()}@acity.edu.gh`;
+  const nextPhone = () =>
+    `+2332088${String(fixtureRun).padStart(5, '0')}${String(next()).padStart(2, '0')}`;
+
   const capabilities = (userId) =>
     asUser(userId, async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c);
 
@@ -86,15 +135,21 @@ describe('account model — identity and capabilities', () => {
         ).rows[0].id
     );
 
-  /** Runs student onboarding as the given identity, committing the result. */
+  /**
+   * Runs customer sign-up as the given identity, committing the result.
+   *
+   * NO EMAIL PARAMETER and NO ID PHOTOGRAPH. The address is read from
+   * auth.users, where the verification code put it; the student ID photograph
+   * moved to the Partner application, which is the only review that looks at
+   * one. The phone is collected because a Partner has to be able to ring.
+   */
   async function onboard(
     userId,
     {
       fullName = 'Test Student',
       studentId = `TEST-STU-${Math.floor(Math.random() * 1e9)}`,
-      classYear = 'Class of 2029',
-      email = `s${Math.floor(Math.random() * 1e9)}@example.com`,
-      idImage = 'x/student-id.jpg',
+      level = '200',
+      phone = null,
       termsId,
     } = {}
   ) {
@@ -104,11 +159,11 @@ describe('account model — identity and capabilities', () => {
       async (c) =>
         (
           await c.query('select * from public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
-            fullName,
+            String(fullName).split(' ')[0] || 'Test',
+            String(fullName).split(' ').slice(1).join(' ') || 'Student',
             studentId,
-            classYear,
-            email,
-            idImage,
+            level,
+            phone ?? nextPhone(),
             terms,
           ])
         ).rows[0],
@@ -116,15 +171,12 @@ describe('account model — identity and capabilities', () => {
     );
   }
 
-  /** Attempts an order as the given account. */
+  /** Attempts an order as the given account. A vendor and some items, no more. */
   const tryOrder = (userId) =>
     asUser(userId, (c) =>
-      c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+      c.query('select * from public.submit_order($1, $2::jsonb)', [
         VENDORS.one,
-        'DELIVERY',
         JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-        LOCATIONS.room204,
-        null,
       ])
     );
 
@@ -145,7 +197,7 @@ describe('account model — identity and capabilities', () => {
     assert.deepEqual(caps.vendor_ids, []);
 
     const error = await expectRejection(tryOrder(id));
-    assert.match(error.message, /has not completed student onboarding/);
+    assert.match(error.message, /has not completed customer sign-up/);
   });
 
   test('browsing the marketplace needs no account; ordering does', async () => {
@@ -164,12 +216,9 @@ describe('account model — identity and capabilities', () => {
     // But submit_order is not even callable by anon, let alone permitted.
     const error = await expectRejection(
       asAnon((c) =>
-        c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+        c.query('select * from public.submit_order($1, $2::jsonb)', [
           VENDORS.one,
-          'PICKUP',
           JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-          null,
-          null,
         ])
       )
     );
@@ -179,10 +228,11 @@ describe('account model — identity and capabilities', () => {
   // =========================================================================
   // 2. Onboarding grants the CUSTOMER capability
   // =========================================================================
-  test('completing onboarding grants CUSTOMER on the same identity', async () => {
-    const id = await newIdentity('233208880002');
+  test('completing sign-up grants CUSTOMER on the same identity', async () => {
+    const email = nextSchoolEmail();
+    const id = await newEmailIdentity(email);
 
-    await onboard(id, { fullName: 'Ama Onboarded', studentId: 'TEST-STU-ONB-1' });
+    await onboard(id, { fullName: 'Ama Onboarded', studentId: 'TEST-STU-ONB-1', level: '300' });
 
     const caps = await capabilities(id);
     assert.equal(caps.user_id, id, 'the SAME auth user id — nothing new was created');
@@ -190,17 +240,16 @@ describe('account model — identity and capabilities', () => {
     assert.equal(caps.can_order, true);
     assert.equal(caps.customer_status, 'ONBOARDED');
     assert.equal(caps.student_id_number, 'TEST-STU-ONB-1');
+    assert.equal(caps.level, '300');
+    assert.equal(caps.email, email, 'the VERIFIED address, read from auth rather than typed');
 
     const order = await asUser(
       id,
       async (c) =>
         (
-          await c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+          await c.query('select * from public.submit_order($1, $2::jsonb)', [
             VENDORS.one,
-            'DELIVERY',
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-            LOCATIONS.room204,
-            null,
           ])
         ).rows[0],
       { commit: true }
@@ -208,32 +257,45 @@ describe('account model — identity and capabilities', () => {
     assert.ok(order.order_id, 'and they can now place an order');
   });
 
+  test('the school domain is required, exactly', async () => {
+    // A lookalike CONTAINS the domain but does not end with it. The check is
+    // anchored for that reason.
+    for (const domain of ['gmail.com', 'acity.edu.gh.evil.example', 'notacity.edu.gh.co']) {
+      const address = `lookalike${fixtureRun}.${next()}@${domain}`;
+      const id = await newEmailIdentity(address);
+      const error = await expectRejection(onboard(id));
+      assert.match(error.message, /@acity\.edu\.gh address/);
+      assert.equal((await capabilities(id)).can_order, false);
+    }
+  });
+
+  test('an unverified address grants nothing, however plausible it looks', async () => {
+    // A phone identity has no confirmed address at all, so sign-up refuses
+    // before it looks at a single other field.
+    const id = await newIdentity('233208880021');
+    const error = await expectRejection(onboard(id));
+    assert.match(error.message, /verify your Academic City email/i);
+  });
+
   test('every required student field is enforced by the database', async () => {
-    const id = await newIdentity('233208880003');
+    const id = await newEmailIdentity(nextSchoolEmail());
     const terms = await currentCustomerTermsId();
 
     const cases = [
-      [['', 'S1', 'Class of 2029', 'a@example.com', 'id.jpg'], /full name is required/],
-      [['Name', '', 'Class of 2029', 'a@example.com', 'id.jpg'], /student ID number is required/],
-      [['Name', 'S1', '', 'a@example.com', 'id.jpg'], /class year is required/],
-      [['Name', 'S1', 'Class of 2029', '', 'id.jpg'], /email address is required/],
-      [
-        ['Name', 'S1', 'Class of 2029', 'not-an-address', 'id.jpg'],
-        /does not look like an address/,
-      ],
-      [
-        ['Name', 'S1', 'Class of 2029', 'a@example.com', ''],
-        /photograph of your student ID is required/,
-      ],
+      [['', 'Mensah', 'S1', '200', '+233208880031'], /first name is required/],
+      [['Kwame', '', 'S1', '200', '+233208880031'], /last name is required/],
+      [['Kwame', 'Mensah', '', '200', '+233208880031'], /student ID number is required/],
+      [['Kwame', 'Mensah', 'S1', '', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', 'S1', 'Class of 2029', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', 'S1', '500', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', 'S1', '200', ''], /phone number is required/],
+      [['Kwame', 'Mensah', 'S1', '200', '0201234567'], /valid phone number/],
     ];
 
     for (const [args, expected] of cases) {
       const error = await expectRejection(
         asUser(id, (c) =>
-          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
-            ...args,
-            terms,
-          ])
+          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [...args, terms])
         )
       );
       assert.match(error.message, expected);
@@ -243,8 +305,8 @@ describe('account model — identity and capabilities', () => {
     assert.equal((await capabilities(id)).can_order, false);
   });
 
-  test('terms acceptance is part of onboarding, not a screen that can be skipped', async () => {
-    const id = await newIdentity('233208880004');
+  test('terms acceptance is part of sign-up, not a screen that can be skipped', async () => {
+    const id = await newEmailIdentity(nextSchoolEmail());
 
     // A Partner document is not consent to the customer terms.
     const partnerTerms = await asService(
@@ -285,7 +347,7 @@ describe('account model — identity and capabilities', () => {
   // 3. Customer → Partner is an UPGRADE, not a second account
   // =========================================================================
   test('becoming a Partner keeps the same auth user, email, phone and student facts', async () => {
-    const id = await newIdentity('233208880005');
+    const id = await newEmailIdentity(nextSchoolEmail());
     await onboard(id, {
       fullName: 'Kofi Upgrade',
       studentId: 'TEST-STU-UP-1',
@@ -302,8 +364,8 @@ describe('account model — identity and capabilities', () => {
         (await c.query('select * from public.customer_profiles where user_id = $1', [id])).rows[0]
     );
 
-    // The whole application: one document.
-    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['kofi/face.jpg']), {
+    // The whole application: two documents, and nothing the account already has.
+    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['kofi/student-id.jpg']), {
       commit: true,
     });
     await asUser(
@@ -344,9 +406,9 @@ describe('account model — identity and capabilities', () => {
   test('PARTNER ⇒ CUSTOMER — an account with no student profile cannot apply', async () => {
     const id = await newIdentity('233208880006');
     const error = await expectRejection(
-      asUser(id, (c) => c.query('select public.partner_apply($1)', ['face.jpg']))
+      asUser(id, (c) => c.query('select public.partner_apply($1)', ['student-id.jpg']))
     );
-    assert.match(error.message, /complete your student onboarding/i);
+    assert.match(error.message, /finish signing up as a customer/i);
 
     // And the constraint holds even against a service-role insert that skips
     // the function entirely. This is the difference between a rule and an
@@ -354,8 +416,8 @@ describe('account model — identity and capabilities', () => {
     const violation = await expectRejection(
       asService((c) =>
         c.query(
-          `insert into public.partner_profiles (user_id, status, face_image_path)
-           values ($1, 'PENDING_REVIEW', 'face.jpg')`,
+          `insert into public.partner_profiles (user_id, status, student_id_image_path, face_image_path)
+           values ($1, 'PENDING_REVIEW', 'id.jpg', 'face.jpg')`,
           [id]
         )
       )
@@ -364,7 +426,7 @@ describe('account model — identity and capabilities', () => {
   });
 
   test('CUSTOMER ⇏ PARTNER — onboarding alone confers no delivery rights', async () => {
-    const id = await newIdentity('233208880007');
+    const id = await newEmailIdentity(nextSchoolEmail());
     await onboard(id, { studentId: 'TEST-STU-UP-2' });
 
     const caps = await capabilities(id);
@@ -383,9 +445,9 @@ describe('account model — identity and capabilities', () => {
   });
 
   test('a rejected application grants nothing and takes nothing away', async () => {
-    const id = await newIdentity('233208880008');
+    const id = await newEmailIdentity(nextSchoolEmail());
     await onboard(id, { studentId: 'TEST-STU-UP-3' });
-    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['face.jpg']), {
+    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['student-id.jpg']), {
       commit: true,
     });
     await asUser(
@@ -411,7 +473,7 @@ describe('account model — identity and capabilities', () => {
     assert.equal(caps.can_order, false);
 
     const error = await expectRejection(tryOrder(ACTORS.admin));
-    assert.match(error.message, /has not completed student onboarding/);
+    assert.match(error.message, /has not completed customer sign-up/);
   });
 
   test('an administrator is NOT automatically a Partner or vendor staff', async () => {
@@ -422,11 +484,10 @@ describe('account model — identity and capabilities', () => {
   });
 
   test('ADMIN + CUSTOMER orders normally, and keeps full admin authority', async () => {
-    await onboard(ACTORS.admin, {
-      fullName: 'Dev Admin',
-      studentId: 'TEST-STU-ADMIN-1',
-      email: 'admin.customer@example.com',
-    });
+    // The dev admin's own address is a school one, which is what makes this
+    // combination reachable at all: a customer capability requires a verified
+    // @acity.edu.gh address, and the admin identity already holds one.
+    await onboard(ACTORS.admin, { fullName: 'Dev Admin', studentId: 'TEST-STU-ADMIN-1' });
 
     const caps = await capabilities(ACTORS.admin);
     assert.equal(caps.is_admin, true, 'still an administrator');
@@ -436,12 +497,9 @@ describe('account model — identity and capabilities', () => {
       ACTORS.admin,
       async (c) =>
         (
-          await c.query('select * from public.submit_order($1, $2, $3::jsonb, $4, $5)', [
+          await c.query('select * from public.submit_order($1, $2::jsonb)', [
             VENDORS.one,
-            'DELIVERY',
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-            LOCATIONS.room204,
-            null,
           ])
         ).rows[0],
       { commit: true }
@@ -457,14 +515,14 @@ describe('account model — identity and capabilities', () => {
   });
 
   test('ADMIN + CUSTOMER + PARTNER holds all three and can perform Partner work', async () => {
-    await onboard(ACTORS.admin, {
-      fullName: 'Dev Admin',
-      studentId: 'TEST-STU-ADMIN-2',
-      email: 'admin.partner@example.com',
-    });
-    await asUser(ACTORS.admin, (c) => c.query('select public.partner_apply($1)', ['face.jpg']), {
-      commit: true,
-    });
+    await onboard(ACTORS.admin, { fullName: 'Dev Admin', studentId: 'TEST-STU-ADMIN-2' });
+    await asUser(
+      ACTORS.admin,
+      (c) => c.query('select public.partner_apply($1)', ['student-id.jpg']),
+      {
+        commit: true,
+      }
+    );
     await asUser(
       ACTORS.admin,
       (c) =>
@@ -512,20 +570,32 @@ describe('account model — identity and capabilities', () => {
     assert.equal(caps.is_admin, false, 'vendor does not imply admin');
 
     const order = await expectRejection(tryOrder(ACTORS.vendor1Staff));
-    assert.match(order.message, /has not completed student onboarding/);
+    assert.match(order.message, /has not completed customer sign-up/);
 
     const apply = await expectRejection(
-      asUser(ACTORS.vendor1Staff, (c) => c.query('select public.partner_apply($1)', ['face.jpg']))
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.partner_apply($1)', ['student-id.jpg'])
+      )
     );
-    assert.match(apply.message, /complete your student onboarding/i);
+    assert.match(apply.message, /finish signing up as a customer/i);
   });
 
-  test('a vendor link never grants ordering, and removing one never revokes it', async () => {
-    // A student who also helps at a stall: both capabilities, independently.
+  test('owning a store never grants ordering, and losing one never revokes it', async () => {
+    // A student who also runs a stall: both capabilities, independently.
+    // The vendor identity signs in by phone and has no address of its own, so a
+    // school one is attached first — which is the real sequence too: somebody
+    // who registered a stall and later signs up as a customer.
+    const student = nextSchoolEmail('muni.student');
+    await asService((c) =>
+      c.query(`update auth.users set email = $2, email_confirmed_at = now() where id = $1`, [
+        ACTORS.vendor1Staff,
+        student,
+      ])
+    );
     await onboard(ACTORS.vendor1Staff, {
       fullName: 'Muni Owner (test)',
       studentId: 'TEST-STU-VEND-1',
-      email: 'muni.student@example.com',
+      phone: '+233200000011',
     });
 
     let caps = await capabilities(ACTORS.vendor1Staff);
@@ -533,10 +603,10 @@ describe('account model — identity and capabilities', () => {
     assert.deepEqual(caps.vendor_ids, [VENDORS.one], 'and so is the stall');
 
     await asService((c) =>
-      c.query('delete from public.vendor_users where user_id = $1', [ACTORS.vendor1Staff])
+      c.query('update public.vendors set owner_user_id = null where id = $1', [VENDORS.one])
     );
     caps = await capabilities(ACTORS.vendor1Staff);
-    assert.deepEqual(caps.vendor_ids, [], 'the stall link is gone');
+    assert.deepEqual(caps.vendor_ids, [], 'the stall is gone');
     assert.equal(caps.can_order, true, 'and the Customer capability survived it');
   });
 
@@ -557,88 +627,114 @@ describe('account model — identity and capabilities', () => {
   // =========================================================================
   // 6. ONE EMAIL → ONE IDENTITY
   // =========================================================================
-  test('a second identity cannot claim an email already in use', async () => {
-    const first = await newIdentity('233208880010');
-    await onboard(first, { studentId: 'TEST-STU-EM-1', email: 'shared@example.com' });
+  // The address is no longer something a sign-up form types in — it is the
+  // CREDENTIAL, proved by a verification code and read out of auth.users. So
+  // uniqueness is enforced twice: GoTrue will not issue a second identity for
+  // an address it already knows, and users_email_unique refuses the profile row
+  // even if something bypassed GoTrue entirely.
+  test('a second identity cannot claim an address already in use', async () => {
+    const shared = nextSchoolEmail('shared');
+    const first = await newEmailIdentity(shared);
+    await onboard(first, { studentId: 'TEST-STU-EM-1' });
 
-    const second = await newIdentity('233208880011');
-    const error = await expectRejection(
-      onboard(second, { studentId: 'TEST-STU-EM-2', email: 'shared@example.com' })
+    // TWO LAYERS, and the first one is not ours. GoTrue itself will not issue a
+    // second identity for an address it already knows, so the collision is
+    // refused before any Campus Dash code runs.
+    const atAuth = await expectRejection(newEmailIdentity(shared));
+    assert.match(atAuth.message, /users_email_partial_key|duplicate key/i);
+
+    // And the profile table refuses it independently, which is what protects us
+    // if an identity ever arrives by some other door.
+    const second = await newEmailIdentity(nextSchoolEmail('other'));
+    await onboard(second, { studentId: 'TEST-STU-EM-1B' });
+    const atProfile = await expectRejection(
+      asUser(second, (c) => c.query('select public.set_my_email($1)', [shared]))
     );
-    assert.match(error.message, /already used by another Campus Dash account/);
-
-    // The refused account gained nothing from the attempt.
-    assert.equal((await capabilities(second)).can_order, false);
+    assert.match(atProfile.message, /users_email_unique|already/i);
   });
 
-  test('email uniqueness is case-insensitive, because email is', async () => {
-    const first = await newIdentity('233208880012');
-    await onboard(first, { studentId: 'TEST-STU-EM-3', email: 'Mixed.Case@Example.com' });
+  test('address uniqueness is case-insensitive, because email is', async () => {
+    const mixed = nextSchoolEmail('Mixed.Case');
+    const first = await newEmailIdentity(mixed);
+    await onboard(first, { studentId: 'TEST-STU-EM-3' });
 
     // Stored normalised, so the address means one thing in our records.
     const stored = await asService(
       async (c) => (await c.query('select email from public.users where id = $1', [first])).rows[0]
     );
-    assert.equal(stored.email, 'mixed.case@example.com');
+    assert.equal(stored.email, mixed.toLowerCase());
 
-    const second = await newIdentity('233208880013');
+    const second = await newEmailIdentity(nextSchoolEmail('other'));
+    await onboard(second, { studentId: 'TEST-STU-EM-4' });
     const error = await expectRejection(
-      onboard(second, { studentId: 'TEST-STU-EM-4', email: 'MIXED.CASE@example.com' })
-    );
-    assert.match(error.message, /already used by another Campus Dash account/);
-  });
-
-  test('set_my_email cannot be used to take an address off another account', async () => {
-    const first = await newIdentity('233208880014');
-    await onboard(first, { studentId: 'TEST-STU-EM-5', email: 'taken@example.com' });
-
-    const error = await expectRejection(
-      asUser(ACTORS.customerAma, (c) =>
-        c.query('select public.set_my_email($1)', ['taken@example.com'])
-      )
+      asUser(second, (c) => c.query('select public.set_my_email($1)', [mixed.toUpperCase()]))
     );
     assert.match(error.message, /users_email_unique|already/i);
   });
 
-  test('the same identity keeps its own address across a re-run of onboarding', async () => {
-    const id = await newIdentity('233208880015');
-    await onboard(id, { studentId: 'TEST-STU-EM-6', email: 'mine@example.com' });
-    // Re-running with the SAME address is not a collision with itself.
-    await onboard(id, { studentId: 'TEST-STU-EM-6', email: 'mine@example.com' });
+  test('set_my_email cannot be used to take an address off another account', async () => {
+    const taken = nextSchoolEmail('taken');
+    const first = await newEmailIdentity(taken);
+    await onboard(first, { studentId: 'TEST-STU-EM-5' });
+
+    const error = await expectRejection(
+      asUser(ACTORS.customerAma, (c) => c.query('select public.set_my_email($1)', [taken]))
+    );
+    assert.match(error.message, /users_email_unique|already/i);
+  });
+
+  test('the same identity keeps its own address across a re-run of sign-up', async () => {
+    const mine = nextSchoolEmail('mine');
+    const id = await newEmailIdentity(mine);
+    await onboard(id, { studentId: 'TEST-STU-EM-6' });
+    // Re-running is not a collision with itself.
+    await onboard(id, { studentId: 'TEST-STU-EM-6' });
 
     const caps = await capabilities(id);
-    assert.equal(caps.email, 'mine@example.com');
+    assert.equal(caps.email, mine.toLowerCase());
     assert.equal(caps.can_order, true);
   });
 
   test('one student ID backs one identity', async () => {
-    const first = await newIdentity('233208880016');
-    await onboard(first, { studentId: 'TEST-STU-DUP-1', email: 'dup1@example.com' });
+    const first = await newEmailIdentity(nextSchoolEmail());
+    await onboard(first, { studentId: 'TEST-STU-DUP-1' });
 
-    const second = await newIdentity('233208880017');
-    const error = await expectRejection(
-      onboard(second, { studentId: 'TEST-STU-DUP-1', email: 'dup2@example.com' })
-    );
+    const second = await newEmailIdentity(nextSchoolEmail());
+    const error = await expectRejection(onboard(second, { studentId: 'TEST-STU-DUP-1' }));
     assert.match(error.message, /student ID number is already registered/);
+  });
+
+  test('one phone number backs one identity, even though it is not the credential', async () => {
+    // A customer's phone is a profile fact, not a login. It is still unique:
+    // one number must not describe two people, or a Partner arriving at a door
+    // would have no way to tell whose it is.
+    const phone = nextPhone();
+    const first = await newEmailIdentity(nextSchoolEmail());
+    await onboard(first, { studentId: 'TEST-STU-PH-1', phone });
+
+    const second = await newEmailIdentity(nextSchoolEmail());
+    const error = await expectRejection(onboard(second, { studentId: 'TEST-STU-PH-2', phone }));
+    assert.match(error.message, /users_phone_key|already/i);
   });
 
   // =========================================================================
   // 7. The stable key is auth.users.id — never email, phone or student ID
   // =========================================================================
   test('capabilities are keyed on the auth user id, and survive contact changes', async () => {
-    const id = await newIdentity('233208880018');
-    await onboard(id, { studentId: 'TEST-STU-KEY-1', email: 'before@example.com' });
+    const id = await newEmailIdentity(nextSchoolEmail('before'));
+    await onboard(id, { studentId: 'TEST-STU-KEY-1' });
 
     // Changing the email — the thing a future OAuth link would match on — does
     // not move, split or duplicate the identity. This is what makes adding
     // Google sign-in later a linking problem rather than a migration.
-    await asUser(id, (c) => c.query('select public.set_my_email($1)', ['after@example.com']), {
+    const after = nextSchoolEmail('after');
+    await asUser(id, (c) => c.query('select public.set_my_email($1)', [after]), {
       commit: true,
     });
 
     const caps = await capabilities(id);
     assert.equal(caps.user_id, id, 'the identity did not move');
-    assert.equal(caps.email, 'after@example.com');
+    assert.equal(caps.email, after.toLowerCase());
     assert.equal(caps.can_order, true, 'and the capability came with it');
 
     const profiles = await asService(
@@ -672,17 +768,17 @@ describe('account model — identity and capabilities', () => {
     assert.match(error.message, /cannot deliver an order you placed yourself/);
   });
 
-  test('a Partner cannot deliver an order from a vendor they staff', async () => {
-    // Make an approved Partner staff of the stall the order came from.
-    await asService((c) =>
-      c.query(
-        `insert into public.vendor_users (vendor_id, user_id) values ($1, $2)
-         on conflict do nothing`,
-        [VENDORS.one, ACTORS.partnerYaw]
-      )
-    );
-
+  test('a Partner cannot deliver an order from a store they own', async () => {
+    // The order is walked to READY by the seeded owner FIRST, and only then does
+    // the store change hands — handing it over earlier would break the setup
+    // rather than the rule under test.
     const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
+    await asService((c) =>
+      c.query('update public.vendors set owner_user_id = $2 where id = $1', [
+        VENDORS.one,
+        ACTORS.partnerYaw,
+      ])
+    );
 
     const offers = await asUser(
       ACTORS.partnerYaw,
@@ -690,11 +786,11 @@ describe('account model — identity and capabilities', () => {
     );
     assert.ok(
       !offers.some((o) => o.order_id === order.order_id),
-      "a stall's own staff are never offered its deliveries"
+      "a stall's own owner is never offered its deliveries"
     );
 
     const error = await expectRejection(partnerAccept(order.order_id, ACTORS.partnerYaw));
-    assert.match(error.message, /cannot deliver an order from a vendor you work for/);
+    assert.match(error.message, /cannot deliver an order from a store you own/);
   });
 
   test('an unrelated approved Partner sees the offer and can take it', async () => {
@@ -702,17 +798,15 @@ describe('account model — identity and capabilities', () => {
     // Partner B is neither the customer nor staff of the vendor, and the offer
     // is therefore real. The fix for "no eligible Partner" is a third account,
     // never a weaker rule.
+    const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
     await asService((c) =>
-      c.query(
-        `insert into public.vendor_users (vendor_id, user_id) values ($1, $2)
-         on conflict do nothing`,
-        [VENDORS.one, ACTORS.partnerYaw]
-      )
+      c.query('update public.vendors set owner_user_id = $2 where id = $1', [
+        VENDORS.one,
+        ACTORS.partnerYaw,
+      ])
     );
 
-    const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
-
-    // Partner Yaw is conflicted (vendor staff); Partner Adjoa is not.
+    // Partner Yaw is conflicted (owns the store); Partner Adjoa is not.
     const conflicted = await asUser(
       ACTORS.partnerYaw,
       async (c) => (await c.query('select * from public.get_delivery_offers()')).rows
@@ -735,22 +829,23 @@ describe('account model — identity and capabilities', () => {
   // =========================================================================
   // 9. Verification documents — what is actually enforceable
   // =========================================================================
-  // The face photograph must be captured live. The SERVER CANNOT PROVE THAT: it
-  // receives bytes, and bytes carry no evidence of a camera. The browser form
-  // offers no file input, which is a deterrent, and manual admin review is the
-  // real control — both are documented in the code that does it.
+  // ONE DOCUMENT, and no face photograph. A Partner already holds the CUSTOMER
+  // capability, which means a verified @acity.edu.gh address has established who
+  // they are; a second photograph proved nothing that had not and was the most
+  // sensitive thing Campus Dash stored.
   //
-  // So these assert the controls that DO hold, rather than a guarantee the
-  // architecture does not provide.
-  test('an application is impossible without a face photograph on record', async () => {
-    const id = await newIdentity('233208880020');
+  // The server cannot prove a photograph was taken now rather than found — it
+  // receives bytes, and bytes carry no evidence of a camera. So these assert the
+  // controls that DO hold: the document is required, and it never comes back out.
+  test('an application is impossible without a student ID on record', async () => {
+    const id = await newEmailIdentity(nextSchoolEmail());
     await onboard(id, { studentId: 'TEST-STU-DOC-1' });
 
     for (const path of ['', '   ']) {
       const error = await expectRejection(
         asUser(id, (c) => c.query('select public.partner_apply($1)', [path]))
       );
-      assert.match(error.message, /live face photograph is required/);
+      assert.match(error.message, /photograph of your student ID is required/);
     }
 
     // The column itself refuses a bare application row.
@@ -758,10 +853,30 @@ describe('account model — identity and capabilities', () => {
     assert.equal(caps.partner_status, 'NOT_APPLIED', 'no half-application was created');
   });
 
-  test('neither photograph is ever handed back to the person who uploaded it', async () => {
-    const id = await newIdentity('233208880021');
-    await onboard(id, { studentId: 'TEST-STU-DOC-2', idImage: 'secret/student-id.jpg' });
-    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['secret/face.jpg']), {
+  test('a new application stores no face photograph at all', async () => {
+    const id = await newEmailIdentity(nextSchoolEmail());
+    await onboard(id, { studentId: 'TEST-STU-DOC-3' });
+    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['x/student-id.jpg']), {
+      commit: true,
+    });
+
+    const row = await asService(
+      async (c) =>
+        (
+          await c.query(
+            'select student_id_image_path, face_image_path from public.partner_profiles where user_id = $1',
+            [id]
+          )
+        ).rows[0]
+    );
+    assert.equal(row.student_id_image_path, 'x/student-id.jpg');
+    assert.equal(row.face_image_path, null, 'Campus Dash no longer asks for a face photograph');
+  });
+
+  test('the document path is never handed back to the person who uploaded it', async () => {
+    const id = await newEmailIdentity(nextSchoolEmail());
+    await onboard(id, { studentId: 'TEST-STU-DOC-2' });
+    await asUser(id, (c) => c.query('select public.partner_apply($1)', ['secret/student-id.jpg']), {
       commit: true,
     });
 
@@ -780,13 +895,17 @@ describe('account model — identity and capabilities', () => {
         'a storage key is never returned to a client'
       );
     }
-    assert.equal(profile.has_student_id, true, 'only a boolean says one exists');
-    assert.equal(application.has_documents, true);
+    // The Customer profile carries no document at all — signing up to order
+    // lunch never required one. The Partner application carries the student ID,
+    // and reports only that it exists.
+    assert.ok(!('has_student_id' in profile), 'a customer holds no verification document');
+    assert.equal(application.has_documents, true, 'and the applicant is told only that much');
   });
 
-  test('only an administrator can read a verification document path', async () => {
-    // customer_profiles holds the student ID path now, so the policy that
-    // matters moved with it.
+  test('a customer profile is readable only by its owner and an administrator', async () => {
+    // The verification documents moved to partner_profiles, but the row itself
+    // is still somebody's student ID number and level, and the policy that
+    // guards it has not moved.
     const asOwner = await asUser(
       ACTORS.customerAma,
       async (c) =>
@@ -825,12 +944,12 @@ describe('account model — identity and capabilities', () => {
     // The capability is a row. If a client could insert one, onboarding would
     // be decoration. This is the same guarantee tests/schema.test.js asserts
     // across the whole schema, pinned here where it is load-bearing.
-    const id = await newIdentity('233208880022');
+    const id = await newEmailIdentity(nextSchoolEmail());
     const error = await expectRejection(
       asUser(id, (c) =>
         c.query(
-          `insert into public.customer_profiles (user_id, student_id_number, class_year, student_id_image_path)
-           values ($1, 'SELF-GRANTED', 'Class of 2029', 'x.jpg')`,
+          `insert into public.customer_profiles (user_id, student_id_number, level)
+           values ($1, 'SELF-GRANTED', '200')`,
           [id]
         )
       )

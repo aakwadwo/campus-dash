@@ -22,7 +22,11 @@ describe('authentication and capabilities', () => {
   before(resetTransactionalState);
   beforeEach(resetTransactionalState);
   after(async () => {
-    await asService((c) => c.query("delete from auth.users where phone like '23320999%'"));
+    await asService((c) =>
+      c.query(
+        "delete from auth.users where phone like '23320999%' or email like '%@authfixture.acity.edu.gh'"
+      )
+    );
     await closePools();
   });
 
@@ -43,6 +47,31 @@ describe('authentication and capabilities', () => {
   async function confirmPhone(id) {
     await asService((c) =>
       c.query('update auth.users set phone_confirmed_at = now() where id = $1', [id])
+    );
+  }
+
+  /**
+   * The CUSTOMER's door. GoTrue inserts the row unconfirmed when a code is
+   * requested, then UPDATES email_confirmed_at when the code is accepted —
+   * which is the path that matters and the one a fixture is most likely to
+   * shortcut by setting the timestamp at INSERT.
+   */
+  async function createUnconfirmedEmailUser(email, fullName = null) {
+    const id = randomUUID();
+    await asService((c) =>
+      c.query(
+        `insert into auth.users (instance_id, id, aud, role, email, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+         values ('00000000-0000-0000-0000-000000000000', $1, 'authenticated', 'authenticated', $2,
+                 '{"provider":"email","providers":["email"]}', $3, now(), now())`,
+        [id, email, JSON.stringify(fullName ? { full_name: fullName } : {})]
+      )
+    );
+    return id;
+  }
+
+  async function confirmEmail(id) {
+    await asService((c) =>
+      c.query('update auth.users set email_confirmed_at = now() where id = $1', [id])
     );
   }
 
@@ -144,12 +173,14 @@ describe('authentication and capabilities', () => {
     // Nor through the one profile function they DO have.
     await asUser(
       ACTORS.customerAma,
-      (c) => c.query('select public.update_my_profile($1)', ['Definitely An Admin']),
+      (c) => c.query('select public.update_my_profile($1, $2)', ['Definitely', 'An Admin']),
       { commit: true }
     );
     const profile = await profileFor(ACTORS.customerAma);
     assert.equal(profile.is_admin, false);
-    assert.equal(profile.full_name, 'Definitely An Admin', 'the name change did apply');
+    assert.equal(profile.first_name, 'Definitely', 'the name change did apply');
+    // full_name is derived from the parts, so the two can never disagree.
+    assert.equal(profile.full_name, 'Definitely An Admin');
   });
 
   test('a user cannot un-suspend themselves', async () => {
@@ -167,7 +198,7 @@ describe('authentication and capabilities', () => {
   test("a user cannot edit anyone else's profile", async () => {
     await asUser(
       ACTORS.customerKwesi,
-      (c) => c.query('select public.update_my_profile($1)', ['Kwesi Renamed']),
+      (c) => c.query('select public.update_my_profile($1, $2)', ['Kwesi', 'Renamed']),
       { commit: true }
     );
     // update_my_profile is scoped to auth.uid(); Ama is untouched.
@@ -231,5 +262,67 @@ describe('authentication and capabilities', () => {
       asUser(ACTORS.customerAma, (c) => c.query('select public.partner_set_availability(true)'))
     );
     assert.match(error.message, /not approved/);
+  });
+
+  // =========================================================================
+  // The other door
+  // =========================================================================
+  // A CUSTOMER proves a verified school address, not a phone. The trigger that
+  // provisions the profile has to watch BOTH confirmations — and for a while it
+  // did not: it was declared `AFTER UPDATE OF phone_confirmed_at`, so an email
+  // confirmation never fired it and every customer sign-up died one step after
+  // the code was accepted, at "no profile for this account".
+  //
+  // Nothing caught it, because every other fixture in this suite inserts the
+  // confirmation timestamp ALREADY SET and therefore exercises the INSERT
+  // trigger. These two walk the UPDATE path, which is the only one a real
+  // sign-in takes.
+  test('an unconfirmed EMAIL is an identity in waiting, and grants nothing', async () => {
+    const id = await createUnconfirmedEmailUser('pending@authfixture.acity.edu.gh', 'Not Yet');
+
+    assert.equal(
+      await profileFor(id),
+      null,
+      'asking for a code must not create an account for an address you do not own'
+    );
+  });
+
+  test('CONFIRMING an email address provisions the profile, through the UPDATE path', async () => {
+    const id = await createUnconfirmedEmailUser('arrived@authfixture.acity.edu.gh', 'Ama Arrived');
+    assert.equal(await profileFor(id), null);
+
+    await confirmEmail(id);
+
+    const profile = await profileFor(id);
+    assert.ok(profile, 'the confirmation is what creates the row');
+    assert.equal(profile.email, 'arrived@authfixture.acity.edu.gh');
+    assert.equal(profile.full_name, 'Ama Arrived');
+    // NO PHONE. A customer's number is a profile fact collected at sign-up, not
+    // a credential — and an administrator never has one at all.
+    assert.equal(profile.phone, null);
+
+    // Still no capability: an identity is not an entitlement.
+    const caps = await asUser(
+      id,
+      async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
+    );
+    assert.equal(caps.authenticated, true);
+    assert.equal(caps.can_order, false);
+    assert.equal(caps.customer_status, 'NOT_ONBOARDED');
+  });
+
+  test('a second confirmation does not duplicate or overwrite the profile', async () => {
+    const id = await createUnconfirmedEmailUser('twice@authfixture.acity.edu.gh');
+    await confirmEmail(id);
+    await asService((c) =>
+      c.query('update public.users set full_name = $2 where id = $1', [id, 'Renamed By Hand'])
+    );
+    await confirmEmail(id);
+
+    const rows = await asService(
+      async (c) => (await c.query('select * from public.users where id = $1', [id])).rows
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].full_name, 'Renamed By Hand', 'ON CONFLICT DO NOTHING, not DO UPDATE');
   });
 });

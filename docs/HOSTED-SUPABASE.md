@@ -10,15 +10,16 @@ connects Paystack or Arkesel.
 
 ## What changes, and what does not
 
-|                    | Local stack             | Hosted project                  |
-| ------------------ | ----------------------- | ------------------------------- |
-| Database           | recreated by `db:reset` | persistent                      |
-| Schema applied by  | `supabase/migrations/`  | `supabase/schema.sql`           |
-| Reference data     | migrations + `seed.sql` | migrations' reference data only |
-| Development actors | seeded                  | **none — you create them**      |
-| Phone OTP delivery | HTTPS Send SMS Hook     | Postgres Send SMS Hook          |
-| Admin account      | seeded (`0200000001`)   | `npm run admin:create`          |
-| Payments           | fake                    | fake                            |
+|                    | Local stack                      | Hosted project                  |
+| ------------------ | -------------------------------- | ------------------------------- |
+| Database           | recreated by `db:reset`          | persistent                      |
+| Schema applied by  | `supabase/migrations/`           | `supabase/schema.sql`           |
+| Reference data     | migrations + `seed.sql`          | migrations' reference data only |
+| Development actors | seeded                           | **none — you create them**      |
+| Phone OTP delivery | HTTPS Send SMS Hook              | Postgres Send SMS Hook          |
+| Email OTP delivery | project SMTP + a custom template | Mailpit + `supabase/templates/` |
+| Admin account      | seeded (`0200000001`)            | `npm run admin:create`          |
+| Payments           | fake                             | fake                            |
 
 The application code is identical. Only environment variables and the Supabase
 project's own Auth settings differ.
@@ -255,7 +256,7 @@ So, signed in at `/admin`:
    time, then add its menu items.
 3. **Vendor staff** — the person must **sign in once at `/login` by phone
    first**, so an account exists; then add them by phone under the vendor.
-   `admin_add_vendor_user` refuses an unknown number rather than inventing an
+   `vendor_signup()` refuses an unverified number rather than inventing an
    account.
 4. **Partners** — they apply at `/partner/apply` with a student ID photograph
    and a live selfie, and you approve them at `/admin/partners`.
@@ -303,3 +304,49 @@ shows each job's last run and last error.
 **`permission denied` where the local stack was fine** — the default-privilege
 revokes did not run before the objects were created. Reinstall from
 `schema.sql`, which orders them correctly, rather than granting by hand.
+
+## The email template is not optional
+
+Customers sign in with a six-digit code sent to their `@acity.edu.gh` address.
+Supabase's **default magic-link email offers a LINK and no code**, so on a
+hosted project the code never reaches anybody and email sign-in cannot be
+completed at all.
+
+**BOTH email templates need `{{ .Token }}`, and forgetting the first one is the
+mistake that hides.** Supabase sends Confirm signup when an address is used for
+the first time and Magic Link on every sign-in after that. Wire only Magic Link
+and sign-IN works perfectly while first-time sign-UP is dead — which nobody
+notices until a real student tries it.
+
+| Authentication → Email Templates | Copy the body from                       |
+| -------------------------------- | ---------------------------------------- |
+| **Confirm signup**               | `supabase/templates/confirm-signup.html` |
+| **Magic Link**                   | `supabase/templates/magic-link.html`     |
+
+Also set **Authentication → Providers → Email → Confirm email = ON**. With it
+off, requesting the first code marks the address confirmed before anybody has
+proved they can read that mailbox, and Supabase sends the wrong template. The
+school address is the proof of being a student, so it must not count as verified
+until a code has been read out of it.
+
+Why a code rather than the link: a link opens in whichever browser the mail app
+picks, which on a phone is routinely not the one holding the half-filled sign-up
+form. A code can be typed into the tab that is already open.
+
+You also need **Authentication → Providers → Email** enabled, with confirmations
+configured so that a code is issued. The phone provider stays on for vendors.
+
+## What an empty hosted project needs before anybody can use it
+
+`schema.sql` installs the tables, functions, policies, the terms documents and
+the twelve vendor categories. It installs **no people and no places**. So:
+
+1. `npm run admin:create` — the first administrator. Give it an
+   `@acity.edu.gh` address if you also want that account to be able to order.
+2. `/admin/locations` — the campus tree. Nothing can be delivered until at
+   least one location is `is_deliverable`.
+3. `/admin/pilot` — the delivery fee, and the scan fee if scan delivery is on.
+   The 5% service fee is already correct; do not change it.
+4. Vendors **sign themselves up** at `/vendor/signup` and you approve them at
+   `/admin/vendors`. The only rows you create by hand are catalogue entries for
+   scan restaurants that will never operate a dashboard.

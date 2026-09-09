@@ -50,7 +50,7 @@ export default function AdminError({ error, reset }) {
         <button
           type="button"
           onClick={reset}
-          className="bg-brand-500 text-ink rounded px-4 py-2 text-sm font-semibold"
+          className="bg-brand-700 rounded px-4 py-2 text-sm font-semibold text-white"
         >
           Try again
         </button>

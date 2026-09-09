@@ -158,6 +158,126 @@ a payment against an id that happens to exist.
 A transfer event for a payout we have no record of is recorded and ignored, not
 500'd — otherwise Paystack would retry it forever.
 
+## Split settlement — the vendor's share, routed at the charge
+
+A vendor is entitled to 100% of the food subtotal. Until now that money landed
+in the Campus Dash balance and was pushed back out by a daily payout run, which
+meant a vendor waited a day for money that was never really ours.
+
+It no longer has to. Paystack supports **dynamic splits**: a `split` object
+passed inline on `/transaction/initialize`, dividing one charge between the main
+account and one or more subaccounts, with no split group registered in advance.
+
+### What Campus Dash sends
+
+```json
+{
+  "email": "ama@acity.edu.gh",
+  "amount": 4200,
+  "currency": "GHS",
+  "reference": "<our payment id>",
+  "split": {
+    "type": "flat",
+    "currency": "GHS",
+    "bearer_type": "account",
+    "subaccounts": [{ "subaccount": "ACCT_…", "share": 3500 }]
+  }
+}
+```
+
+Every part of that is a decision:
+
+**`type: "flat"`, not `"percentage"`.** The vendor is owed the food subtotal to
+the pesewa. A percentage of a total that also contains a 5% service fee and a
+GH₵5 delivery fee is not that number — it is a number that happens to be close
+to it and drifts as the fees change.
+
+**`share` is in pesewas, unscaled.** Paystack's minor unit for GHS _is_ the
+pesewa, which is the unit this codebase already uses. Nothing is converted, and
+no float appears.
+
+**`bearer_type: "account"`.** Paystack's processing fee stays with Campus Dash.
+The vendor gets 100% of the food; taking the fee out of their share would
+quietly make that untrue.
+
+**One subaccount, and it is always the vendor.** See the limitation below.
+
+### The subaccount
+
+A Ghana subaccount is created once per payout destination, from the same mobile
+money details a transfer recipient uses:
+
+```
+POST /subaccount
+{ "business_name": "Muni Kitchen", "settlement_bank": "MTN",
+  "account_number": "0551234567", "percentage_charge": 0 }
+```
+
+`percentage_charge: 0` is the **fail-safe**, not an oversight. It is the default
+share Paystack applies when a transaction names the subaccount with no explicit
+split, and Campus Dash always sends one. If a split were ever omitted by
+mistake, 0 leaves the money in our balance where it can still be sent on. A
+default of 100 would send the whole charge — service fee, delivery fee and all —
+straight to the vendor, and Paystack cannot pull that back.
+
+### What the ledger records
+
+`allocations.settlement_channel` says how each row's money reaches its payee:
+
+| Channel    | Meaning                                                             |
+| ---------- | ------------------------------------------------------------------- |
+| `SPLIT`    | Paystack routed it at the charge. Born `SETTLED`; no run claims it. |
+| `TRANSFER` | It is in the Campus Dash balance and a settlement run moves it.     |
+| `NULL`     | Written before split settlement existed. Historical, not guessed.   |
+
+`create_order_allocations()` reads what the payment ACTUALLY split — from
+`payments.split_subaccount_code` and `payments.split_vendor_pesewas` — not what
+was intended. A vendor who registered a subaccount after an order was charged is
+still owed that order's money through a run.
+
+### The limitations, stated plainly
+
+**1. The Partner cannot be in the split.** The split is fixed when the charge is
+created. At that moment the order has been accepted and priced and **no Partner
+exists**: dispatch does not open until the vendor marks the food READY, which is
+after payment. Paystack has no supported way to add a subaccount to a
+transaction that has already been charged, and delaying payment until after
+assignment would break the order architecture — the customer pays before the
+kitchen starts.
+
+So the Partner's GH₵5 stays in the Campus Dash balance at charge time, is carved
+out of the platform allocation when they complete the delivery, and is settled
+through Paystack Transfers, which is itself an officially supported mechanism
+and stays gated behind `PAYSTACK_TRANSFERS_ENABLED`.
+
+**2. A split cannot be reversed.** Money released to a subaccount cannot be
+pulled back. A refund on a split order comes out of the Campus Dash balance, and
+`/admin/orders/[id]` shows the split so nobody discovers this during a
+reconciliation.
+
+**3. A split can be refused, and must not stop the payment.** A deactivated
+subaccount, or an account without multi-split enabled, makes Paystack reject the
+whole initialisation. The adapter drops the split and retries once; the customer
+buys their lunch, `splitApplied` comes back false, no split is recorded, and the
+vendor's money is settled by the run exactly as before. A customer must never be
+unable to eat because of a settlement arrangement they are not party to.
+
+**4. `PAYSTACK_SPLIT_ENABLED` can turn it off** for an account where multi-split
+is not enabled, rather than logging a refusal on every order.
+
+### Where the details are entered
+
+A vendor sets their own at `/vendor/profile` → **Getting paid**, which calls
+`vendor_set_payout_destination()` and then registers the subaccount. Saving the
+number and registering it are separate steps, and the second is allowed to fail:
+the number is what the vendor asked to save, and Paystack being unreachable must
+not lose it. An administrator sees who is set up at `/admin/settlements` →
+**Payout setup**, with a button to retry a failed registration.
+
+Changing a number or a network **clears both provider codes** — the recipient
+and the subaccount — so neither a transfer nor a split can keep paying the old
+account.
+
 ## Money out
 
 Vendor daily and Partner weekly settlement are unchanged. Paystack simply sits
@@ -200,10 +320,15 @@ column of an active vendor.
 | `VODAFONE`   | `VOD`    | Telecel (formerly Vodafone) |
 | `AIRTELTIGO` | `ATL`    | AirtelTigo Money            |
 
-Set one at `/admin/settlements`; a Partner can keep their own current through
-`partner_set_payout_destination()`. Changing the number or the network **clears
-the recipient code**, so the next transfer registers the new destination rather
-than paying the old one.
+Set one at `/admin/settlements`; a Partner keeps their own current through
+`partner_set_payout_destination()` and a vendor through
+`vendor_set_payout_destination()`. Changing the number or the network **clears
+both the recipient code and the subaccount code**, so neither a transfer nor a
+split can keep paying the old account.
+
+Neither `my_payout_destination()` nor `admin_payout_readiness()` returns a whole
+account number — the last three digits are enough to recognise your own, and a
+screen that echoes the rest is a screen that leaks it over a shoulder.
 
 ### Transfers are off by default
 

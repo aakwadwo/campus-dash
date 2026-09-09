@@ -34,7 +34,7 @@ export default function AdminLoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="press bg-brand-500 text-ink hover:bg-brand-600 h-12 w-full rounded-full text-sm font-semibold transition-colors disabled:opacity-55"
+        className="press bg-brand-700 hover:bg-brand-800 h-12 w-full rounded-full text-sm font-semibold text-white transition-colors disabled:opacity-55"
       >
         {pending ? 'Signing in…' : 'Sign in'}
       </button>

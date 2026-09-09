@@ -2,28 +2,28 @@
 
 import Link from 'next/link';
 import { useActionState, useEffect, useRef, useState } from 'react';
+import CameraCapture from '@/app/camera-capture';
 import { applyAction } from '../actions';
 
 /**
  * Becoming a Partner.
  *
- * This form asks for ONE thing, and that is the whole design. Name, student ID
- * number, class year, email and the ID photograph are already on the account —
- * they were collected at student onboarding, and the database refuses this
- * application without them. Re-asking would imply a second identity is being
- * created, which is exactly the confusion this flow exists to avoid.
+ * THIS FORM ASKS FOR ONE DOCUMENT, and what it does NOT ask for is the point.
  *
- * The FACE photograph is captured from the live camera stream in this
- * component, and there is no file input for it anywhere in the markup. The
- * point of the selfie is that an admin can compare a real face against the ID,
- * so a saved image would defeat it.
+ * A Partner already holds the CUSTOMER capability — the database refuses this
+ * application without it — which means a verified @acity.edu.gh address has
+ * already established who this is. Name, student ID number and level are on the
+ * account. Re-asking would imply a second identity is being created, which is
+ * exactly the confusion this flow exists to avoid.
  *
- * This is a deterrent, not a guarantee: anyone can POST to the upload endpoint
- * directly. The actual control is that a human reviews every application.
+ * There is also no face photograph any more. It proved nothing the school
+ * address had not already proved, and it was the most sensitive thing Campus
+ * Dash was storing. What remains is the student ID card, the Partner terms, and
+ * a person at Campus Dash reading the application.
  */
 export default function ApplyForm({ profile }) {
   const [state, submit, submitting] = useActionState(applyAction, {});
-  const [facePath, setFacePath] = useState('');
+  const [idPath, setIdPath] = useState('');
 
   // The form is REPLACED on success. Leaving a filled-in form on screen under a
   // success message reads as "nothing happened" and invites a second submission
@@ -31,11 +31,11 @@ export default function ApplyForm({ profile }) {
   if (state.submitted) {
     return (
       <section className="mt-6 space-y-4">
-        <div className="rounded-card bg-surface ring-line p-4 ring-1">
-          <h2 className="text-base font-semibold">Application submitted</h2>
+        <div className="rounded-card bg-surface border-line border p-5">
+          <h2 className="text-base font-semibold">Application received</h2>
           <p className="text-muted mt-2 text-sm leading-relaxed">
-            We&rsquo;ll review your application and notify you when a decision is made. Reviewing is
-            done by hand, so it is not instant.
+            Someone at Campus Dash will read it and let you know. It is reviewed by hand, so it is
+            not instant.
           </p>
         </div>
         <ContinueOrdering />
@@ -45,35 +45,29 @@ export default function ApplyForm({ profile }) {
 
   return (
     <form action={submit} className="mt-6 space-y-6">
-      <input type="hidden" name="face_image_path" value={facePath} />
+      <input type="hidden" name="student_id_image_path" value={idPath} />
 
-      {/* Read-only, and shown rather than re-asked: this is the evidence the
-          reviewer will compare the selfie against, and seeing it here is how an
-          applicant understands that the same account is being upgraded. */}
-      <section className="rounded-card bg-surface ring-line p-4 ring-1">
+      {/* Read-only, and shown rather than re-asked: seeing it here is how an
+          applicant understands that the same account is being upgraded rather
+          than a second one created. */}
+      <section className="rounded-card bg-surface border-line border p-4">
         <h2 className="text-sm font-medium">Your student details</h2>
         <p className="text-muted mt-1 text-xs">
-          Already on your account. A reviewer compares your selfie against this ID.
+          Already on your account, from when you signed up. Your school email is verified, so
+          nothing here needs checking again.
         </p>
         <dl className="mt-3 space-y-1.5 text-sm">
           <Row label="Student ID" value={profile?.student_id_number} />
-          <Row label="Class year" value={profile?.class_year} />
-          <Row label="ID photo" value={profile?.has_student_id ? 'On file' : 'Missing'} />
+          <Row label="Level" value={profile?.level} />
         </dl>
-        <Link
-          href="/onboarding"
-          className="text-brand-700 mt-3 inline-block text-xs font-medium underline underline-offset-4"
-        >
-          Something wrong? Update your student details
-        </Link>
       </section>
 
-      <FaceCapture path={facePath} onUploaded={setFacePath} />
+      <StudentIdUpload path={idPath} onUploaded={setIdPath} />
 
       {state.message ? (
         <p
           role={state.ok ? 'status' : 'alert'}
-          className={`text-sm ${state.ok ? 'text-brand-700' : 'text-bad'}`}
+          className={`text-sm ${state.ok ? 'text-good' : 'text-bad'}`}
         >
           {state.message}
         </p>
@@ -81,8 +75,8 @@ export default function ApplyForm({ profile }) {
 
       <button
         type="submit"
-        disabled={submitting || !facePath}
-        className="press bg-brand-500 text-ink w-full rounded-full py-4 text-base font-semibold transition-colors disabled:opacity-55"
+        disabled={submitting || !idPath}
+        className="press bg-brand-700 hover:bg-brand-800 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
       >
         {submitting ? 'Submitting…' : 'Submit application'}
       </button>
@@ -109,10 +103,10 @@ function Row({ label, value }) {
  */
 export function ContinueOrdering() {
   return (
-    <div className="rounded-card bg-surface ring-line p-4 ring-1">
+    <div className="rounded-card bg-surface border-line border p-4">
       <p className="text-sm">You can keep ordering while you wait. The same account does both.</p>
-      <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-medium">
-        Continue to ordering →
+      <Link href="/order" className="text-brand-700 mt-2 inline-block text-sm font-semibold">
+        Continue to ordering
       </Link>
     </div>
   );
@@ -129,138 +123,77 @@ async function upload(kind, blob, filename) {
   return body.path;
 }
 
-/** Live camera only. There is no file input in this component, by design. */
-function FaceCapture({ path, onUploaded }) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const [streaming, setStreaming] = useState(false);
+/**
+ * The student ID card, uploaded or photographed.
+ *
+ * Both routes are offered because a card is the same card either way. Someone
+ * with a clear photo already on their phone should use it; someone holding the
+ * card should be able to point the camera at it and be done.
+ */
+function StudentIdUpload({ path, onUploaded }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [preview, setPreview] = usePreview();
 
-  // Always release the camera when this component goes away.
-  useEffect(() => {
-    return () => stopStream(streamRef);
-  }, []);
-
-  async function start() {
-    setError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setStreaming(true);
-    } catch {
-      setError(
-        'Campus Dash could not open your camera. Allow camera access and try again. A saved photo cannot be used for this step.'
-      );
-    }
-  }
-
-  async function capture() {
-    const video = videoRef.current;
-    if (!video) return;
-
+  async function accept(file) {
     setBusy(true);
     setError(null);
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-      if (!blob) throw new Error('Could not read the camera image.');
-
-      const uploaded = await upload('face', blob, 'face.jpg');
-      setPreview(URL.createObjectURL(blob));
+      const uploaded = await upload('student-id', file, file.name || 'student-id.jpg');
+      setPreview(URL.createObjectURL(file));
       onUploaded(uploaded);
-      stopStream(streamRef);
-      setStreaming(false);
     } catch (caught) {
       setError(caught.message);
+      throw caught;
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <section className="rounded-card bg-surface ring-line p-4 ring-1">
+    <section className="rounded-card bg-surface border-line border p-4">
       <h2 className="text-sm font-medium">
-        Live photo of your face <span className="text-bad">*</span>
+        Photo of your student ID <span className="text-bad">*</span>
       </h2>
-      <p className="text-muted mt-1 text-xs">
-        Taken now, with your camera. You cannot upload a saved picture for this step. It is the only
-        thing this application asks for that your account does not already have.
-      </p>
-      {/* Said before the camera opens, not after the photo is taken. Someone
-          who would rather not be shown to customers should learn that while it
-          is still a choice. */}
-      <p className="bg-surface-2 mt-2 rounded p-2 text-xs leading-relaxed">
-        This photo will be used as your Partner profile photo and may be shown to customers when you
-        accept their deliveries.
+      <p className="text-muted mt-1 text-xs leading-relaxed">
+        Make sure the name and ID number are readable. It is stored privately and deleted after the
+        review retention period.
       </p>
 
-      {!path ? (
+      {preview ? (
         <>
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            className={`bg-surface-2 mt-3 w-full rounded ${streaming ? '' : 'hidden'}`}
-            style={{ aspectRatio: '3 / 4', objectFit: 'cover' }}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={preview}
+            alt="The student ID you uploaded"
+            className="border-line rounded-card mt-3 w-full border"
+            style={{ aspectRatio: '3 / 2', objectFit: 'cover' }}
           />
-          {!streaming ? (
-            <button
-              type="button"
-              onClick={start}
-              className="press ring-line-strong mt-3 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
-            >
-              Open camera
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={capture}
-              disabled={busy}
-              className="press bg-brand-500 text-ink mt-3 w-full rounded-full py-3 text-sm font-semibold transition-colors disabled:opacity-55"
-            >
-              {busy ? 'Saving…' : 'Take photo'}
-            </button>
-          )}
+          <p className="text-good mt-2 text-sm font-medium">ID received.</p>
         </>
-      ) : (
-        <>
-          {preview ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={preview}
-              alt="The live photograph you just took"
-              className="ring-line mt-3 w-full rounded ring-1"
-              style={{ aspectRatio: '3 / 4', objectFit: 'cover' }}
-            />
-          ) : null}
-          <p className="text-brand-700 mt-2 text-sm font-medium">✓ Photo taken</p>
-          <button
-            type="button"
-            onClick={() => {
-              setPreview(null);
-              onUploaded('');
-              start();
-            }}
-            className="press ring-line-strong mt-2 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
-          >
-            Retake photo
-          </button>
-        </>
-      )}
+      ) : null}
 
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors">
+          {path ? 'Choose another' : 'Choose a file'}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={busy}
+            className="sr-only"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              await accept(file).catch(() => {});
+            }}
+          />
+        </label>
+
+        <CameraCapture onCaptured={accept} label={path ? 'Retake photo' : 'Take a photo'} />
+      </div>
+
+      {busy ? <p className="text-muted mt-2 text-sm">Uploading…</p> : null}
       {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </section>
   );
@@ -288,9 +221,4 @@ function usePreview() {
   };
 
   return [url, set];
-}
-
-function stopStream(ref) {
-  ref.current?.getTracks().forEach((track) => track.stop());
-  ref.current = null;
 }

@@ -17,12 +17,12 @@ export const dynamic = 'force-dynamic';
  */
 const DECIDED = {
   PENDING_REVIEW: {
-    title: 'Application submitted',
-    body: "We'll review it and let you know when a decision is made. Reviewing is done by hand, so it is not instant.",
+    title: 'Application received',
+    body: 'Someone at Campus Dash will read it and let you know. It is reviewed by hand, so it is not instant.',
   },
   REJECTED: {
     title: 'Application not approved',
-    body: 'You can apply again with a new live photo. Your student details stay on your account.',
+    body: 'You can apply again with a clearer photo of your student ID. Your student details stay on your account.',
   },
   SUSPENDED: {
     title: 'Partner access suspended',
@@ -36,7 +36,7 @@ export default async function PartnerApplyPage() {
   // PARTNER ⇒ CUSTOMER. partner_apply() raises without a customer profile, so
   // the honest thing is to send them to acquire one rather than render a form
   // the database will refuse. `next` brings them back here afterwards.
-  if (!me.can_order) redirect('/onboarding?next=%2Fpartner%2Fapply');
+  if (!me.can_order) redirect('/signup?next=%2Fpartner%2Fapply');
 
   const [application, profile] = await Promise.all([getMyApplication(), getMyCustomerProfile()]);
   const state = DECIDED[application?.status];
@@ -55,7 +55,7 @@ export default async function PartnerApplyPage() {
         <>
           <p className="text-muted mt-2 text-sm leading-relaxed">{state.body}</p>
           {application.review_notes ? (
-            <p className="rounded-card bg-surface ring-line mt-3 p-3 text-sm ring-1">
+            <p className="rounded-card bg-surface border-line mt-3 border p-3 text-sm">
               {application.review_notes}
             </p>
           ) : null}
@@ -65,9 +65,9 @@ export default async function PartnerApplyPage() {
         </>
       ) : (
         <p className="text-muted mt-2 text-sm leading-relaxed">
-          You already have a Campus Dash account, and this adds delivering to it: same login, same
-          details, same order history. All we need is a live photo so an admin can compare your face
-          with your student ID.
+          Partners help other students get what they need across campus, and earn for every order
+          they bring. This adds delivering to the account you already have: same login, same
+          details, same order history. All we need is a photo of your student ID.
         </p>
       )}
 

@@ -11,6 +11,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   payOrder,
   orderReadyForDispatch,
@@ -19,6 +20,7 @@ import {
   getSecrets,
   expectRejection,
   tryTransition,
+  setPartnerPayoutThreshold,
 } from './helpers/flow.js';
 
 /**
@@ -110,8 +112,7 @@ describe('settlement and reconciliation', () => {
   });
 
   test('a pickup order allocates nothing to a Partner', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
 
     const money = await asUser(
@@ -142,6 +143,10 @@ describe('settlement and reconciliation', () => {
   });
 
   test('a Partner run pays each Partner separately', async () => {
+    // The SHAPE of a Partner run: one payout each, not one combined. Two
+    // deliveries at GH₵5 are both under the GH₵20 weekly floor, so the floor is
+    // lifted here; it has its own suite.
+    await setPartnerPayoutThreshold(1);
     await deliveredOrder({ partner: ACTORS.partnerYaw });
     await deliveredOrder({ partner: ACTORS.partnerAdjoa });
 
@@ -237,8 +242,7 @@ describe('settlement and reconciliation', () => {
 
   test('a cancelled order is excluded from settlement', async () => {
     const good = await deliveredOrder();
-    const bad = await submitOrder({ customer: ACTORS.customerKwesi });
-    await vendorAccept(bad.order_id);
+    const bad = await acceptedOrder({ customer: ACTORS.customerKwesi });
     await payOrder(bad.order_id);
     await asUser(
       ACTORS.admin,
@@ -318,8 +322,7 @@ describe('settlement and reconciliation', () => {
   });
 
   test('reconciliation catches an order marked PAID with no allocations', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     // Simulate the ledger failing to write.
@@ -334,8 +337,7 @@ describe('settlement and reconciliation', () => {
   });
 
   test('the balance trigger refuses to let allocations drift in the first place', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     const error = await expectRejection(
@@ -349,8 +351,7 @@ describe('settlement and reconciliation', () => {
   });
 
   test('reconciliation still catches an imbalance if one ever appeared', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await payOrder(order.order_id);
 
     // The deferred trigger makes this state unreachable through normal DML —
@@ -375,7 +376,7 @@ describe('settlement and reconciliation', () => {
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await tryTransition(ACTORS.partnerYaw, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
       secrets.pickup_code,
     ]);

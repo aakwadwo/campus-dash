@@ -14,8 +14,10 @@ import {
   getOrder,
   expectRejection,
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   completeDelivery,
+  setPartnerPayoutThreshold,
 } from './helpers/flow.js';
 
 describe('concurrency and idempotency', () => {
@@ -45,8 +47,11 @@ describe('concurrency and idempotency', () => {
       assert.equal(won.length, 1, 'exactly one Partner should win the race');
       assert.equal(lost.length, 1, 'exactly one Partner should lose the race');
       assert.match(lost[0].reason, /already been taken/);
-      assert.ok(won[0].pickup_code, 'the winner receives a pickup code');
-      assert.equal(lost[0].pickup_code, null, 'the loser receives no pickup code');
+      // The winner is told which job is theirs. NOT the pickup code: that is
+      // the vendor's to read out at the counter, and a Partner who held it
+      // could confirm a collection that never happened.
+      assert.ok(won[0].order_number, 'the winner is told which order is theirs');
+      assert.equal(lost[0].order_number, null, 'the loser is told nothing');
 
       const stored = await getOrder(order.order_id);
       assert.equal(stored.delivery_status, 'ASSIGNED');
@@ -71,63 +76,88 @@ describe('concurrency and idempotency', () => {
   });
 
   // --- 5 -------------------------------------------------------------------
-  test('a Partner cannot hold a second active delivery', async () => {
+  test('a Partner may hold two active deliveries, and no more', async () => {
     const first = await orderReadyForDispatch();
     const second = await orderReadyForDispatch();
+    const third = await orderReadyForDispatch();
 
-    const won = await partnerAccept(first.order_id, ACTORS.partnerYaw);
-    assert.equal(won.success, true);
+    assert.equal((await partnerAccept(first.order_id, ACTORS.partnerYaw)).success, true);
+    assert.equal(
+      (await partnerAccept(second.order_id, ACTORS.partnerYaw)).success,
+      true,
+      'two at once is the limit, not one'
+    );
 
-    const blocked = await partnerAccept(second.order_id, ACTORS.partnerYaw);
-    assert.equal(blocked.success, false, 'a second active delivery is refused');
-    assert.match(blocked.reason, /already been taken/);
+    const blocked = await partnerAccept(third.order_id, ACTORS.partnerYaw);
+    assert.equal(blocked.success, false, 'a third active delivery is refused');
+    assert.match(blocked.reason, /2 active deliveries/i);
 
-    const stored = await getOrder(second.order_id);
-    assert.equal(stored.delivery_status, 'SEARCHING', 'the second order stays available');
+    const stored = await getOrder(third.order_id);
+    assert.equal(stored.delivery_status, 'SEARCHING', 'the third order stays available');
     assert.equal(stored.partner_id, null);
   });
 
-  test('the one-active-delivery rule holds at the database level, not just in the function', async () => {
+  test('the capacity limit holds at the database level, not just in the function', async () => {
     const first = await orderReadyForDispatch();
     const second = await orderReadyForDispatch();
+    const third = await orderReadyForDispatch();
     await partnerAccept(first.order_id, ACTORS.partnerYaw);
+    await partnerAccept(second.order_id, ACTORS.partnerYaw);
 
-    // Bypass every function and write the assignment directly as superuser. The
-    // partial unique index must still refuse it.
-    const error = await expectRejection(
-      asService((c) =>
-        c.query(
-          `update public.orders
-              set partner_id = $1, delivery_status = 'ASSIGNED', assigned_at = now()
-            where id = $2`,
-          [ACTORS.partnerYaw, second.order_id]
+    // Bypass every function and write a third assignment directly as superuser.
+    // "At most two" cannot be a unique index on partner_id, so an active
+    // delivery holds a numbered SLOT and the slot is what is unique — and the
+    // index must refuse either slot.
+    for (const slot of [1, 2]) {
+      const error = await expectRejection(
+        asService((c) =>
+          c.query(
+            `update public.orders
+                set partner_id = $1, partner_slot = $3,
+                    delivery_status = 'ASSIGNED', assigned_at = now()
+              where id = $2`,
+            [ACTORS.partnerYaw, third.order_id, slot]
+          )
         )
-      )
-    );
-    assert.match(error.message, /orders_one_active_delivery_per_partner/);
+      );
+      assert.match(error.message, /orders_partner_active_slot_unique/);
+    }
   });
 
-  test('racing to accept two DIFFERENT deliveries still yields only one assignment', async () => {
+  test('racing to accept THREE deliveries at once still yields exactly two', async () => {
     const a = await orderReadyForDispatch();
     const b = await orderReadyForDispatch();
+    const c3 = await orderReadyForDispatch();
     const yaw = await dedicatedClient(ACTORS.partnerYaw);
 
     try {
       const results = await Promise.all([
         yaw.query('select * from public.partner_accept_delivery($1)', [a.order_id]),
         yaw.query('select * from public.partner_accept_delivery($1)', [b.order_id]),
+        yaw.query('select * from public.partner_accept_delivery($1)', [c3.order_id]),
       ]);
       const succeeded = results.map((r) => r.rows[0]).filter((e) => e.success);
-      assert.equal(succeeded.length, 1, 'one Partner, one delivery — even when racing themselves');
+      assert.equal(succeeded.length, 2, 'the cap holds even when a Partner races themselves');
     } finally {
       await yaw.end();
     }
+
+    const held = await asService(
+      async (c) =>
+        (
+          await c.query(
+            `select count(*)::int as n from public.orders
+              where partner_id = $1 and delivery_status in ('ASSIGNED','PICKED_UP')`,
+            [ACTORS.partnerYaw]
+          )
+        ).rows[0].n
+    );
+    assert.equal(held, 2);
   });
 
   // --- 2 -------------------------------------------------------------------
   test('a repeated payment request with the same key creates exactly one payment', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const first = await asService(
       async (c) =>
@@ -163,10 +193,8 @@ describe('concurrency and idempotency', () => {
   });
 
   test('an idempotency key reused for a DIFFERENT order is rejected, not replayed', async () => {
-    const a = await submitOrder();
-    const b = await submitOrder({ customer: ACTORS.customerKwesi });
-    await vendorAccept(a.order_id);
-    await vendorAccept(b.order_id);
+    const a = await acceptedOrder();
+    const b = await acceptedOrder({ customer: ACTORS.customerKwesi });
 
     await asService((c) =>
       c.query("select * from public.create_payment_intent($1, 'fake', $2)", [
@@ -187,8 +215,7 @@ describe('concurrency and idempotency', () => {
   });
 
   test('only one live payment intent per order is possible', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
     await asService((c) =>
       c.query("select * from public.create_payment_intent($1, 'fake', $2)", [order.order_id, 'k1'])
     );
@@ -267,6 +294,10 @@ describe('concurrency and idempotency', () => {
 
   // --- 4 -------------------------------------------------------------------
   test('a repeated payout request cannot duplicate a transfer', async () => {
+    // This is about payout MECHANICS, not the weekly threshold: one delivery
+    // earns GH₵5 and the product floor is GH₵20, so the policy is set aside
+    // deliberately rather than left to whatever the default happens to be.
+    await setPartnerPayoutThreshold(1);
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await completeDelivery(order.order_id, ACTORS.partnerYaw);

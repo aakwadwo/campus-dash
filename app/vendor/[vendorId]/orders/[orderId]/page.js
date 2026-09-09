@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getOrderDetail } from '@/lib/vendor';
+import { getOrderDetail, getPickupCode } from '@/lib/vendor';
 import { formatPesewas } from '@/lib/util/money';
 import OrderActions from './order-actions';
 
@@ -26,6 +26,13 @@ export default async function VendorOrderPage({ params }) {
   // confirms it exists.
   const order = await getOrderDetail(orderId);
   if (!order || order.vendor_id !== vendorId) notFound();
+
+  // Fetched only when a Partner is actually standing there. vendor_pickup_code()
+  // refuses at any other moment, so this is not the guard — it is what stops a
+  // pointless call on every other order.
+  const pickupCode = order.pickup_code_available
+    ? await getPickupCode(orderId).catch(() => null)
+    : null;
 
   return (
     <main className="mx-auto max-w-2xl px-4 pt-4 pb-24">
@@ -76,7 +83,13 @@ export default async function VendorOrderPage({ params }) {
         <dl className="space-y-1 text-sm">
           <Row
             label="Fulfilment"
-            value={order.fulfilment_type === 'PICKUP' ? 'Customer collects' : 'Partner delivers'}
+            value={
+              order.fulfilment_type === null
+                ? 'Customer is choosing'
+                : order.fulfilment_type === 'PICKUP'
+                  ? 'Customer collects'
+                  : 'Partner delivers'
+            }
           />
           {order.fulfilment_type === 'DELIVERY' ? (
             <Row label="Destination zone" value={order.destination_zone ?? 'Campus'} />
@@ -92,7 +105,7 @@ export default async function VendorOrderPage({ params }) {
         </dl>
       </section>
 
-      <OrderActions order={order} vendorId={vendorId} />
+      <OrderActions order={order} vendorId={vendorId} pickupCode={pickupCode} />
     </main>
   );
 }

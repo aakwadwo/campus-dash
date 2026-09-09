@@ -54,9 +54,10 @@ price it was quoted — that is deliberate and cannot be overridden.
 
 ## Approving Partners
 
-`/admin/partners`. Compare the live face photograph with the student ID. That
-comparison **is** the security control — the camera-only capture is a
-deterrent, not proof.
+`/admin/partners`. Check the student ID against the name and level already on
+the account. The applicant's `@acity.edu.gh` address is verified before they can
+reach the form at all, so identity is established before this screen; what you
+are confirming is that they are the student the account says they are.
 
 Reject anything you are unsure about. A rejected applicant can re-apply.
 

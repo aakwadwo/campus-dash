@@ -42,15 +42,18 @@ async function run(fn, successMessage, paths = ['/partner']) {
 }
 
 /**
- * One field, because the application adds one thing. Everything else the
- * reviewer needs is already on the account, and partner_apply() reads it from
- * there — this action could not pass a different student ID even if the form
+ * Two documents, because that is what an administrator actually compares: a
+ * photograph of the student ID, and a LIVE face captured with the camera.
+ *
+ * Everything else the reviewer needs — name, student ID number, level, verified
+ * school address — is already on the account, and partner_apply() reads it from
+ * there. This action could not pass a different student ID even if the form
  * sent one.
  */
 export async function applyAction(_prev, formData) {
   try {
     await partner.apply({
-      faceImagePath: String(formData.get('face_image_path') ?? '').trim(),
+      studentIdImagePath: String(formData.get('student_id_image_path') ?? '').trim(),
     });
   } catch (error) {
     return fail(error);
@@ -62,7 +65,7 @@ export async function applyAction(_prev, formData) {
   return {
     ok: true,
     submitted: true,
-    message: "Application submitted. We'll review it and let you know when a decision is made.",
+    message: 'Application received. We will let you know once someone has read it.',
   };
 }
 
@@ -93,6 +96,26 @@ export async function cancelDeliveryAction(_prev, formData) {
       ),
     'Cancelled. The order goes back to other Partners.',
     ['/partner', '/partner/offers', '/partner/delivery']
+  );
+}
+
+/**
+ * The Partner types in the code the VENDOR reads out at the counter.
+ *
+ * The direction reversed: the person who is about to walk away with somebody's
+ * dinner is the one who performs the act. There is no function that shows a
+ * Partner this code, and there must not be — possession of the secret is what
+ * the handoff proves.
+ */
+export async function confirmPickupAction(_prev, formData) {
+  return run(
+    () =>
+      partner.confirmPickup(
+        String(formData.get('order_id') ?? ''),
+        String(formData.get('pickup_code') ?? '').trim()
+      ),
+    'Collected. Take it to the customer.',
+    ['/partner', '/partner/delivery']
   );
 }
 

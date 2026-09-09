@@ -39,11 +39,31 @@ describe('partner system', () => {
   const asPartner = (userId, sql, params) =>
     asUser(userId, async (c) => (await c.query(sql, params)).rows, { commit: true });
 
+  /** The first (or only) active delivery. A Partner may now hold two. */
   const activeDelivery = (userId) =>
     asUser(
       userId,
       async (c) => (await c.query('select * from public.partner_active_delivery()')).rows[0] ?? null
     );
+
+  const activeDeliveries = (userId) =>
+    asUser(
+      userId,
+      async (c) => (await c.query('select * from public.partner_active_delivery()')).rows
+    );
+
+  /**
+   * THE HANDOFF, in its new direction: the vendor reads the code out and the
+   * PARTNER types it in. Reading it from order_secrets here stands in for
+   * "somebody said the number out loud" — no client role can select that table.
+   */
+  const partnerPickup = async (partnerId, orderId, code = undefined) => {
+    const pickupCode = code === undefined ? (await getSecrets(orderId)).pickup_code : code;
+    return tryTransition(partnerId, 'select public.partner_confirm_pickup($1, $2)', [
+      orderId,
+      pickupCode,
+    ]);
+  };
 
   const offers = (userId) =>
     asUser(userId, async (c) => (await c.query('select * from public.get_delivery_offers()')).rows);
@@ -69,10 +89,12 @@ describe('partner system', () => {
     const before = await application(ACTORS.customerAma);
     assert.equal(before, null, 'no application until they make one');
 
-    // ONE argument. Student ID number, class year, email and the ID photograph
-    // are already on the account from student onboarding — re-collecting them
-    // is what would make this look like a second identity.
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['ama/face.jpg']);
+    // ONE document, and nothing else. Name, student ID number, level and the
+    // verified school address are already on the account from customer sign-up
+    // — re-collecting them is what would make this look like a second identity.
+    // No face photograph either: the school address already established who
+    // this is, so a second photograph proved nothing and was dropped.
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['ama/student-id.jpg']);
 
     const after = await application(ACTORS.customerAma);
     assert.equal(after.status, 'PENDING_REVIEW');
@@ -88,13 +110,29 @@ describe('partner system', () => {
     assert.equal(caps.can_order, true, 'and they are still a customer');
   });
 
-  test('an application without the live face photograph is refused', async () => {
+  test('an application is refused without the student ID', async () => {
     for (const path of ['', '   ', null]) {
-      const error = await expectRejection(
+      const noId = await expectRejection(
         asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', [path])
       );
-      assert.match(error.message, /live face photograph is required/);
+      assert.match(noId.message, /photograph of your student ID is required/);
     }
+  });
+
+  test('a new application stores no face photograph', async () => {
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['ama/student-id.jpg']);
+
+    const row = await asService(
+      async (c) =>
+        (
+          await c.query(
+            'select student_id_image_path, face_image_path from public.partner_profiles where user_id = $1',
+            [ACTORS.customerAma]
+          )
+        ).rows[0]
+    );
+    assert.equal(row.student_id_image_path, 'ama/student-id.jpg');
+    assert.equal(row.face_image_path, null, 'Campus Dash no longer asks for one');
   });
 
   test('applying without the Customer capability is refused — PARTNER ⇒ CUSTOMER', async () => {
@@ -102,19 +140,21 @@ describe('partner system', () => {
     // partner_requires_customer would refuse the row anyway; this is the check
     // that turns that into a sentence somebody can act on.
     const error = await expectRejection(
-      asPartner(ACTORS.vendor1Staff, 'select public.partner_apply($1)', ['face.jpg'])
+      asPartner(ACTORS.vendor1Staff, 'select public.partner_apply($1)', ['student-id.jpg'])
     );
-    assert.match(error.message, /complete your student onboarding/i);
+    assert.match(error.message, /finish signing up as a customer/i);
 
     // And the admin, for the same reason: admin does not imply customer.
     const adminError = await expectRejection(
-      asPartner(ACTORS.admin, 'select public.partner_apply($1)', ['face.jpg'])
+      asPartner(ACTORS.admin, 'select public.partner_apply($1)', ['student-id.jpg'])
     );
-    assert.match(adminError.message, /complete your student onboarding/i);
+    assert.match(adminError.message, /finish signing up as a customer/i);
   });
 
   test('the applicant never receives a document path', async () => {
-    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['secret/face.jpg']);
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', [
+      'secret/student-id.jpg',
+    ]);
     const view = await application(ACTORS.customerAma);
     const serialised = JSON.stringify(view);
     assert.ok(!serialised.includes('secret/'), 'a storage key is never handed back');
@@ -124,7 +164,7 @@ describe('partner system', () => {
 
   test('an approved Partner cannot re-apply; a suspended one is told to contact support', async () => {
     const approved = await expectRejection(
-      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1)', ['face.jpg'])
+      asPartner(ACTORS.partnerYaw, 'select public.partner_apply($1)', ['student-id.jpg'])
     );
     assert.match(approved.message, /already an approved Partner/);
 
@@ -139,7 +179,7 @@ describe('partner system', () => {
       { commit: true }
     );
     const suspended = await expectRejection(
-      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1)', ['face.jpg'])
+      asPartner(ACTORS.partnerAdjoa, 'select public.partner_apply($1)', ['student-id.jpg'])
     );
     assert.match(suspended.message, /suspended/);
   });
@@ -157,7 +197,9 @@ describe('partner system', () => {
       { commit: true }
     );
 
-    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1)', ['kofi/face2.jpg']);
+    await asPartner(ACTORS.applicantKofi, 'select public.partner_apply($1)', [
+      'kofi/student-id2.jpg',
+    ]);
 
     const view = await application(ACTORS.applicantKofi);
     assert.equal(view.status, 'PENDING_REVIEW');
@@ -178,7 +220,7 @@ describe('partner system', () => {
       c.query('update public.users set is_suspended = true where id = $1', [ACTORS.customerAma])
     );
     const error = await expectRejection(
-      asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['face.jpg'])
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1)', ['student-id.jpg'])
     );
     assert.match(error.message, /account suspended/);
   });
@@ -186,7 +228,7 @@ describe('partner system', () => {
   // =========================================================================
   // Availability and eligibility
   // =========================================================================
-  test('only approved, available Partners with no active delivery see offers', async () => {
+  test('only approved, available Partners below the capacity limit see offers', async () => {
     const order = await orderReadyForDispatch();
 
     // Approved and online: sees it.
@@ -212,11 +254,17 @@ describe('partner system', () => {
     // Pending applicant: sees nothing, and cannot claim.
     assert.equal((await offers(ACTORS.applicantKofi)).length, 0);
 
-    // Carrying a job: sees nothing.
+    // Carrying ONE job: still sees offers, because the limit is two.
     await accept(ACTORS.partnerYaw, order.order_id);
     const second = await orderReadyForDispatch();
-    assert.equal((await offers(ACTORS.partnerYaw)).length, 0);
-    assert.ok(second.order_id);
+    assert.equal((await offers(ACTORS.partnerYaw)).length, 1, 'one active still leaves room');
+
+    // Carrying TWO: sees nothing, rather than being shown work that would be
+    // refused on acceptance.
+    await accept(ACTORS.partnerYaw, second.order_id);
+    const third = await orderReadyForDispatch();
+    assert.equal((await offers(ACTORS.partnerYaw)).length, 0, 'at the limit, nothing is offered');
+    assert.ok(third.order_id);
   });
 
   test('an offer shows everything needed to decide, and nothing about the customer', async () => {
@@ -274,9 +322,12 @@ describe('partner system', () => {
       assert.equal(won.length, 1, 'exactly one Partner wins');
       assert.equal(lost.length, 2);
       assert.ok(lost.every((e) => /already been taken/.test(e.reason)));
-      assert.ok(won[0].pickup_code, 'the winner gets a pickup code');
+      assert.ok(won[0].order_number, 'the winner is told which order is theirs');
+      // NO PICKUP CODE COMES BACK. The claim used to hand one to the Partner;
+      // it now belongs to the vendor, who reads it out at the counter.
+      assert.ok(!('pickup_code' in won[0]), 'the claim no longer returns a pickup code');
       assert.ok(
-        lost.every((e) => e.pickup_code === null),
+        lost.every((e) => e.order_number === null),
         'losers get nothing'
       );
     } finally {
@@ -299,25 +350,58 @@ describe('partner system', () => {
     assert.equal(rejected.length, 2, 'both losses are logged');
   });
 
-  test('one active delivery per Partner is enforced by the database itself', async () => {
+  test('TWO active deliveries are allowed, and a third is refused', async () => {
     const first = await orderReadyForDispatch();
     const second = await orderReadyForDispatch();
-    await accept(ACTORS.partnerYaw, first.order_id);
+    const third = await orderReadyForDispatch();
 
-    const blocked = await accept(ACTORS.partnerYaw, second.order_id);
-    assert.equal(blocked.success, false);
-
-    // And directly, bypassing every function.
-    const error = await expectRejection(
-      asService((c) =>
-        c.query(
-          `update public.orders set partner_id = $1, delivery_status = 'ASSIGNED', assigned_at = now()
-            where id = $2`,
-          [ACTORS.partnerYaw, second.order_id]
-        )
-      )
+    assert.equal((await accept(ACTORS.partnerYaw, first.order_id)).success, true);
+    assert.equal(
+      (await accept(ACTORS.partnerYaw, second.order_id)).success,
+      true,
+      'two at once is the point of the change'
     );
-    assert.match(error.message, /orders_one_active_delivery_per_partner/);
+
+    const blocked = await accept(ACTORS.partnerYaw, third.order_id);
+    assert.equal(blocked.success, false);
+    assert.match(blocked.reason, /2 active deliveries/i);
+
+    const held = await activeDeliveries(ACTORS.partnerYaw);
+    assert.equal(held.length, 2);
+    assert.deepEqual(
+      held.map((d) => d.partner_slot).sort(),
+      [1, 2],
+      'each occupies its own numbered slot'
+    );
+    assert.equal((await getOrder(third.order_id)).partner_id, null);
+  });
+
+  test('the capacity limit holds at the database level, not just in the function', async () => {
+    // Two claimed properly, then a third forced in with a direct UPDATE as the
+    // superuser — bypassing partner_accept_delivery entirely. The partial unique
+    // index on (partner_id, partner_slot) is what refuses it, which is what
+    // makes "at most two" a guarantee rather than a predicate somebody could
+    // race past.
+    const first = await orderReadyForDispatch();
+    const second = await orderReadyForDispatch();
+    const third = await orderReadyForDispatch();
+    await accept(ACTORS.partnerYaw, first.order_id);
+    await accept(ACTORS.partnerYaw, second.order_id);
+
+    for (const slot of [1, 2]) {
+      const error = await expectRejection(
+        asService((c) =>
+          c.query(
+            `update public.orders
+                set partner_id = $1, partner_slot = $3,
+                    delivery_status = 'ASSIGNED', assigned_at = now()
+              where id = $2`,
+            [ACTORS.partnerYaw, third.order_id, slot]
+          )
+        )
+      );
+      assert.match(error.message, /orders_partner_active_slot_unique/);
+    }
   });
 
   test('an unapproved or offline Partner cannot claim, even knowing the order id', async () => {
@@ -342,40 +426,53 @@ describe('partner system', () => {
   // =========================================================================
   // The privacy rule
   // =========================================================================
-  test('before handoff the Partner sees a zone; after it, the room and the phone', async () => {
+  test('an unassigned Partner sees a zone; the ASSIGNED one sees the room and the phone', async () => {
     const order = await orderReadyForDispatch({
       customer: ACTORS.customerAma,
       destination: LOCATIONS.room204,
     });
+
+    // BEFORE THE CLAIM: the offer list is what every available Partner sees,
+    // and it names a zone and nothing about a person.
+    const offered = (await offers(ACTORS.partnerYaw)).find((o) => o.order_id === order.order_id);
+    assert.equal(offered.destination_zone, 'Hostel Block A');
+    const offerText = JSON.stringify(offered);
+    assert.ok(!offerText.includes('Room 204'), 'no room number in a broadcast offer');
+    assert.ok(!offerText.includes('+233200000021'), 'and no phone number');
+
+    // AFTER THE CLAIM, and before any handoff: the room and the number, because
+    // a Partner who cannot find a door needs to ring before the food is cold.
     await accept(ACTORS.partnerYaw, order.order_id);
 
-    const before = await activeDelivery(ACTORS.partnerYaw);
-    assert.equal(before.destination_zone, 'Hostel Block A');
-    assert.equal(before.destination, null, 'the room is withheld until handoff');
-    assert.equal(before.customer_phone, null);
-    assert.equal(before.customer_name, null);
-    assert.ok(before.vendor_phone, 'but the stall can be called');
+    const assigned = await activeDelivery(ACTORS.partnerYaw);
+    assert.match(assigned.destination, /Room 204/);
+    assert.equal(assigned.customer_phone, '+233200000021');
+    assert.equal(assigned.customer_name, 'Ama Test-Customer');
+    assert.ok(assigned.vendor_phone, 'and the stall can be called too');
 
-    const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    // The RLS policy on public.users agrees independently of the read model.
+    const rows = await asUser(
+      ACTORS.partnerYaw,
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma])).rows
+    );
+    assert.equal(rows.length, 1, 'the policy allows the row while the delivery is live');
 
-    const after = await activeDelivery(ACTORS.partnerYaw);
-    assert.match(after.destination, /Room 204/);
-    assert.equal(after.customer_phone, '+233200000021');
-    assert.equal(after.customer_name, 'Ama Test-Customer');
+    // An UNASSIGNED Partner gets neither, through either route.
+    assert.equal(await activeDelivery(ACTORS.partnerAdjoa), null);
+    const strangerRows = await asUser(
+      ACTORS.partnerAdjoa,
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma])).rows
+    );
+    assert.equal(strangerRows.length, 0);
   });
 
   test('the customer phone disappears once the delivery is done', async () => {
     const order = await orderReadyForDispatch({ customer: ACTORS.customerAma });
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
     await tryTransition(ACTORS.partnerYaw, 'select public.partner_complete_delivery($1, $2)', [
       order.order_id,
       secrets.delivery_code,
@@ -412,12 +509,22 @@ describe('partner system', () => {
     );
     assert.equal(rows.length, 0);
 
+    // And no Partner has a route to the pickup code AT ALL any more — it is the
+    // vendor's to read out, and vendor_pickup_code() refuses anyone who does not
+    // staff the store.
     const code = await expectRejection(
       asUser(ACTORS.partnerAdjoa, (c) =>
-        c.query('select public.get_my_pickup_code($1)', [order.order_id])
+        c.query('select public.vendor_pickup_code($1)', [order.order_id])
       )
     );
-    assert.match(code.message, /no pickup code available/);
+    assert.match(code.message, /not authorised for this order/);
+
+    const alsoTheAssignedOne = await expectRejection(
+      asUser(ACTORS.partnerYaw, (c) =>
+        c.query('select public.vendor_pickup_code($1)', [order.order_id])
+      )
+    );
+    assert.match(alsoTheAssignedOne.message, /not authorised for this order/);
   });
 
   // =========================================================================
@@ -426,8 +533,10 @@ describe('partner system', () => {
   test('a Partner cancels: same order, fresh code, vendor does nothing', async () => {
     const order = await orderReadyForDispatch();
     const claimed = await accept(ACTORS.partnerYaw, order.order_id);
-    const oldCode = claimed.pickup_code;
     const orderNumber = claimed.order_number;
+    // The code lives on the order, not in the claim's answer. Reading it here
+    // stands in for the vendor reading it off their own screen.
+    const oldCode = (await getSecrets(order.order_id)).pickup_code;
 
     const cancel = await tryTransition(
       ACTORS.partnerYaw,
@@ -443,24 +552,21 @@ describe('partner system', () => {
     assert.equal(stored.order_status, 'READY', 'vendor preparation untouched');
     assert.equal(stored.payment_status, 'PAID', 'payment untouched');
 
-    // The old code is dead immediately.
-    const stale = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, oldCode]
-    );
-    assert.equal(stale.success, false);
+    // The old code is dead immediately. Checked from the NEXT Partner's hand,
+    // because the one who walked away is no longer authorised to try at all —
+    // that refusal is an authorisation failure and raises, which is a different
+    // fact from "the number is wrong".
 
-    // A second Partner picks it up with a new code.
+    // A second Partner picks it up, and the vendor's code has rotated.
     const second = await accept(ACTORS.partnerAdjoa, order.order_id);
     assert.equal(second.success, true);
-    assert.notEqual(second.pickup_code, oldCode);
+    const newCode = (await getSecrets(order.order_id)).pickup_code;
+    assert.notEqual(newCode, oldCode, 'a fresh assignment mints a fresh code');
 
-    const fresh = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, second.pickup_code]
-    );
+    const stale = await partnerPickup(ACTORS.partnerAdjoa, order.order_id, oldCode);
+    assert.equal(stale.success, false, 'the code from the abandoned assignment is worthless');
+
+    const fresh = await partnerPickup(ACTORS.partnerAdjoa, order.order_id, newCode);
     assert.equal(fresh.success, true);
   });
 
@@ -468,10 +574,7 @@ describe('partner system', () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
 
     const cancel = await tryTransition(
       ACTORS.partnerYaw,
@@ -498,15 +601,11 @@ describe('partner system', () => {
   // =========================================================================
   // Handoff and completion
   // =========================================================================
-  test('the vendor cannot confirm a handoff with a wrong or stale code', async () => {
+  test('a Partner cannot confirm a handoff with a wrong or stale code', async () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
 
-    const wrong = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, '0000']
-    );
+    const wrong = await partnerPickup(ACTORS.partnerYaw, order.order_id, '0000');
     assert.equal(wrong.success, false);
     assert.equal((await getOrder(order.order_id)).delivery_status, 'ASSIGNED', 'nothing moved');
 
@@ -514,7 +613,7 @@ describe('partner system', () => {
       async (c) =>
         (
           await c.query(
-            "select * from public.order_events where order_id = $1 and event = 'VENDOR_CONFIRM_PICKUP' and not accepted",
+            "select * from public.order_events where order_id = $1 and event = 'PARTNER_CONFIRM_PICKUP' and not accepted",
             [order.order_id]
           )
         ).rows
@@ -526,10 +625,7 @@ describe('partner system', () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
 
     const wrong = await tryTransition(
       ACTORS.partnerYaw,
@@ -544,10 +640,7 @@ describe('partner system', () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
     const done = await tryTransition(
       ACTORS.partnerYaw,
       'select public.partner_complete_delivery($1, $2)',
@@ -584,10 +677,7 @@ describe('partner system', () => {
       const order = await orderReadyForDispatch();
       await accept(ACTORS.partnerYaw, order.order_id);
       const secrets = await getSecrets(order.order_id);
-      await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-        order.order_id,
-        secrets.pickup_code,
-      ]);
+      await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
       return { order, secrets };
     }
 
@@ -724,10 +814,7 @@ describe('partner system', () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
 
     // Straight to confirming, without reporting: refused.
     const early = await tryTransition(
@@ -756,10 +843,7 @@ describe('partner system', () => {
     const order = await orderReadyForDispatch();
     await accept(ACTORS.partnerYaw, order.order_id);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
-      order.order_id,
-      secrets.pickup_code,
-    ]);
+    await partnerPickup(ACTORS.partnerYaw, order.order_id, secrets.pickup_code);
     await tryTransition(ACTORS.partnerYaw, 'select public.partner_report_customer_absent($1)', [
       order.order_id,
     ]);
@@ -897,13 +981,16 @@ describe('partner system', () => {
   // be recorded, and earned, with nothing having moved. These are the two cases
   // where that is true.
 
-  /** Makes a Partner staff of a vendor. resetTransactionalState() removes it. */
+  /**
+   * Makes a Partner the OWNER of a vendor. resetTransactionalState() restores
+   * the seeded ownership afterwards.
+   *
+   * The staff join table is gone: ownership is one column on vendors, so
+   * "works for this vendor" and "owns this vendor" are now the same question.
+   */
   const employ = (userId, vendorId) =>
     asService((c) =>
-      c.query('insert into public.vendor_users (vendor_id, user_id) values ($1, $2)', [
-        vendorId,
-        userId,
-      ])
+      c.query('update public.vendors set owner_user_id = $1 where id = $2', [userId, vendorId])
     );
 
   const acceptEvents = (orderId) =>
@@ -951,9 +1038,12 @@ describe('partner system', () => {
     assert.deepEqual(await acceptEvents(own.order_id), []);
   });
 
-  test('a Partner is not offered an order from a vendor they work for', async () => {
-    await employ(ACTORS.partnerYaw, VENDORS.one);
+  test('a Partner is not offered an order from a store they own', async () => {
+    // The order is walked to READY first, THEN the store changes hands: the
+    // seeded owner is the one who can accept and cook it, and handing the store
+    // over beforehand would break the setup rather than the rule under test.
     const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+    await employ(ACTORS.partnerYaw, VENDORS.one);
 
     const mine = await offers(ACTORS.partnerYaw);
     assert.equal(
@@ -968,16 +1058,16 @@ describe('partner system', () => {
     );
   });
 
-  test('a Partner cannot claim an order from a vendor they work for', async () => {
-    await employ(ACTORS.partnerYaw, VENDORS.one);
+  test('a Partner cannot claim an order from a store they own', async () => {
     const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+    await employ(ACTORS.partnerYaw, VENDORS.one);
 
     const error = await expectRejection(
       asUser(ACTORS.partnerYaw, (c) =>
         c.query('select * from public.partner_accept_delivery($1)', [order.order_id])
       )
     );
-    assert.match(error.message, /vendor you work for/i);
+    assert.match(error.message, /store you own/i);
 
     assert.equal((await getOrder(order.order_id)).partner_id, null);
     assert.equal((await getOrder(order.order_id)).delivery_status, 'SEARCHING');
@@ -997,14 +1087,16 @@ describe('partner system', () => {
 
     const claim = await accept(ACTORS.partnerYaw, order.order_id);
     assert.equal(claim.success, true);
-    assert.match(claim.pickup_code, /^\d{4}$/);
+    // The code is minted on the order for the VENDOR to read out; the claim
+    // itself hands the Partner nothing but the job.
+    assert.match((await getSecrets(order.order_id)).pickup_code, /^\d{4}$/);
     assert.equal((await getOrder(order.order_id)).partner_id, ACTORS.partnerYaw);
   });
 
-  test('working for one vendor does not bar you from delivering for another', async () => {
-    // The rule is per vendor, not "vendor staff may never deliver".
-    await employ(ACTORS.partnerYaw, VENDORS.two);
+  test('owning one store does not bar you from delivering for another', async () => {
+    // The rule is per store, not "a vendor may never deliver".
     const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+    await employ(ACTORS.partnerYaw, VENDORS.two);
 
     const seen = await offers(ACTORS.partnerYaw);
     assert.equal(
@@ -1020,8 +1112,8 @@ describe('partner system', () => {
   test('not being an approved Partner is still the FIRST thing you are told', async () => {
     // Check order is load-bearing. Someone who is not a Partner at all must
     // hear that, not hear about a conflict they could never have had.
-    await employ(ACTORS.applicantKofi, VENDORS.one);
     const order = await orderReadyForDispatch({ vendorId: VENDORS.one });
+    await employ(ACTORS.applicantKofi, VENDORS.one);
 
     const error = await expectRejection(
       asUser(ACTORS.applicantKofi, (c) =>

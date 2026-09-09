@@ -28,7 +28,7 @@ export default async function ScanPage() {
   if (!me.authenticated) redirect('/login?next=%2Fscan');
   // Same rule as ordering: a verified phone is an identity, ordering is a
   // capability, and it is acquired by completing student onboarding.
-  if (!me.can_order) redirect('/onboarding?next=%2Fscan');
+  if (!me.can_order) redirect('/signup?next=%2Fscan');
 
   const [restaurants, locations] = await Promise.all([
     listScanRestaurants(),

@@ -227,7 +227,7 @@ export default async function AdminFinancePage({ searchParams }) {
         </label>
         <button
           type="submit"
-          className="bg-brand-500 text-ink rounded px-4 py-1.5 text-sm font-semibold"
+          className="bg-brand-700 rounded px-4 py-1.5 text-sm font-semibold text-white"
         >
           Apply
         </button>

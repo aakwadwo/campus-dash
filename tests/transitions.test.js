@@ -12,6 +12,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  acceptedOrder,
   vendorAccept,
   payOrder,
   vendorPrepare,
@@ -68,8 +69,7 @@ describe('state transitions', () => {
   });
 
   test('the vendor cannot start preparing before the money is in', async () => {
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder();
 
     const result = await tryTransition(
       ACTORS.vendor1Staff,
@@ -209,8 +209,10 @@ describe('state transitions', () => {
   // --- 9 -------------------------------------------------------------------
   test('a pickup code is dead the moment the Partner cancels', async () => {
     const order = await orderReadyForDispatch();
-    const accepted = await partnerAccept(order.order_id, ACTORS.partnerYaw);
-    const oldCode = accepted.pickup_code;
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    // The code lives on the order for the VENDOR to read out. Reading it here
+    // stands in for that; no client role can select order_secrets.
+    const oldCode = (await getSecrets(order.order_id)).pickup_code;
     assert.match(oldCode, /^\d{4}$/);
 
     const cancel = await tryTransition(
@@ -227,10 +229,15 @@ describe('state transitions', () => {
     assert.equal(stored.order_status, 'READY', 'vendor preparation is untouched');
     assert.equal(stored.payment_status, 'PAID', 'payment is untouched');
 
-    // The old code no longer opens the handoff.
+    // The old code no longer opens the handoff. Tried by the NEXT Partner,
+    // because the one who walked away is no longer authorised to try at all —
+    // that refusal raises, and is a different fact from "wrong number".
+    const second = await partnerAccept(order.order_id, ACTORS.partnerAdjoa);
+    assert.equal(second.success, true);
+
     const confirm = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
+      ACTORS.partnerAdjoa,
+      'select public.partner_confirm_pickup($1, $2)',
       [order.order_id, oldCode]
     );
     assert.equal(confirm.success, false);
@@ -240,7 +247,8 @@ describe('state transitions', () => {
   // --- 10 ------------------------------------------------------------------
   test('reassignment rotates the pickup code and the old one stops working', async () => {
     const order = await orderReadyForDispatch();
-    const first = await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    const firstCode = (await getSecrets(order.order_id)).pickup_code;
 
     await tryTransition(ACTORS.partnerYaw, 'select public.partner_cancel_delivery($1, $2)', [
       order.order_id,
@@ -250,29 +258,34 @@ describe('state transitions', () => {
     assert.equal(second.success, true);
 
     const secrets = await getSecrets(order.order_id);
-    assert.equal(secrets.pickup_code, second.pickup_code);
-    assert.equal(secrets.pickup_code_version, 3, 'version bumped on issue, cancel and re-issue');
+    assert.notEqual(secrets.pickup_code, firstCode);
+    // Four bumps, and each is a real event: choosing DELIVERY clears any
+    // collection code, the first claim issues one, the cancellation kills it,
+    // and the second claim issues another. The version only ever moves forward,
+    // which is what makes an old code dead rather than merely unused.
+    assert.equal(secrets.pickup_code_version, 4);
 
-    // Old Partner's code is worthless.
+    // The old code is worthless, in the new Partner's hand.
     const stale = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, first.pickup_code]
+      ACTORS.partnerAdjoa,
+      'select public.partner_confirm_pickup($1, $2)',
+      [order.order_id, firstCode]
     );
     assert.equal(stale.success, false);
 
-    // The new Partner's code works.
+    // The current one works.
     const fresh = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, second.pickup_code]
+      ACTORS.partnerAdjoa,
+      'select public.partner_confirm_pickup($1, $2)',
+      [order.order_id, secrets.pickup_code]
     );
     assert.equal(fresh.success, true);
   });
 
   test('admin reassignment also rotates the code', async () => {
     const order = await orderReadyForDispatch();
-    const accepted = await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    const oldCode = (await getSecrets(order.order_id)).pickup_code;
 
     await asUser(
       ACTORS.admin,
@@ -284,23 +297,29 @@ describe('state transitions', () => {
       { commit: true }
     );
 
+    // The code is rotated to NULL, so nothing matches it — and the removed
+    // Partner cannot even try, because they are no longer assigned.
+    assert.equal((await getSecrets(order.order_id)).pickup_code, null);
+
+    const next = await partnerAccept(order.order_id, ACTORS.partnerAdjoa);
+    assert.equal(next.success, true);
     const stale = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_confirm_pickup($1, $2)',
-      [order.order_id, accepted.pickup_code]
+      ACTORS.partnerAdjoa,
+      'select public.partner_confirm_pickup($1, $2)',
+      [order.order_id, oldCode]
     );
     assert.equal(stale.success, false, "the removed Partner's code is dead");
 
     const stored = await getOrder(order.order_id);
-    assert.equal(stored.delivery_status, 'SEARCHING');
-    assert.equal(stored.partner_id, null);
+    assert.equal(stored.delivery_status, 'ASSIGNED', 'the next Partner is carrying it');
+    assert.equal(stored.partner_id, ACTORS.partnerAdjoa);
   });
 
   test("a Partner cannot declare delivery without the customer's code", async () => {
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     const secrets = await getSecrets(order.order_id);
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_confirm_pickup($1, $2)', [
+    await tryTransition(ACTORS.partnerYaw, 'select public.partner_confirm_pickup($1, $2)', [
       order.order_id,
       secrets.pickup_code,
     ]);
@@ -321,7 +340,7 @@ describe('state transitions', () => {
   test('a price change after submission does not alter the existing order', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
     // 2 x GH₵35 + 10% (GH₵7) + GH₵5 = GH₵82
-    assert.equal(order.total_pesewas, 7850);
+    assert.equal(order.total_pesewas, 7350);
 
     // The vendor raises the price from GH₵35.00 to GH₵50.00.
     await asService((c) =>
@@ -330,7 +349,7 @@ describe('state transitions', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, 7000, 'the snapshot holds');
-    assert.equal(stored.total_pesewas, 7850);
+    assert.equal(stored.total_pesewas, 7350);
 
     const items = await asService(
       async (c) =>
@@ -342,7 +361,8 @@ describe('state transitions', () => {
 
     // A NEW order picks up the new price.
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 11000, 'the new order uses the new price');
+    // 2 × GH₵50 + 5%. No delivery fee at submission — that is chosen later.
+    assert.equal(later.total_pesewas, 10500, 'the new order uses the new price');
   });
 
   test('an unavailable menu item cannot be ordered', async () => {
@@ -368,16 +388,20 @@ describe('state transitions', () => {
   });
 
   test('a non-deliverable location cannot be a destination', async () => {
-    const error = await expectRejection(submitOrder({ destination: LOCATIONS.floor2 }));
+    // Checked where the destination is actually given — at the choice, after
+    // the vendor accepts. A submission names no destination at all.
+    const error = await expectRejection(acceptedOrder({ destination: LOCATIONS.floor2 }));
     assert.match(error.message, /not a valid delivery location/);
   });
 
   // --- pickup is first-class ----------------------------------------------
   test('a pickup order needs no Partner and keeps delivery_status NONE throughout', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    assert.equal(order.total_pesewas, 3675, 'no delivery fee on a pickup order');
-
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
+    assert.equal(
+      (await getOrder(order.order_id)).total_pesewas,
+      3675,
+      'no delivery fee on a pickup order'
+    );
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
@@ -385,8 +409,11 @@ describe('state transitions', () => {
     let stored = await getOrder(order.order_id);
     assert.equal(stored.delivery_status, 'NONE', 'dispatch never opens for pickup');
 
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1)', [
+    // The customer shows their collection code at the counter and the vendor
+    // types it in. Reading it here stands in for that conversation.
+    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1, $2)', [
       order.order_id,
+      (await getSecrets(order.order_id)).pickup_code,
     ]);
     stored = await getOrder(order.order_id);
     assert.equal(stored.order_status, 'COMPLETED');
@@ -395,8 +422,7 @@ describe('state transitions', () => {
   });
 
   test('a pickup order never appears in the Partner offer list', async () => {
-    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    await vendorAccept(order.order_id);
+    const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
     await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);

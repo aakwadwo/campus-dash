@@ -175,7 +175,13 @@ password_requirements = ""
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+#
+# RAISED FOR LOCAL DEVELOPMENT ONLY. The default of 2 an hour makes the sign-up
+# flow impossible to exercise by hand — resend once and you are locked out for an
+# hour, and the flow looks broken when it is working exactly as designed. Local
+# mail goes to Mailpit and never leaves the machine. A HOSTED PROJECT KEEPS
+# SUPABASE'S OWN LIMIT: this file does not configure one.
+email_sent = 60
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
@@ -202,7 +208,18 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+#
+# TRUE, and it is the setting that decides which email a first-time address
+# gets. With it off, signInWithOtp() marks a brand-new address confirmed the
+# moment it creates it — before anybody has proved they can read that mailbox —
+# and Supabase sends the Magic Link template. With it on, the address is
+# confirmed by verifyOtp() and the first email is Confirm Signup.
+#
+# Campus Dash wants the second: the school address IS the proof of being a
+# student, so it must not be marked verified until somebody has actually read a
+# code out of it. Both templates carry {{ .Token }} — see below — because the
+# flow is the same six digits either way.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
@@ -222,6 +239,34 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
+# THE CUSTOMER'S SIGN-IN CODE.
+#
+# Supabase's default magic-link email offers a LINK and no code, and Campus Dash
+# asks for a six-digit code: a link opens in whichever browser the mail app
+# picks, which on a phone is routinely not the one holding the half-filled
+# sign-up form. Without this template the code never reaches anybody and email
+# sign-in cannot be completed at all.
+#
+# A hosted project needs the same content under Authentication → Email
+# Templates → Magic Link. See docs/AUTH.md.
+[auth.email.template.magic_link]
+subject = "Your Campus Dash code"
+content_path = "./supabase/templates/magic-link.html"
+
+# THE SAME CODE, THE FIRST TIME AN ADDRESS IS USED.
+#
+# Supabase sends Confirm Signup when signInWithOtp() creates the address, and
+# Magic Link on every sign-in after that. Two templates, one six-digit code — so
+# both need {{ .Token }} or exactly half the flow breaks, and the half that
+# breaks is first-time sign-up, which is the half nobody notices until a real
+# student tries it.
+#
+# A hosted project needs the same content under Authentication → Email
+# Templates → Confirm signup. See docs/AUTH.md.
+[auth.email.template.confirmation]
+subject = "Your Campus Dash code"
+content_path = "./supabase/templates/confirm-signup.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"
@@ -234,8 +279,9 @@ otp_expiry = 3600
 # content_path = "./templates/password_changed_notification.html"
 
 [auth.sms]
-# Campus Dash authenticates every actor by phone. Phone signup is the only
-# self-service path in; email exists for admin accounts only.
+# VENDORS authenticate by phone: a stall owner has a number and may well not
+# have a school address. Customers authenticate by a verified @acity.edu.gh
+# address, and administrators by a password. Three proofs, one identity table.
 enable_signup = true
 # Phone numbers must be confirmed before the account can sign in.
 enable_confirmations = true

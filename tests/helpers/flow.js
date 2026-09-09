@@ -9,30 +9,52 @@ import { asService, asUser, ACTORS, VENDORS, MENU, LOCATIONS } from './db.js';
  * reachable in a test, it is reachable in production.
  */
 
+/**
+ * Submits an order. A VENDOR AND SOME ITEMS — that is the whole submission.
+ *
+ * Pickup or delivery is a separate step now, taken after the vendor accepts,
+ * so it is not a parameter here. `chooseFulfilment` below is that step, and
+ * `acceptedOrder` runs the two in the order the product does.
+ */
 export async function submitOrder({
   customer = ACTORS.customerAma,
   vendorId = VENDORS.one,
-  fulfilment = 'DELIVERY',
   items = [{ menu_item_id: MENU.jollof, quantity: 1 }],
-  destination = LOCATIONS.room204,
 } = {}) {
   return asUser(
     customer,
     async (c) => {
-      const { rows } = await c.query(
-        'select * from public.submit_order($1, $2, $3::jsonb, $4, $5)',
-        [
-          vendorId,
-          fulfilment,
-          JSON.stringify(items),
-          fulfilment === 'DELIVERY' ? destination : null,
-          null,
-        ]
-      );
+      const { rows } = await c.query('select * from public.submit_order($1, $2::jsonb)', [
+        vendorId,
+        JSON.stringify(items),
+      ]);
       return rows[0];
     },
     { commit: true }
   );
+}
+
+/**
+ * Pickup or delivery, chosen by the customer between acceptance and payment.
+ *
+ * Returns the transition envelope so a test can assert on a refusal rather than
+ * only on a success.
+ */
+export async function chooseFulfilment(
+  orderId,
+  {
+    customer = ACTORS.customerAma,
+    fulfilment = 'DELIVERY',
+    destination = LOCATIONS.room204,
+    note = null,
+  } = {}
+) {
+  return transition(customer, 'select public.customer_choose_fulfilment($1, $2, $3, $4)', [
+    orderId,
+    fulfilment,
+    fulfilment === 'DELIVERY' ? destination : null,
+    note,
+  ]);
 }
 
 /** Runs a transition RPC and fails loudly if the envelope says it was rejected. */
@@ -57,6 +79,21 @@ export function parseComposite(text) {
 
 export async function vendorAccept(orderId, staff = ACTORS.vendor1Staff) {
   return transition(staff, 'select public.vendor_accept_order($1)', [orderId]);
+}
+
+/**
+ * Submitted -> ACCEPTED -> fulfilment chosen. The state most tests want as a
+ * starting point, because it is the first one at which an order can be paid.
+ */
+export async function acceptedOrder(options = {}) {
+  const order = await submitOrder(options);
+  await vendorAccept(order.order_id, options.staff ?? ACTORS.vendor1Staff);
+  await chooseFulfilment(order.order_id, {
+    customer: options.customer ?? ACTORS.customerAma,
+    fulfilment: options.fulfilment ?? 'DELIVERY',
+    destination: options.destination ?? LOCATIONS.room204,
+  });
+  return order;
 }
 
 /** Attempts a transition and returns the raw envelope without throwing. */
@@ -93,18 +130,22 @@ export async function vendorReady(orderId, staff = ACTORS.vendor1Staff) {
   return transition(staff, 'select public.vendor_mark_ready($1)', [orderId]);
 }
 
-/** Submitted -> accepted -> paid -> preparing -> READY (dispatch open). */
+/** Submitted -> accepted -> chosen -> paid -> preparing -> READY (dispatch open). */
 export async function orderReadyForDispatch(options = {}) {
-  const order = await submitOrder(options);
+  const order = await acceptedOrder(options);
   const staff = options.staff ?? ACTORS.vendor1Staff;
-  await vendorAccept(order.order_id, staff);
   await payOrder(order.order_id);
   await vendorPrepare(order.order_id, staff);
   await vendorReady(order.order_id, staff);
   return order;
 }
 
-/** Returns the full envelope: { success, reason, order_number, pickup_code, vendor_name }. */
+/**
+ * Returns the full envelope: { success, reason, order_number, vendor_name }.
+ *
+ * NO PICKUP CODE. The claim does not hand one back any more — the code belongs
+ * to the vendor, who reads it out, and the Partner types in what they hear.
+ */
 export async function partnerAccept(orderId, partner = ACTORS.partnerYaw) {
   return asUser(
     partner,
@@ -116,14 +157,18 @@ export async function partnerAccept(orderId, partner = ACTORS.partnerYaw) {
   );
 }
 
-/** Walks an order all the way to DELIVERED, returning the codes used. */
-export async function completeDelivery(
-  orderId,
-  partner = ACTORS.partnerYaw,
-  staff = ACTORS.vendor1Staff
-) {
+/**
+ * Walks an order all the way to DELIVERED, returning the codes used.
+ *
+ * BOTH CODES NOW TRAVEL THE SAME WAY: the counterparty holds the secret and the
+ * Partner types it in. The vendor reads out the pickup code; the customer reads
+ * out the delivery code. Reading them here from order_secrets is a test
+ * shortcut for "somebody said the number out loud" — no client role can select
+ * that table.
+ */
+export async function completeDelivery(orderId, partner = ACTORS.partnerYaw) {
   const secrets = await getSecrets(orderId);
-  await tryTransition(staff, 'select public.vendor_confirm_pickup($1, $2)', [
+  await tryTransition(partner, 'select public.partner_confirm_pickup($1, $2)', [
     orderId,
     secrets.pickup_code,
   ]);
@@ -132,6 +177,15 @@ export async function completeDelivery(
     secrets.delivery_code,
   ]);
   return secrets;
+}
+
+/** The Partner half of the handoff, on its own. */
+export async function partnerConfirmPickup(orderId, partner = ACTORS.partnerYaw, code = null) {
+  const pickupCode = code ?? (await getSecrets(orderId)).pickup_code;
+  return tryTransition(partner, 'select public.partner_confirm_pickup($1, $2)', [
+    orderId,
+    pickupCode,
+  ]);
 }
 
 export async function getOrder(orderId) {
@@ -168,4 +222,19 @@ export async function expectRejection(promise) {
     return error;
   }
   throw new Error('expected the operation to be rejected, but it succeeded');
+}
+
+/**
+ * Sets the Partner weekly payout threshold, in pesewas.
+ *
+ * A Partner earns GH₵5 per delivery and the product floor is GH₵20, so a test
+ * about payout MECHANICS — one payout per payee, no duplicates, transfer
+ * lifecycle — has to say which policy it is running under rather than depending
+ * on whatever the default happens to be. Tests about the THRESHOLD itself set
+ * it deliberately and assert the rollover.
+ */
+export async function setPartnerPayoutThreshold(pesewas) {
+  await asService((c) =>
+    c.query('update public.pricing_config set partner_min_payout_pesewas = $1', [pesewas])
+  );
 }

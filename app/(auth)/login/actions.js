@@ -4,17 +4,137 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { landingFor, safeNext } from '@/lib/auth/landing';
+import { normaliseSchoolEmail, SCHOOL_DOMAIN } from '@/lib/auth/school-email';
+import { isOtpShape, emailOtpError, verifyOtpError } from '@/lib/auth/customer-signup';
 import { config } from '@/lib/config';
 // TEMPORARY — see lib/observability/otp-trace.js. Remove with the diagnosis.
 import { otpTrace } from '@/lib/observability/otp-trace';
 
 /**
- * Phone OTP sign-in.
+ * Three sign-ins, three proofs, one identity table.
  *
- * Supabase Auth generates and validates the code; our Send SMS Hook delivers it
- * through the SmsProvider abstraction. We never generate, store or check an OTP
- * ourselves, which keeps the whole verification surface in one audited place.
+ *   CUSTOMER  a code sent to a verified @acity.edu.gh address
+ *   VENDOR    a code sent by SMS to the number that IS the store's credential
+ *   ADMIN     an email address and a password
+ *
+ * They are separate because the PROOF is separate, not because the people are.
+ * The same auth.users.id can hold all three capabilities, and which screen
+ * somebody signed in through has no bearing on what they may then do — that is
+ * derived from the database on every request by my_capabilities().
+ *
+ * Supabase Auth generates and validates every code. We never generate, store or
+ * check one ourselves, which keeps the whole verification surface in one
+ * audited place.
  */
+
+// --- Customer: a code to a school address ------------------------------------
+
+/**
+ * @param {boolean} createUser whether a first-time address may make an account.
+ *   FALSE on the sign-in screen: "we sent you a code" for an address that has
+ *   never signed up would create a half-built account and teach the person to
+ *   expect an email that then makes no sense. TRUE on the sign-up screen, which
+ *   is where making an account is the point.
+ */
+async function sendEmailCode(email, createUser) {
+  const supabase = await createClient();
+  return supabase.auth.signInWithOtp({
+    email,
+    // NO emailRedirectTo. Supplying one turns the email into a magic link, and
+    // Campus Dash asks for a code that is typed into the tab already open.
+    options: { shouldCreateUser: createUser },
+  });
+}
+
+/**
+ * The error mapping is shared with sign-up, in
+ * `lib/auth/customer-signup.js`, so somebody hitting the same wall on either
+ * screen reads the same sentence. `allowSignup` is the one thing that differs:
+ * here an unknown address means "you have not signed up yet", and saying so is
+ * not a leak worth guarding — the domain is a single university, and the
+ * alternative is a person waiting for an email that is never coming.
+ */
+export async function requestEmailCode(_prevState, formData) {
+  const email = normaliseSchoolEmail(formData.get('email'));
+  if (!email) {
+    return { step: 'email', error: `Use your Academic City address, ending ${SCHOOL_DOMAIN}.` };
+  }
+
+  const { error } = await sendEmailCode(email, false);
+  if (error) {
+    console.error('[auth] email signInWithOtp failed:', error.message);
+    return {
+      step: 'email',
+      email,
+      error: emailOtpError(error, { isProduction: config.isProduction() }),
+    };
+  }
+
+  return {
+    step: 'code',
+    email,
+    sentAt: Date.now(),
+    notice: `We sent a 6-digit code to ${email}.`,
+  };
+}
+
+/**
+ * A second code, on request.
+ *
+ * Issuing one INVALIDATES the first — Supabase's behaviour, not ours — which is
+ * why the form puts a cooldown in front of the button. Supabase's own rate
+ * limit is the real defence, and its 429 is surfaced rather than swallowed.
+ */
+export async function resendEmailCode(_prevState, formData) {
+  const email = normaliseSchoolEmail(formData.get('email'));
+  if (!email) return { step: 'email', error: 'Start again with your school email address.' };
+
+  const { error } = await sendEmailCode(email, false);
+  if (error) {
+    console.error('[auth] email resend failed:', error.message);
+    return {
+      step: 'code',
+      email,
+      error: emailOtpError(error, { isProduction: config.isProduction() }),
+    };
+  }
+
+  return {
+    step: 'code',
+    email,
+    sentAt: Date.now(),
+    notice: `A new code is on its way to ${email}. The previous one no longer works.`,
+  };
+}
+
+export async function verifyEmailCode(_prevState, formData) {
+  const email = normaliseSchoolEmail(formData.get('email'));
+  const token = String(formData.get('token') ?? '').trim();
+  const requested = safeNext(formData.get('next'));
+
+  if (!email) return { step: 'email', error: 'Start again with your school email address.' };
+  if (!isOtpShape(token)) {
+    return { step: 'code', email, error: 'Enter the code from the email.' };
+  }
+
+  const supabase = await createClient();
+  // 'email' covers both templates: the Confirm Signup code a first-time address
+  // gets and the Magic Link code every later sign-in gets. Supabase generates
+  // and checks it; nothing here does.
+  const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+
+  if (error) {
+    console.error('[auth] email verifyOtp failed:', error.message);
+    // One message for a wrong code and an expired one. Telling them apart would
+    // say whether a guessed code was ever issued.
+    return { step: 'code', email, error: verifyOtpError() };
+  }
+
+  const { data: capabilities } = await supabase.rpc('my_capabilities');
+  redirect(requested ?? landingFor(capabilities));
+}
+
+// --- Vendor: a code to the store's phone -------------------------------------
 
 export async function requestOtp(_prevState, formData) {
   const phone = normaliseGhanaPhone(formData.get('phone'));
@@ -99,10 +219,9 @@ export async function verifyOtp(_prevState, formData) {
     return { step: 'code', phone, error: 'That code is not valid or has expired.' };
   }
 
-  // One sign-in form, four kinds of person. Where they go next is DERIVED from
-  // capabilities the database recomputes on this request — never from anything
-  // the browser claimed. A deep link that sent them here wins, because they were
-  // already going somewhere specific.
+  // Where they go next is DERIVED from capabilities the database recomputes on
+  // this request — never from anything the browser claimed. A deep link that
+  // sent them here wins, because they were already going somewhere specific.
   const { data: capabilities } = await supabase.rpc('my_capabilities');
   redirect(requested ?? landingFor(capabilities));
 }
@@ -110,22 +229,26 @@ export async function verifyOtp(_prevState, formData) {
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
-  redirect('/login');
+  redirect('/');
 }
 
 /**
  * Administrator sign-in — email and password.
  *
- * Everyone else signs in by phone. Administrators do not, for a practical
- * reason and a safety one: operational access must not depend on an SMS
- * arriving, and the person who has to intervene at 11pm when an order is stuck
- * should not be locked out by a delivery failure in the very channel they are
- * trying to fix.
+ * Everyone else gets a code. Administrators do not, for a practical reason and
+ * a safety one: operational access must not depend on a message arriving, and
+ * the person who has to intervene at 11pm when an order is stuck should not be
+ * locked out by a delivery failure in the very channel they are trying to fix.
+ *
+ * AN ADMINISTRATOR HAS NO PHONE NUMBER. Not "does not use it to sign in" —
+ * users.phone is NULL on the row, and nothing in the console needs one.
  *
  * There is no admin registration path and no password reset flow here. The
  * first administrator is created out-of-band with scripts/create-admin.mjs;
  * `is_admin` is a database column that no client statement can reach, because
- * users hold no UPDATE grant on public.users.
+ * users hold no UPDATE grant on public.users. /admin is not linked from any
+ * public page, which is not a security control — the checks below and in every
+ * admin_* function are — but there is no reason to advertise the door.
  */
 export async function adminSignIn(_prevState, formData) {
   const email = String(formData.get('email') ?? '')
@@ -158,5 +281,5 @@ export async function adminSignIn(_prevState, formData) {
     return { error: 'That account does not have administrator access.' };
   }
 
-  redirect(landingFor(capabilities));
+  redirect('/admin');
 }

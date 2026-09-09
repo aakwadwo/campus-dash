@@ -91,9 +91,10 @@ UPDATE orders
 ```
 
 The loser is told "This delivery has already been taken." A partial unique index
-on `(partner_id) WHERE delivery_status IN ('ASSIGNED','PICKED_UP')` enforces the
-**one active delivery per Partner** rule at the database level, not in
-JavaScript.
+on `(partner_id, partner_slot) WHERE delivery_status IN ('ASSIGNED','PICKED_UP')`
+enforces the **capacity limit** at the database level, not in JavaScript.
+`pricing_config.max_active_deliveries_per_partner` (default 2, admin-editable)
+decides how many slots exist; the index decides two claims never share one.
 
 ## Codes
 

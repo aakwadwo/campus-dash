@@ -37,8 +37,9 @@ export default async function PartnersPage() {
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Partner applications</h1>
       <p className="text-muted mb-6 text-sm">
-        Approval is manual: compare the live face photograph against the student ID. Images are held
-        in a private bucket and shown here through short-lived signed URLs.
+        Approval is manual. Check the student ID against the name and level on the account. The
+        applicant already holds a verified @acity.edu.gh address, so identity is established before
+        this screen. Images live in a private bucket and are shown through short-lived signed URLs.
       </p>
 
       {/* THE ROSTER, above the queue. The queue answers "who is waiting for me";
@@ -74,7 +75,7 @@ export default async function PartnersPage() {
                   </Link>
                 </Cell>
                 <Cell mono>{p.phone}</Cell>
-                <Cell muted>{p.class_year ?? '-'}</Cell>
+                <Cell muted>{p.level ?? '-'}</Cell>
                 <Cell>
                   <Badge tone={TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
                   {p.is_suspended ? <Badge tone="bad">account suspended</Badge> : null}
@@ -130,8 +131,8 @@ function Application({ application }) {
         ) : null}
         {/* Declared by the applicant, never verified — which is exactly why the
             reviewer needs to see them next to the photographs. */}
-        {application.class_year ? (
-          <span className="text-muted text-sm">{application.class_year}</span>
+        {application.level ? (
+          <span className="text-muted text-sm">Level {application.level}</span>
         ) : null}
         {application.email ? <span className="text-muted text-sm">{application.email}</span> : null}
       </header>
@@ -142,11 +143,16 @@ function Application({ application }) {
           url={application.studentIdUrl}
           path={application.student_id_image_path}
         />
-        <Document
-          label="Live face photograph"
-          url={application.faceUrl}
-          path={application.face_image_path}
-        />
+        {/* Only on applications made before Campus Dash stopped asking for one.
+            Kept so a past decision can still be audited against what it was
+            made on; new applications have nothing here. */}
+        {application.face_image_path ? (
+          <Document
+            label="Face photograph (earlier application)"
+            url={application.faceUrl}
+            path={application.face_image_path}
+          />
+        ) : null}
       </div>
 
       {application.reviewed_at ? (

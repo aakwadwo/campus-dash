@@ -65,17 +65,7 @@ export default async function AdminCustomerPage({ params }) {
             label="Student ID number"
             value={<span className="font-mono">{c.student_id_number}</span>}
           />
-          <Fact label="Class year" value={c.class_year} />
-          <Fact
-            label="Student ID photograph"
-            value={
-              c.has_student_id ? (
-                <span className="text-brand-700">On file (private)</span>
-              ) : (
-                <span className="text-bad">Missing</span>
-              )
-            }
-          />
+          <Fact label="Level" value={c.level} />
           <Fact label="Onboarded" value={when(c.onboarded_at)} />
           <Fact label="Account created" value={when(c.created_at)} />
           <Fact

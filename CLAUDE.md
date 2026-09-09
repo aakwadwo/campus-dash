@@ -21,7 +21,12 @@ around those as if they were settled.
 
 ## Vocabulary
 
-- Delivery people are **Partners**. Never "runners", never "drivers".
+- Delivery people are **Partners**. Never "runners", never "drivers", never
+  "deliverers". A Partner helps the campus community and earns for it; nothing
+  in the copy may make them read as subordinate to a customer.
+- A vendor runs a **store**, not a "stall".
+- A **vendor** is an identity that owns a business. There are no "vendor staff":
+  `vendors.owner_user_id` is the whole model, and it is one account per store.
 - Money is **integer pesewas**. 1 GHS = 100 pesewas. Never floats, anywhere.
 - A **scan** is a student's prepaid campus meal entitlement. A **scan delivery**
   is the errand of redeeming one — Campus Dash sells the errand, never the food.
@@ -32,6 +37,14 @@ around those as if they were settled.
 1. **The server is authoritative** for prices, fees, order state, payment state,
    Partner assignment, permissions and settlement. Never trust the client for
    any of them — including "the payment succeeded".
+
+   Corollary: **pickup or delivery is chosen AFTER the vendor accepts and
+   BEFORE payment.** An order is submitted with `fulfilment_type` NULL — that
+   is a state, not a missing value — and `create_payment_intent` refuses an
+   order still in it. The delivery fee is added by
+   `customer_choose_fulfilment()`, recomputed from the order's own price
+   snapshot. The 5% service fee is never recomputed there.
+
 2. **Three independent state dimensions** — `order_status`, `payment_status`,
    `delivery_status`. Never merge them. A failed delivery does not fail the food
    order.
@@ -57,20 +70,72 @@ around those as if they were settled.
     only through `lib/payments` and `lib/sms`. No provider-specific logic
     anywhere else. Arkesel lives entirely in `lib/sms/arkesel*.js`, Paystack
     entirely in `lib/payments/paystack.js`.
-11. **Provider acceptance is not delivery.** A 200 from Arkesel means the
+11. **All three handoff codes are FOUR DIGITS, and they travel from one rule:
+    the person who holds the secret is never the person who performs the act.**
+    The VENDOR reads the pickup code out and the PARTNER types it in. The
+    CUSTOMER reads the delivery code out and the PARTNER types it in. For a
+    self-collection the CUSTOMER holds the code and the VENDOR types it in.
+    There is no function that shows a Partner a pickup code, and adding one
+    would make the handoff prove nothing. Four digits is ten thousand guesses,
+    so each side counts its failures and locks out — see `check_handoff_code()`
+    and `pricing_config.code_attempt_limit`. The lockout refuses the CORRECT
+    code too, because a lockout that let it through would be an oracle.
+12. **Partner capacity is CONFIGURABLE, and the limit is an index.**
+    `pricing_config.max_active_deliveries_per_partner` (default 2) decides how
+    many slots exist; `orders.partner_slot`, unique per Partner while the
+    delivery is live, decides that two claims never get the same one — see
+    `orders_partner_active_slot_unique`. The count in the claim's WHERE is belt;
+    the index is braces. Reading a number from a table is not an atomicity
+    primitive and must never be asked to be one. Lowering the maximum never
+    takes an order off a Partner already carrying it.
+13. **The assigned Partner sees the customer's phone number from ASSIGNMENT
+    until the delivery ends, and never afterwards.** Enforced twice over: the
+    RLS policy on `users`, and `partner_active_delivery()`. It is never in an
+    SMS. Never hide it with CSS; never widen it to history.
+14. **Provider acceptance is not delivery.** A 200 from Arkesel means the
     message was taken, not that it arrived. The outcome comes back later on the
     delivery webhook and lands on the same `notification_events` row. The same
     rule governs money out: a transfer Paystack accepted is a PROCESSING payout,
     and only `transfer.success` makes it PAID.
-12. **A browser returning from a hosted checkout proves nothing.** Payment moves
+15. **A browser returning from a hosted checkout proves nothing.** Payment moves
     on a signature-verified webhook or a server-to-server verify — never because
     someone arrived at a URL.
+16. **The vendor's share is SPLIT at the charge; everything else is a transfer.**
+    A Paystack dynamic split (`type: 'flat'`, `bearer_type: 'account'`) routes
+    the food subtotal to the vendor's subaccount as the customer pays, and
+    `allocations.settlement_channel` records which channel each row used. THE
+    PARTNER CANNOT BE IN THE SPLIT: it is fixed when the charge is created, and
+    at that moment the food is not cooked and no Partner exists. Their GH₵5 is
+    carved out at completion and settled by the payout run. See `docs/MONEY.md`.
+17. **A Partner earns GH₵5 a delivery and is paid weekly at GH₵20.**
+    `pricing_config.partner_min_payout_pesewas` is the policy, separate from the
+    general `min_payout_pesewas` because vendors settle by split. A balance under
+    the threshold is RELEASED by the run in the same transaction that claimed
+    it, so it is owed again immediately and swept by the next run. Never tell a
+    Partner about a provider minimum: the dashboard states a weekly payout
+    policy and `my_partner_payouts()` returns no provider failure text.
+18. **`users.full_name` is DERIVED from `first_name` and `last_name`.** A
+    trigger keeps them in step, so it is still the one column a read model
+    selects for a display name and it can no longer drift. A customer is told a
+    Partner's FIRST name and a Partner is told a customer's FIRST name; neither
+    is ever told a surname, and a name never goes into a broadcast SMS.
 
 ## Not in V1
 
-Ratings, reviews, loyalty, coupons, promotions, AI recommendations, Google Maps,
-GPS, live tracking, multiple simultaneous Partner deliveries, Partner scoring,
-automatic penalties, analytics, microservices, native apps, push notifications.
+Reviews, coupons, promotions, AI recommendations, Google Maps, GPS, live
+tracking, automatic penalties, analytics, microservices, native apps, push
+notifications, multi-vendor carts, automatic Paystack transfers, dark mode.
+
+Moved OFF this list, and each was on it:
+
+- A Partner carrying more than one delivery at once. The maximum is now an
+  admin setting, defaulting to 2.
+- Partner ratings. One to five stars on a completed delivery, one per order.
+- Customer rewards. A count of completed orders with marks at 25, 40 and 50.
+  Not points, not tiers, not a wallet — and the reward itself is deliberately
+  undefined in software, because Campus Dash has not decided what it is.
+- Automatic per-order VENDOR settlement, through Paystack split payments.
+  Partner settlement is still a payout run; see hard rule 16.
 
 ## Commands
 
@@ -128,39 +193,68 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
 - **Identity is not capability.** The identity is `auth.users.id` and nothing
   else is ever the key. Capabilities are additive rows on top of it — CUSTOMER
   is a `customer_profiles` row, PARTNER an APPROVED `partner_profiles` row,
-  VENDOR a `vendor_users` link, ADMIN the `users.is_admin` column. There is no
-  account TYPE, and `Admin + Customer + Partner + Vendor` is valid. Holding one
-  capability never confers another: admin does not imply customer, and a vendor
-  account is not a shopper.
+  VENDOR a `vendors.owner_user_id` pointing at the account, ADMIN the
+  `users.is_admin` column. There is no account TYPE, and
+  `Admin + Customer + Partner + Vendor` is valid. Holding one capability never
+  confers another: admin does not imply customer, and a vendor account is not a
+  shopper.
+- **Three sign-ins, three proofs, one identity table.** CUSTOMER proves a
+  verified `@acity.edu.gh` address (email OTP). VENDOR proves a phone number
+  (SMS OTP) and is never asked for an email. ADMIN proves a password and has
+  **no phone number at all** — `users.phone` is NULL on that row, because
+  operational access must not depend on an SMS arriving. Which door somebody
+  came through has no bearing on what they may then do.
 - **PARTNER ⇒ CUSTOMER** is a foreign key (`partner_requires_customer`,
   `ON DELETE RESTRICT`), not a convention. Becoming a Partner is an upgrade to
-  the same account — never a second auth user, email or login.
+  the same account — never a second auth user, email or login. Which is also
+  why an application asks for ONE document, the student ID: the verified
+  `@acity.edu.gh` address has already established who the applicant is. Campus
+  Dash no longer collects a face photograph; the column survives so a past
+  decision can still be audited against what it was made on.
 - Auth roles come from `my_capabilities()`, derived from the database on every
   request. Never trust a role sent by the client. `can_order` is the CUSTOMER
   capability, not "has a pulse".
-- Customers, vendors and Partners sign in by phone OTP; administrators sign in
-  with email and password at `/login/admin`. Ordering additionally requires
-  student onboarding at `/onboarding`.
+- Customers sign in with a code emailed to their school address at `/login`;
+  vendors with an SMS code at `/login/vendor`; administrators with a password at
+  `/login/admin`, which is deliberately not linked from any public page.
+  Ordering additionally requires customer sign-up at `/signup`.
+- A customer's phone number is a PROFILE FIELD, not a credential: it is the
+  number a Partner rings on arrival. A vendor's phone number IS the credential.
 - The design system lives in `app/globals.css` (tokens) and `app/ui.js` (the
   component kit); the admin console's denser kit is `app/admin/ui.js` and draws
-  from the same tokens. Never write a raw hex, a `bg-white` or a `border-black/10`
-  in a component — every colour is a semantic token so that dark mode works
-  without a second copy of the markup.
-- `brand-500` (`#FFC233`, warm golden yellow) is the Campus Dash accent and the
-  only filled yellow on a screen: primary buttons, active states. It always
-  carries `text-ink`. It is NOT legible as text on a light ground — that is
-  `brand-700`, the deep ochre for links, status text and small marks. The two
-  are not interchangeable. In dark mode `brand-700` re-points to a pale gold,
-  keeping its meaning (the accent mark) on a ground where the accent must come
-  up rather than down. Amber and red are the only other colours, and only for
-  warning and failure; `good` is a green that is deliberately not the brand
-  yellow, so a success mark never reads as a call to action.
+  from the same tokens. **The logo IS `info/logo2.PNG`** — the running Partner —
+  and `app/brand.js` serves it from `public/brand/`, generated from that one
+  file. Never redraw it. The square icon variation exists only because a wide
+  transparent runner in a 16px browser tab is a smudge. Never write a raw hex,
+  a `bg-white` or a `border-black/10` in a component — every colour is a
+  semantic token so a palette change happens in one file.
+- **ONE GROUND. There is no dark mode and no toggle.** Campus Dash is a
+  light product on an off-white canvas. Never add a `dark:` variant or a
+  `prefers-color-scheme` block.
+- The brand colours are the ones in `info/colors`: deep orange `#FF5722` /
+  `#E64A19`, navy `#0D1B2A` / `#1A237E`, off-white `#FAFAFA`.
+  - `brand-500` (`#FF5722`) is the identity orange: the logo, progress fills,
+    non-text marks. It is NOT legible under white text (3.2:1) and must never
+    carry a button label.
+  - `brand-700` (`#D93F10`) is the one that does the work: the primary button
+    ground AND the link colour on white. It is 4.5:1 in BOTH directions, which
+    is why one token serves both roles.
+  - `ink` is navy, not black, so every heading carries brand at no cost.
+  - Amber and red are the only other colours, for warning and failure; `good`
+    is a green deliberately unlike the orange, so a success mark never reads as
+    a call to action.
 - Surfaces are `canvas` (page), `surface` (cards), `surface-2`/`surface-3`
   (inputs, muted fills, hover). Lines are `line` / `line-strong` hairlines.
   Radii are `input` / `card` / `panel` / `sheet`, and buttons are pills.
+- **Copy is written, not generated.** No hyphen-heavy constructions where a
+  full stop would do, no eyebrow labels as decoration, no badge on anything
+  that is not a state, no card around a single sentence. If a line reads like
+  it came out of a template, it did, and it should be rewritten.
 - Sign-in destination is derived from capabilities in `lib/auth/landing.js`,
-  never chosen by the client. Admin → /admin, vendor → /vendor, approved
-  Partner → /partner, applicant → /partner/apply, customer → /order, otherwise
-  → /onboarding. That order is PRECEDENCE, not exclusivity: `areasFor()` lists
-  every area the account holds and each layout renders it as an `AreaSwitcher`,
-  so landing on /admin never means losing /order.
+  never chosen by the client. Admin → /admin, vendor → /vendor, vendor applicant
+  → /vendor/application, customer → /order, approved Partner → /partner, Partner
+  applicant → /partner/apply, otherwise → /signup. That order is PRECEDENCE, not
+  exclusivity: `areasFor()` lists every area the account holds and each layout
+  renders it as an `AreaSwitcher`, so landing on /admin never means losing
+  /order, and a Partner who is also a customer lands on ordering with the
+  Partner area one tap away.

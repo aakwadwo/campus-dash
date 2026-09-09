@@ -62,7 +62,7 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
           <button
             type="submit"
             disabled={busy}
-            className="press bg-brand-500 text-ink w-full rounded-full py-3.5 text-base font-semibold transition-colors disabled:opacity-55"
+            className="press bg-brand-700 w-full rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
           >
             {redeeming ? 'Recording…' : 'They accepted it, I have the food'}
           </button>

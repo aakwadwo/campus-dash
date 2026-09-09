@@ -1,9 +1,24 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Campus Dash',
+  title: {
+    default: 'Campus Dash',
+    template: '%s · Campus Dash',
+  },
   description:
-    'Get what you need from trusted vendors around Academic City. Pick it up, or let a verified student Partner bring it.',
+    'Order from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.',
+  applicationName: 'Campus Dash',
+  // Generated from info/logo2.PNG — see app/brand.js. The square variation is
+  // deliberate: a wide transparent runner in a 16px tab is a smudge on whatever
+  // colour the browser paints behind it.
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: '16x16 32x32 48x48' },
+      { url: '/brand/icon-32.png', type: 'image/png', sizes: '32x32' },
+      { url: '/brand/icon-512.png', type: 'image/png', sizes: '512x512' },
+    ],
+    apple: [{ url: '/brand/icon-180.png', sizes: '180x180' }],
+  },
 };
 
 export const viewport = {
@@ -16,10 +31,8 @@ export const viewport = {
   // without taking anything away.
   maximumScale: 5,
   userScalable: true,
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#fbfbfa' },
-    { media: '(prefers-color-scheme: dark)', color: '#0d0d0c' },
-  ],
+  // One ground, one theme colour. Campus Dash is a light product.
+  themeColor: '#fafafa',
 };
 
 export default function RootLayout({ children }) {

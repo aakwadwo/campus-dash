@@ -313,17 +313,14 @@ describe('admin — Partner approval and suspension', () => {
     const due = await adminRows('select * from public.admin_partner_documents_due_for_purge()');
     assert.equal(due.length, 1);
     assert.equal(due[0].user_id, ACTORS.applicantKofi);
-    assert.ok(due[0].face_image_path, 'the Partner document is what is due');
 
-    // THE CUSTOMER'S ID PHOTOGRAPH IS NOT ON THIS LIST, and must not be. The
-    // purpose of this function is to hand an administrator a set of objects to
-    // delete; a customer's student ID is retained while the account is active,
-    // so naming it here would be an invitation to delete it and point a NOT
-    // NULL column at a missing file.
-    assert.ok(
-      !('student_id_image_path' in due[0]),
-      'a delete queue names only what may be deleted'
-    );
+    // BOTH Partner documents are due, and both may be deleted. They exist for
+    // one review — an administrator holding a live face next to a student ID —
+    // and once that review has been made and the retention window has passed,
+    // holding either serves nobody. A CUSTOMER holds no verification document
+    // at all now, so there is nothing on this list that must survive it.
+    assert.ok(due[0].face_image_path, 'the live face is due');
+    assert.ok(due[0].student_id_image_path, 'and so is the ID it was compared against');
   });
 
   test('clearing documents removes the paths and is audited', async () => {
@@ -344,11 +341,13 @@ describe('admin — Partner approval and suspension', () => {
     assert.equal(profile.documents_purge_after, null);
     assert.equal(profile.status, 'APPROVED', 'clearing documents does not revoke approval');
 
-    // The student ID photograph is NOT cleared with it. It stopped being a
-    // Partner document when Customer became a capability: it is the evidence
-    // for a capability this person still holds, and customer_profiles requires
-    // it. Purging Partner documents must not quietly revoke someone's ability
-    // to order lunch.
+    // Both Partner documents go together, because they were only ever a pair:
+    // the point of the ID was to be compared against the face.
+    assert.equal(profile.student_id_image_path, null);
+
+    // AND THE CUSTOMER CAPABILITY IS UNTOUCHED. Purging Partner documents must
+    // never quietly revoke somebody's ability to order lunch — which is now
+    // structurally impossible, because a Customer holds no document at all.
     const customer = await asService(
       async (c) =>
         (
@@ -357,7 +356,7 @@ describe('admin — Partner approval and suspension', () => {
           ])
         ).rows[0]
     );
-    assert.ok(customer.student_id_image_path, 'the Customer document survives');
+    assert.ok(customer, 'the Customer capability survives');
 
     const audit = await auditFor(ACTORS.partnerYaw);
     assert.ok(audit.some((a) => a.action === 'PARTNER_DOCUMENTS_PURGED'));

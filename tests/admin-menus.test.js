@@ -127,7 +127,9 @@ describe('admin — menus and prices', () => {
   // --- THE INVARIANT THAT MATTERS -----------------------------------------
   test('repricing through the admin path does NOT change an order already placed', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(order.total_pesewas, 7850, '2 x GH₵35 + 10% (GH₵7) + GH₵5 delivery');
+    // 2 × GH₵35 + 5% (GH₵3.50). No delivery fee at submission: pickup or
+    // delivery is chosen after the vendor accepts.
+    assert.equal(order.total_pesewas, 7350);
 
     await admin('select * from public.admin_update_menu_item($1, $2, null, null, $3)', [
       MENU.jollof,
@@ -137,7 +139,7 @@ describe('admin — menus and prices', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, 7000, 'the snapshot holds');
-    assert.equal(stored.total_pesewas, 7850);
+    assert.equal(stored.total_pesewas, 7350);
 
     const items = await asService(
       async (c) =>
@@ -147,7 +149,8 @@ describe('admin — menus and prices', () => {
     assert.equal(items[0].unit_price_pesewas, 3500, 'the ORIGINAL price is preserved');
 
     const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    assert.equal(later.total_pesewas, 11000, 'a new order uses the new price');
+    // GH₵100 food + 5%. Still no delivery fee at submission.
+    assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
   });
 
   test('a price change is audited distinctly, with before and after', async () => {

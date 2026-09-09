@@ -4,46 +4,54 @@ import { useMemo, useState } from 'react';
 import { SearchIcon, VendorCard, EmptyState } from '../ui';
 
 /**
- * The vendor grid, with a filter over it.
+ * The vendor grid, with a category filter and a name filter over it.
  *
- * THE FILTER IS CLIENT-SIDE ON PURPOSE. There is no vendor search RPC, and
- * adding one to make this screen feel richer would be building backend for a
- * screenshot. With a campus-sized catalogue — tens of stalls, not thousands —
- * filtering the list already in the page is also simply the right tool: it is
- * instant, it works offline once loaded, and it ships no query.
+ * BOTH ARE CLIENT-SIDE ON PURPOSE. With a campus-sized catalogue — tens of
+ * stores, not thousands — filtering the list already in the page is the right
+ * tool: it is instant, it works once loaded, and it ships no query. The
+ * storefront RPC accepts the same filters for a caller that wants them; this
+ * screen simply does not need to make the round trip.
  *
  * The whole list is rendered by the server first, so someone with JavaScript
- * disabled still sees every vendor; the input only narrows what is already
- * there.
+ * disabled still sees every vendor; the controls only narrow what is there.
  *
- * Open stalls come first and closed ones are kept, dimmed, in their own group.
+ * Open stores come first and closed ones are kept, dimmed, in their own group.
  * Knowing a place exists but is shut right now is useful — hiding it just makes
  * people wonder where it went.
  */
-export default function VendorSearch({ open, closed }) {
+export default function VendorSearch({ vendors, categories }) {
   const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('');
 
   const term = query.trim().toLowerCase();
 
-  // The predicate is built inside each memo rather than in the component body,
-  // so the dependency list is the whole truth: a new `term` is the only thing
-  // that can change the result.
-  const shownOpen = useMemo(
-    () => open.filter((v) => !term || v.name.toLowerCase().includes(term)),
-    [open, term]
+  const matching = useMemo(
+    () =>
+      vendors.filter(
+        (v) =>
+          (!category || v.category_id === category) &&
+          (!term ||
+            v.name.toLowerCase().includes(term) ||
+            (v.description ?? '').toLowerCase().includes(term))
+      ),
+    [vendors, term, category]
   );
-  const shownClosed = useMemo(
-    () => closed.filter((v) => !term || v.name.toLowerCase().includes(term)),
-    [closed, term]
-  );
-  const nothing = term && shownOpen.length === 0 && shownClosed.length === 0;
 
-  const total = open.length + closed.length;
+  const shownOpen = matching.filter((v) => v.is_accepting_orders);
+  const shownClosed = matching.filter((v) => !v.is_accepting_orders);
+  const nothing = matching.length === 0 && vendors.length > 0;
+
+  // Only categories that actually contain a store. An empty filter chip is a
+  // promise the catalogue cannot keep.
+  const present = useMemo(() => {
+    const ids = new Set(vendors.map((v) => v.category_id));
+    return categories.filter((c) => ids.has(c.id));
+  }, [vendors, categories]);
 
   return (
     <div className="mt-8">
-      {total > 4 ? (
-        <div className="relative mb-7">
+      {vendors.length > 4 ? (
+        <div className="relative mb-5">
           <SearchIcon className="text-muted pointer-events-none absolute top-1/2 left-4 size-5 -translate-y-1/2" />
           <input
             type="search"
@@ -56,19 +64,37 @@ export default function VendorSearch({ open, closed }) {
         </div>
       ) : null}
 
+      {present.length > 1 ? (
+        <div className="-mx-5 mb-7 flex gap-2 overflow-x-auto px-5 pb-1">
+          <Chip active={category === ''} onClick={() => setCategory('')}>
+            All
+          </Chip>
+          {present.map((c) => (
+            <Chip key={c.id} active={category === c.id} onClick={() => setCategory(c.id)}>
+              {c.name}
+            </Chip>
+          ))}
+        </div>
+      ) : null}
+
       {nothing ? (
         <EmptyState
           icon={<SearchIcon className="size-6" />}
-          title={`No vendor matches “${query.trim()}”`}
-          description="Try a shorter search, or clear it to see everything that is open."
+          title={term ? `No vendor matches “${query.trim()}”` : 'Nothing in this category yet'}
+          description="Try a shorter search, or clear the filters to see everything that is open."
         />
       ) : null}
 
       {shownOpen.length ? (
-        <ul className="stagger grid grid-cols-2 gap-x-4 gap-y-7 lg:grid-cols-4">
+        <ul className="grid grid-cols-2 gap-x-4 gap-y-7 lg:grid-cols-4">
           {shownOpen.map((vendor) => (
-            <li key={vendor.id}>
-              <VendorCard vendor={vendor} href={`/order/${vendor.id}`} />
+            <li key={vendor.vendor_id}>
+              <VendorCard
+                vendor={vendor}
+                href={`/order/${vendor.vendor_id}`}
+                imageUrl={vendor.image_url}
+                meta={vendor.category_name}
+              />
             </li>
           ))}
         </ul>
@@ -81,13 +107,34 @@ export default function VendorSearch({ open, closed }) {
           </h2>
           <ul className="grid grid-cols-2 gap-x-4 gap-y-7 lg:grid-cols-4">
             {shownClosed.map((vendor) => (
-              <li key={vendor.id}>
-                <VendorCard vendor={vendor} href={`/order/${vendor.id}`} />
+              <li key={vendor.vendor_id}>
+                <VendorCard
+                  vendor={vendor}
+                  href={`/order/${vendor.vendor_id}`}
+                  imageUrl={vendor.image_url}
+                  meta={vendor.category_name}
+                />
               </li>
             ))}
           </ul>
         </section>
       ) : null}
     </div>
+  );
+}
+
+function Chip({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`press-sm shrink-0 rounded-full border px-3.5 py-2 text-sm font-medium whitespace-nowrap transition-colors ${
+        active
+          ? 'bg-brand-700 border-brand-700 text-white'
+          : 'bg-surface border-line text-muted hover:text-ink'
+      }`}
+    >
+      {children}
+    </button>
   );
 }

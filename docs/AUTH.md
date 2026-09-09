@@ -1,19 +1,126 @@
 # Authentication
 
-Phone OTP for customers, vendors and Partners. Email and password for
-administrators. One account per person; Customer and Partner are capabilities on
-that same account, never separate logins.
+**Three sign-ins, three proofs, one identity table.**
+
+| Who      | Proves                             | Where           | Phone number                          |
+| -------- | ---------------------------------- | --------------- | ------------------------------------- |
+| CUSTOMER | a verified `@acity.edu.gh` address | `/login`        | a profile field, collected at sign-up |
+| VENDOR   | a phone number, by SMS code        | `/login/vendor` | **is** the credential                 |
+| ADMIN    | an email address and a password    | `/login/admin`  | **none at all**                       |
+
+They are separate because the PROOF is separate, not because the people are.
+The same `auth.users.id` may hold all three capabilities, and which door
+somebody came through has no bearing on what they may then do — that is derived
+from the database on every request by `my_capabilities()`.
+
+## Why each door is the way it is
+
+**A customer proves a school address.** Campus Dash is for Academic City
+students, and the university already issues every student an identity we can
+verify for free. Asking for a phone code instead would prove somebody owns a
+SIM, which is not the fact we need. It also means the ID photograph that used to
+be part of signing up is gone: no reviewer ever looked at one for an ordinary
+customer, so collecting it was cost without a control.
+
+**A vendor proves a phone number.** A stall owner has a number. They may well
+not have a school address, and asking for one would exclude exactly the
+businesses the pilot exists to sign up. They are never asked for an email, at
+sign-up or afterwards.
+
+**An administrator has no phone number at all.** Not "does not sign in with
+one" — `users.phone` is NULL on the row. Operational access must not depend on
+an SMS arriving, least of all when messaging is the thing that has broken, and
+the person who has to intervene at 11pm when an order is stuck should not be
+locked out by a delivery failure in the channel they are trying to fix. If a
+support number exists anywhere in the product it is configuration, not a
+credential.
+
+`/admin` is not linked from any public page. That is not the security control —
+`is_admin()` inside every `admin_*` function is — but there is no reason to put
+the door on the map.
 
 ## Who verifies what
 
-Supabase Auth generates and validates the OTP. **We never generate, store or
-check a code ourselves** — that whole surface stays in one audited place.
+Supabase Auth generates and validates every code. **We never generate, store or
+check one ourselves** — that whole surface stays in one audited place.
 
-What we own is _delivery_. Supabase calls our **Send SMS Hook** with the message
-to send, and we hand it to the `SmsProvider` abstraction. So the same seam that
-carries order notifications carries the login code: `FakeSmsProvider` prints it
-to the server console in development, and a Ghana provider drops in later
-without touching auth at all.
+What we own is _delivery_. For SMS, Supabase calls our **Send SMS Hook** with
+the message and we hand it to the `SmsProvider` abstraction, so the same seam
+that carries order notifications carries the login code. For email, Supabase
+sends it directly over SMTP; what we own there is the TEMPLATE.
+
+### The customer email OTP
+
+A numeric code, typed into the tab that is already open. **No magic link, no
+`emailRedirectTo`, and no callback route** — a link opens in whichever browser
+the mail app picks, which on a phone is routinely not the one holding the
+half-filled sign-up form.
+
+```
+signInWithOtp({ email, options: { shouldCreateUser } })
+        │                              true on /signup, false on /login
+        ▼
+  Supabase Auth generates the code and sends ONE OF TWO TEMPLATES
+        │
+        ├── first time for this address  ──▶  Confirm signup
+        └── every time after that        ──▶  Magic Link
+        │
+        ▼
+verifyOtp({ email, token, type: 'email' })
+        │
+        ▼
+session cookies ──▶ complete_customer_onboarding() grants CUSTOMER
+```
+
+**TWO TEMPLATES, ONE CODE, AND BOTH NEED `{{ .Token }}`.** This is the part that
+breaks silently. Supabase sends Confirm signup when `signInWithOtp()` creates an
+address and Magic Link on every sign-in afterwards; wiring only the second means
+sign-IN works perfectly and first-time sign-UP is dead, which is the half nobody
+notices until a real student tries it.
+
+| Template       | When          | File                                     | `config.toml`                        |
+| -------------- | ------------- | ---------------------------------------- | ------------------------------------ |
+| Confirm signup | first time    | `supabase/templates/confirm-signup.html` | `[auth.email.template.confirmation]` |
+| Magic Link     | every sign-in | `supabase/templates/magic-link.html`     | `[auth.email.template.magic_link]`   |
+
+**A hosted project needs the same content pasted into both**, under
+Authentication → Email Templates. Nothing in Campus Dash generates or checks a
+code, so the templates are the whole integration.
+
+`enable_confirmations = true` is what decides which template a new address gets.
+With it off, `signInWithOtp()` marks the address confirmed the moment it creates
+it — before anybody has proved they can read that mailbox — and sends Magic
+Link. Campus Dash wants the opposite: the school address IS the proof of being a
+student, so it must not count as verified until a code has been read out of it.
+`tests/customer-otp-e2e.test.js` asserts that `email_confirmed_at` is null
+before verification and set after it.
+
+Locally the mail lands in Mailpit at <http://127.0.0.1:54324>.
+
+### Sending it again
+
+Both screens offer a new code behind a 45-second cooldown. The cooldown is a
+courtesy, not the limit: **issuing a code invalidates the previous one**, so
+without it somebody eagerly pressing resend kills the code they are halfway
+through typing. Supabase's own rate limit is the real defence, and its 429 is
+surfaced as "Too many codes requested" rather than swallowed.
+
+### When verification succeeds and the account still cannot be created
+
+A student ID that is already registered is the case that matters. By then the
+code is spent and the session is real, so showing the code box again would ask
+for a code that cannot exist.
+
+`finishSignUpAction` therefore returns a third step, `complete`, which keeps the
+session and asks only for the details. `completeSignUpAction` re-checks
+`getUser()` before trying again — a session is not a capability, and
+`complete_customer_onboarding()` writes against `auth.uid()` regardless.
+
+The uniqueness rules themselves are indexes, not checks in JavaScript:
+`users_email_unique`, `users_phone_key` and
+`customer_profiles_student_id_unique`. Each raises a sentence that
+`lib/errors.js` maps back to the field that broke, because "something went wrong
+on our side" is useless to somebody whose student ID is already taken.
 
 ```
 signInWithOtp(phone)
@@ -171,6 +278,8 @@ tampered client changes nothing but its own display.
   "user_id": "…",
   "phone": "+233…",
   "full_name": "…",
+  "first_name": "…",
+  "last_name": "…",
   "email": "…",
   "is_admin": false,
   "is_suspended": false,
@@ -178,7 +287,7 @@ tampered client changes nothing but its own display.
   "can_order": true,
   "customer_status": "ONBOARDED",
   "student_id_number": "…",
-  "class_year": "Class of 2029",
+  "level": "200",
   "partner_status": "APPROVED",
   "is_partner": true,
   "partner_available": true,
@@ -188,18 +297,23 @@ tampered client changes nothing but its own display.
 
 Each field answers a different question, and none implies another:
 
-| Field                       | True when                                       |
-| --------------------------- | ----------------------------------------------- |
-| `authenticated`             | A phone number has been confirmed. An IDENTITY. |
-| `can_order` / `is_customer` | A `customer_profiles` row exists                |
-| `is_partner`                | An APPROVED `partner_profiles` row exists       |
-| `vendor_ids`                | `vendor_users` links, listed — never inferred   |
-| `is_admin`                  | `users.is_admin`                                |
+| Field                       | True when                                           |
+| --------------------------- | --------------------------------------------------- |
+| `authenticated`             | A contact detail has been confirmed. An IDENTITY.   |
+| `can_order` / `is_customer` | A `customer_profiles` row exists                    |
+| `is_partner`                | An APPROVED `partner_profiles` row exists           |
+| `vendor_ids`                | ACTIVE stores this account owns — never inferred    |
+| `vendor_status`             | Where a store application stands, for a pending one |
+| `is_admin`                  | `users.is_admin`                                    |
+
+`vendor_ids` lists only OPERABLE stores. An application still under review
+grants nothing and appears there as `[]`; `vendor_status` is what tells the
+applicant why their dashboard is a status page.
 
 `can_order` used to be `not is_suspended` — true for every account that existed,
 which meant "admin does not imply customer" could not be expressed because there
 was no Customer capability to withhold. It is now the capability itself, and an
-administrator or vendor account that has not completed student onboarding
+administrator or vendor account that has not completed customer sign-up
 genuinely cannot place an order. `submit_order_for()` asserts it server-side, so
 this is not a display decision.
 
@@ -218,20 +332,30 @@ chosen: `lib/auth/landing.js` reads `my_capabilities()` and returns
 |                   |                                                          |
 | ----------------- | -------------------------------------------------------- |
 | admin             | `/admin`                                                 |
-| vendor staff      | `/vendor`                                                |
+| vendor            | `/vendor`                                                |
+| vendor applicant  | `/vendor/application` — where their application stands   |
+| customer          | `/order`                                                 |
 | approved Partner  | `/partner`                                               |
 | Partner applicant | `/partner/apply` — their own status, not the admin queue |
-| customer          | `/order`                                                 |
-| no capability yet | `/onboarding` — the one thing that unlocks the rest      |
+| no capability yet | `/signup` — the one thing that unlocks the rest          |
 | suspended         | `/suspended`, whatever else is true                      |
 
+**Vendor before customer, and customer before Partner.** Somebody who runs a
+stall AND orders lunch signs in, overwhelmingly, to run the stall: there is
+money and a 60-second answer window on that side and neither on the other.
+Partner comes last for the mirror reason — carrying a delivery is something you
+go and look for, not something you are doing when you happen to open the app.
+And since PARTNER ⇒ CUSTOMER, every Partner is also a customer, so a rule that
+put Partner first would send every one of them somewhere they did not ask for.
+
 Precedence, not **exclusivity**, and this is the single most misread thing in
-the application. An admin who also staffs a stall lands on `/admin` because that
+the application. An admin who also runs a stall lands on `/admin` because that
 is the job they signed in to do. They have lost nothing: `areasFor()` returns
 every area the account holds and each layout renders it as an `AreaSwitcher`, so
-the other capabilities are one click away rather than invisible.
+the other capabilities are one click away rather than invisible. A multi-capability
+account never has to sign out to switch.
 
-Note that onboarding never outranks a capability the account already has. An
+Note that sign-up never outranks a capability the account already has. An
 administrator with no student profile still lands on `/admin` — their account is
 complete for what it does.
 
@@ -251,16 +375,19 @@ decides where somebody _useful_ lands, never what they may do.
 `requirePartner` and `requireVendorStaff`. These stop a page forgetting to check
 — they are **not** the security boundary.
 
-`requireCustomer` is the one that does not simply bounce to `landingFor()`: it
-sends people to `/onboarding`, because "you wanted to order something" is
-answered by acquiring the capability, not by being returned to `/admin`. A user who bypassed one would reach a page
-rendering nothing they are entitled to, because every query underneath still
-filters by `auth.uid()`.
+`requireCustomer` is one of two that do not simply bounce to `landingFor()`: it
+sends people to `/signup`, because "you wanted to order something" is answered
+by acquiring the capability, not by being returned to `/admin`. The other is
+`requireVendorStaff`, which sends an applicant to `/vendor/application` — for a
+rejected store that page is the only place the reason exists.
+
+A user who bypassed either would reach a page rendering nothing they are
+entitled to, because every query underneath still filters by `auth.uid()`.
 
 ## Terms acceptance
 
 `terms_acceptances` records which version of which document an account agreed
-to, and when. Customer terms are accepted **inside** the onboarding transaction,
+to, and when. Customer terms are accepted **inside** the sign-up transaction,
 so a customer who can order has always agreed to something; each audience is
 asked only of accounts that hold the matching capability, so a vendor stall is
 never asked to agree to terms about ordering lunch. The documents themselves are reference data installed by migration

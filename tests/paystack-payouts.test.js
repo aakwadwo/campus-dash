@@ -15,6 +15,7 @@ import {
   partnerAccept,
   completeDelivery,
   expectRejection,
+  setPartnerPayoutThreshold,
 } from './helpers/flow.js';
 
 /**
@@ -567,6 +568,10 @@ describe('paystack payout lifecycle', () => {
   // Partner weekly settlement is untouched by any of this
   // =========================================================================
   test('Partner payouts still settle weekly, one per Partner', async () => {
+    // The transfer LIFECYCLE, not the weekly threshold. One delivery is GH₵5
+    // and the product floor is GH₵20; the floor's own behaviour is asserted in
+    // tests/partner-payouts.test.js.
+    await setPartnerPayoutThreshold(1);
     await deliveredOrder({ partner: ACTORS.partnerYaw });
     await deliveredOrder({ partner: ACTORS.partnerAdjoa });
 
@@ -669,28 +674,57 @@ describe('customer email for hosted checkout', () => {
   });
 
   test('capabilities report the address, so the pay button knows whether to ask', async () => {
-    const before = await asUser(
+    // A CUSTOMER always has one: the verified school address is their sign-in
+    // credential. Paystack needs an address, and for a customer it is already
+    // there — so the pay button asks nobody.
+    const customer = await asUser(
       ACTORS.customerAma,
       async (c) => (await c.query('select public.my_capabilities() as caps')).rows[0].caps
     );
-    assert.equal(before.email, null);
+    assert.match(customer.email, /@acity\.edu\.gh$/);
 
-    const after = await asUser(ACTORS.customerAma, async (c) => {
-      await c.query("select public.set_my_email('ama@example.com')");
+    // A VENDOR has none, and is never asked for one: they signed in by phone.
+    const vendor = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) => (await c.query('select public.my_capabilities() as caps')).rows[0].caps
+    );
+    assert.equal(vendor.email, null, 'a stall owner is never asked for an address');
+
+    // And a change is reflected immediately, because capabilities are derived
+    // from the database on every request rather than cached in a token.
+    const after = await asUser(ACTORS.vendor1Staff, async (c) => {
+      await c.query("select public.set_my_email('muni.owner@example.com')");
       return (await c.query('select public.my_capabilities() as caps')).rows[0].caps;
     });
-    assert.equal(after.email, 'ama@example.com');
+    assert.equal(after.email, 'muni.owner@example.com');
   });
 
   test('no email is ever generated for an account that has not given one', async () => {
     // The whole point. A synthesised address would send a receipt into a hole
-    // and put a fiction in our own records.
-    const emails = await asService(
+    // and put a fiction in our own records. The accounts WITHOUT one are the
+    // evidence: a vendor signs in by phone and is never asked.
+    const withoutEmail = await asService(
       async (c) =>
-        (await c.query('select count(*)::int as n from public.users where email is not null'))
-          .rows[0]
+        (
+          await c.query(
+            `select count(*)::int as n from public.users
+              where email is null and phone is not null`
+          )
+        ).rows[0]
     );
-    assert.equal(emails.n, 0);
+    assert.ok(withoutEmail.n > 0, 'phone-only accounts exist and have no invented address');
+
+    // And nothing generated one that looks synthesised.
+    const invented = await asService(
+      async (c) =>
+        (
+          await c.query(
+            `select count(*)::int as n from public.users
+              where email like '%@campusdash%' or email like '%@example.invalid%'`
+          )
+        ).rows[0]
+    );
+    assert.equal(invented.n, 0);
   });
 });
 
@@ -804,8 +838,13 @@ describe('mobile money payout destinations', () => {
       ACTORS.partnerYaw,
       async (c) => (await c.query('select * from public.my_payout_destination()')).rows[0]
     );
-    assert.equal(mine.account_number, '0201112222');
-    assert.equal(mine.is_ready, false, 'not registered with the provider yet');
+    // THE WHOLE NUMBER IS NOT RETURNED. A Partner who typed it does not need to
+    // be shown it again to recognise it, and a screen that echoes it is a screen
+    // that leaks it over a shoulder.
+    assert.equal(mine.account_last3, '222');
+    assert.ok(!('account_number' in mine), 'the full number never leaves the server');
+    assert.equal(mine.transfers_ready, false, 'no transfer recipient registered yet');
+    assert.equal(mine.split_ready, false, 'no subaccount registered yet');
   });
 
   test('somebody who is not an approved Partner has no destination to set', async () => {

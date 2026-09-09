@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
  *
  * A CUSTOMER IS A CAPABILITY, not an account type — this lists everyone holding
  * a customer_profiles row, which is exactly what "can place an order" means.
- * An account that also staffs a stall or carries deliveries appears here too,
+ * An account that also owns a store or carries deliveries appears here too,
  * because it genuinely is a customer as well.
  *
  * The student ID IMAGE is not on this page and its path is never returned by
@@ -42,7 +42,7 @@ export default async function AdminCustomersPage({ searchParams }) {
         </label>
         <button
           type="submit"
-          className="bg-brand-500 text-ink rounded px-4 py-1.5 text-sm font-semibold"
+          className="bg-brand-700 rounded px-4 py-1.5 text-sm font-semibold text-white"
         >
           Search
         </button>
@@ -77,7 +77,7 @@ export default async function AdminCustomersPage({ searchParams }) {
                 </Cell>
                 <Cell mono>{c.phone}</Cell>
                 <Cell mono>{c.student_id_number}</Cell>
-                <Cell muted>{c.class_year}</Cell>
+                <Cell muted>{c.level}</Cell>
                 <Cell>
                   <span className="flex flex-wrap gap-1">
                     {c.is_admin ? <Badge tone="warn">Admin</Badge> : null}

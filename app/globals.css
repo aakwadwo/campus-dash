@@ -5,169 +5,122 @@
  * Campus Dash — design tokens
  * ============================================================================
  *
- * ONE PRODUCT, TWO MODES. Every colour below is a semantic token, not a literal
- * value, and dark mode re-points the same tokens at different values rather
- * than inverting the light theme. That is the difference between a dark mode
- * that was designed and one that was switched on: the hierarchy, the borders
- * and the accent are all chosen separately for each ground.
+ * ONE GROUND. Campus Dash is a light product: a near-white canvas, white cards,
+ * navy type and orange where it means something. There is no dark mode and no
+ * toggle. A second palette is a second product to keep in step, and every hour
+ * spent on the one nobody uses at a food counter in daylight is an hour not
+ * spent on the one everybody does.
  *
- * THE YELLOW
- * ----------
- * `brand-500` (#FFC233) is the Campus Dash yellow — a warm golden amber rather
- * than a lemon. Two properties made it the choice:
+ * THE COLOURS come from the brand sheet, unchanged:
  *
- *   1. It is dark enough to carry `text-ink` at 10.6:1, so a primary button
- *      needs no second thought about legibility, indoors or in Accra sunlight.
- *   2. It is light enough to read as an accent on a dark ground, so the same
- *      fill works in both modes without a separate dark-mode button colour.
+ *   Deep orange   #FF5722 / #E64A19   speed, energy, appetite, visibility
+ *   Navy          #0D1B2A / #1A237E   trust, structure, professionalism
+ *   Off-white     #FAFAFA             clean, readable interfaces
  *
- * It is NOT usable as text on white — 1.7:1 — and never should be. That is what
- * `brand-700` is for: the deep ochre used for links, active labels and small
- * marks ON light. In dark mode `brand-700` re-points to a LIGHT yellow, because
- * on a near-black ground the accent has to come up to meet you, not down. The
- * two tokens keep their meanings — fill vs. mark — in both modes, which is why
- * every existing `bg-brand-500` / `text-brand-700` in the app stayed correct.
+ * HOW THE ORANGE IS SPLIT, and it is the only subtle thing here. #FF5722 is
+ * gorgeous and it is NOT legible under white text — 3.2:1, which fails for a
+ * button label. So the identity orange stays what it is (`brand-500`: the mark,
+ * the logo, progress, large fills) and one step down, `brand-700` (#D93F10),
+ * does the work that needs contrast. That token is 4.5:1 BOTH WAYS — white text
+ * on it, and it as text on white — so the primary button and the inline link
+ * are the same colour and both pass. Nothing else needs to be remembered.
  *
- * THE RESTRAINT RULE. Yellow marks the one thing to press and the one thing to
- * read first. Everything else is neutral surface, type and whitespace. A screen
- * that is mostly yellow has no accent at all.
+ * THE RESTRAINT RULE. Orange marks the one thing to press and the one thing to
+ * read first. Everything else is navy type, white surface and space.
  */
 
 @theme {
-  /* --- Brand: warm golden yellow ------------------------------------------ */
-  --color-brand-50: #fff9e9;
-  --color-brand-100: #fff0c7;
-  --color-brand-200: #ffe49b;
-  --color-brand-300: #ffd86e;
-  --color-brand-400: #ffcc4d;
-  --color-brand-500: #ffc233; /* the signature fill. Always with text-ink. */
-  --color-brand-600: #f0ae14; /* hover / border */
-  --color-brand-700: #8a6608; /* marks + links ON light. 5.3:1 on white. */
-  --color-brand-800: #6d5008;
-  --color-brand-900: #4d3906;
+  /* --- Brand: deep orange -------------------------------------------------- */
+  --color-brand-50: #fff4f0;
+  --color-brand-100: #ffe3da;
+  --color-brand-200: #ffc5b3;
+  --color-brand-300: #ffa183;
+  --color-brand-400: #ff7a52;
+  --color-brand-500: #ff5722; /* the identity orange. Marks and large fills. */
+  --color-brand-600: #e64a19; /* hover and borders */
+  --color-brand-700: #d93f10; /* 4.5:1 both ways. Primary fill AND link text. */
+  --color-brand-800: #b8330a;
+  --color-brand-900: #8f2707;
+
+  /* --- Navy ----------------------------------------------------------------
+     The other half of the logo. It is the type colour, which is what makes the
+     whole interface feel structured without a single navy panel being drawn. */
+  --color-navy: #0d1b2a;
+  --color-navy-700: #1a237e;
+  --color-navy-500: #2a3f56;
 
   /* --- Surfaces ------------------------------------------------------------
-     canvas   the page ground
-     surface  cards and raised panels
-     surface-2 inputs, muted fills, the utility bar, hover grounds
+     canvas    the page ground, the brand off-white
+     surface   cards and raised panels
+     surface-2 inputs, muted fills, hover grounds
      surface-3 pressed / secondary hover                                     */
-  --color-canvas: #fbfbfa;
+  --color-canvas: #fafafa;
   --color-surface: #ffffff;
-  --color-surface-2: #f2f2ef;
-  --color-surface-3: #e7e7e3;
+  --color-surface-2: #f2f3f5;
+  --color-surface-3: #e6e9ed;
 
-  /* --- Type ---------------------------------------------------------------- */
-  --color-ink: #1a1a19; /* never pure black */
-  --color-muted: #6e6e68;
-  --color-faint: #9a9a94;
+  /* --- Type ----------------------------------------------------------------
+     Navy, not black. It is one of the two brand colours and it is doing brand
+     work on every screen at no cost.                                        */
+  --color-ink: #0d1b2a;
+  --color-muted: #5a6672;
+  --color-faint: #8b96a3;
 
   /* --- Lines ---------------------------------------------------------------
-     Hairlines, deliberately weak. Separation comes from surface and space
-     first; a border is the last resort, not the default.                     */
-  --color-line: rgba(0, 0, 0, 0.08);
-  --color-line-strong: rgba(0, 0, 0, 0.15);
+     Navy-tinted hairlines, deliberately weak. Separation comes from surface and
+     space first; a border is the last resort, not the default.               */
+  --color-line: rgba(13, 27, 42, 0.1);
+  --color-line-strong: rgba(13, 27, 42, 0.18);
 
   /* --- Status --------------------------------------------------------------
-     Amber and red only, plus a positive that is NOT the brand yellow — a
-     success mark in brand yellow would be indistinguishable from a call to
-     action.                                                                  */
-  --color-good: #1f7a4d;
-  --color-good-bg: #e9f6ef;
+     A green that is nothing like the brand, a mustard warning, and a red that
+     is deliberately far from the orange — a failure must never be mistakable
+     for a call to action.                                                    */
+  --color-good: #10714a;
+  --color-good-bg: #e8f5ef;
   --color-warn: #8a5a00;
-  --color-warn-bg: #fdf3e2;
-  --color-bad: #b3261e;
-  --color-bad-bg: #fdecea;
+  --color-warn-bg: #fdf4e3;
+  --color-bad: #b00020;
+  --color-bad-bg: #fdeaec;
 
   /* --- Shape ---------------------------------------------------------------
-     Four radii and a pill. Buttons are pills; content is softly rounded; the
-     large panels are rounder still. Nothing is arbitrary.                    */
-  --radius-input: 12px;
-  --radius-card: 14px;
-  --radius-panel: 18px;
-  --radius-sheet: 22px;
+     Four radii and a pill. Tighter than they were: a page of very round cards
+     reads as a template, and the difference between 12px and 18px is the
+     difference between a product and a mood board.                           */
+  --radius-input: 10px;
+  --radius-card: 12px;
+  --radius-panel: 14px;
+  --radius-sheet: 18px;
 
   /* --- Depth ---------------------------------------------------------------
      Almost nothing is raised. Only genuinely floating things — a sticky bar, a
-     carousel control, a dialog — get a shadow, and even then a soft one.      */
-  --shadow-raise: 0 1px 2px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.1);
+     dialog — get a shadow, and even then a soft one.                         */
+  --shadow-raise: 0 1px 2px rgba(13, 27, 42, 0.05);
+  --shadow-float: 0 2px 6px rgba(13, 27, 42, 0.06), 0 12px 28px rgba(13, 27, 42, 0.1);
 
   /* --- Motion --------------------------------------------------------------
-     Fast and short. 120ms for a colour, 200ms for a shape, 260ms for an entry.
+     Fast and short. 120ms for a colour, 200ms for a shape, 240ms for an entry.
      Anything slower reads as lag on the cheap Android these screens run on.   */
   --ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
-  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
 
   /* --- Type scale ----------------------------------------------------------
      A system stack, tuned. No webfont: the marketplace has to paint fast on a
      campus connection, and a 120KB font is a worse trade than a font that is
-     already on the device. The tracking below is what gives large headings the
-     tight, deliberate set the references have.                               */
+     already on the device.                                                   */
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
 }
 
 /* ==========================================================================
-   DARK MODE
-   ==========================================================================
-   Driven ENTIRELY by prefers-color-scheme. There is no toggle and no stored
-   preference: the phone already knows whether its owner wants a dark screen,
-   and a second switch inside one app is a setting people have to find twice.
-
-   Re-points the same tokens. Note what changes and what does not:
-
-   - `brand-500` is UNCHANGED. The golden fill has enough presence on a dark
-     ground, and keeping one button colour across modes is what makes the two
-     read as the same product.
-   - `brand-700` INVERTS in role: on light it is a deep ochre, on dark it is a
-     pale gold. Both are "the accent mark", which is what the token means.
-   - Lines get weaker in absolute terms but stronger in contrast, because a
-     white hairline on near-black is far more visible than a black one on white.
-   - Surfaces step UP in lightness with elevation, the way physical light works
-     — the opposite of the light theme, where raised things go whiter.         */
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-canvas: #0d0d0c;
-    --color-surface: #171716;
-    --color-surface-2: #232322;
-    --color-surface-3: #2e2e2c;
-
-    --color-ink: #f4f4f1;
-    --color-muted: #a3a39c;
-    --color-faint: #74746e;
-
-    --color-line: rgba(255, 255, 255, 0.1);
-    --color-line-strong: rgba(255, 255, 255, 0.18);
-
-    --color-brand-700: #ffd166; /* the accent comes UP on a dark ground */
-    --color-brand-600: #ffc94d;
-    --color-brand-50: #241d08; /* soft accent ground, not a pale wash */
-    --color-brand-100: #33290b;
-
-    --color-good: #5fc98d;
-    --color-good-bg: #10261a;
-    --color-warn: #f0b429;
-    --color-warn-bg: #2a1f08;
-    --color-bad: #ff8a80;
-    --color-bad-bg: #2c1310;
-
-    --shadow-raise: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.45);
-    --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.6);
-  }
-}
-
-:root {
-  /* Tells the browser to render form controls, scrollbars and the like in
-     whichever mode the system is in. There is no manual override anywhere in
-     Campus Dash: the OS preference is the single input. */
-  color-scheme: light dark;
-}
-
-/* ==========================================================================
    BASE
    ========================================================================== */
+
+:root {
+  /* Light, and only light. Form controls, scrollbars and the like render on the
+     same ground as everything else. */
+  color-scheme: light;
+}
 
 body {
   background: var(--color-canvas);
@@ -188,22 +141,20 @@ h3 {
   letter-spacing: -0.02em;
 }
 .text-display {
-  letter-spacing: -0.035em;
-  line-height: 1.02;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
 }
 
-/* ONE focus ring, everywhere, and it is never removed — only replaced. Uses
-   the accent so it reads as part of the brand rather than as a browser default,
-   with a canvas-coloured offset so it stays visible on any surface. */
+/* ONE focus ring, everywhere, and it is never removed — only replaced. */
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-brand-600);
+  outline: 2px solid var(--color-brand-700);
   outline-offset: 2px;
   border-radius: 6px;
 }
 
 ::selection {
-  background: var(--color-brand-200);
-  color: #1a1a19;
+  background: var(--color-brand-100);
+  color: var(--color-ink);
 }
 
 /* ==========================================================================
@@ -216,7 +167,7 @@ h3 {
 @keyframes cd-fade-up {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
@@ -233,7 +184,7 @@ h3 {
 }
 @keyframes cd-sheet-up {
   from {
-    transform: translateY(12px);
+    transform: translateY(10px);
     opacity: 0;
   }
   to {
@@ -248,42 +199,13 @@ h3 {
 }
 
 .animate-fade-up {
-  animation: cd-fade-up 0.26s var(--ease-out-soft) both;
+  animation: cd-fade-up 0.24s var(--ease-out-soft) both;
 }
 .animate-fade {
   animation: cd-fade 0.2s var(--ease-out-soft) both;
 }
 .animate-sheet {
-  animation: cd-sheet-up 0.24s var(--ease-out-soft) both;
-}
-/* Staggered entry for lists. Capped at 8 so a long marketplace never makes the
-   last card wait — the point is rhythm, not a queue. */
-.stagger > * {
-  animation: cd-fade-up 0.26s var(--ease-out-soft) both;
-}
-.stagger > *:nth-child(1) {
-  animation-delay: 0.02s;
-}
-.stagger > *:nth-child(2) {
-  animation-delay: 0.04s;
-}
-.stagger > *:nth-child(3) {
-  animation-delay: 0.06s;
-}
-.stagger > *:nth-child(4) {
-  animation-delay: 0.08s;
-}
-.stagger > *:nth-child(5) {
-  animation-delay: 0.1s;
-}
-.stagger > *:nth-child(6) {
-  animation-delay: 0.12s;
-}
-.stagger > *:nth-child(7) {
-  animation-delay: 0.14s;
-}
-.stagger > *:nth-child(n + 8) {
-  animation-delay: 0.16s;
+  animation: cd-sheet-up 0.22s var(--ease-out-soft) both;
 }
 
 /* The skeleton: a moving highlight over a neutral block. */
@@ -297,13 +219,8 @@ h3 {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
   animation: cd-shimmer 1.4s infinite;
-}
-@media (prefers-color-scheme: dark) {
-  .skeleton::after {
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
-  }
 }
 
 /* Press feedback. Applied to the interactive primitives rather than globally so
@@ -317,7 +234,7 @@ h3 {
     opacity 0.12s var(--ease-out-soft);
 }
 .press:active:not(:disabled) {
-  transform: scale(0.975);
+  transform: scale(0.98);
 }
 .press-sm:active:not(:disabled) {
   transform: scale(0.99);
@@ -360,9 +277,8 @@ h3 {
 }
 
 /* The ground under a vendor photograph, and what shows when there is none.
-   FLAT, deliberately. This began as a radial gradient and read as generated
-   texture rather than design; a single tinted surface with a hairline carries
-   the brand just as well, and stops eight of them in a grid looking like a
+   FLAT, deliberately: a single tinted surface with a hairline carries the brand
+   as well as a gradient would, and stops eight of them in a grid looking like a
    lighting effect. */
 .image-ground {
   background: var(--color-brand-50);

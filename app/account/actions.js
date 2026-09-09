@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { partnerSetAvailability } from '@/lib/orders/transitions';
 import { setMyEmail } from '@/lib/customer';
+import { createClient } from '@/lib/supabase/server';
 import { actionFailure } from '@/lib/errors';
 
 /**
@@ -28,6 +29,33 @@ export async function saveMyEmail(_prev, formData) {
 
   try {
     await setMyEmail(email);
+  } catch (error) {
+    return actionFailure(error, 'account');
+  }
+
+  revalidatePath('/account');
+  return { ok: true, message: 'Saved.' };
+}
+
+/**
+ * The account holder's own name.
+ *
+ * A last name is optional and a first name is not, because the first name is
+ * what the product actually uses — it is how a customer is told who is bringing
+ * their order, and how a Partner is told who they are meeting.
+ */
+export async function saveMyName(_prev, formData) {
+  const firstName = String(formData.get('first_name') ?? '').trim();
+  const lastName = String(formData.get('last_name') ?? '').trim();
+  if (!firstName) return { ok: false, message: 'Enter your first name.' };
+
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.rpc('update_my_profile', {
+      p_first_name: firstName,
+      p_last_name: lastName || null,
+    });
+    if (error) throw new Error(error.message);
   } catch (error) {
     return actionFailure(error, 'account');
   }

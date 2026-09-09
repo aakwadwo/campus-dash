@@ -8,11 +8,20 @@ the database, not in transit, not in a price input box.
 ```
 customer pays TOTAL
       │
-      ├── VENDOR    = food subtotal          → settled DAILY
+      ├── VENDOR    = food subtotal    → SPLIT at the charge, or settled DAILY
       ├── PLATFORM  = service fee (+ delivery fee until a Partner earns it)
-      └── PARTNER   = delivery fee           → settled WEEKLY
+      └── PARTNER   = delivery fee     → settled WEEKLY, by transfer
                        carved out of PLATFORM at the moment of delivery
 ```
+
+**Two channels, and `allocations.settlement_channel` says which one a row used.**
+A vendor with a registered Paystack subaccount is paid by Paystack as the
+customer pays: their share is split off the charge and never enters the Campus
+Dash balance, so their allocation is born `SETTLED` and no payout run can claim
+it. A vendor without one is settled by the daily run, exactly as before. Both are
+on the ledger at the same amount; only the route differs. See `docs/PAYMENTS.md`.
+
+The Partner is always a transfer, and cannot be otherwise — see below.
 
 Worked example — 2 × GH₵35 jollof, GH₵3 water, delivered:
 
@@ -39,13 +48,22 @@ that is an odd multiple of ten pesewas lands exactly on half a pesewa, and
 half-up sends it to the customer rather than quietly to Campus Dash. See
 `tests/service-fee.test.js`.
 
-## Why the Partner allocation arrives late
+## Why the Partner allocation arrives late, and why it cannot be split
 
 At payment time **no Partner exists** — dispatch has not even opened. So payment
 writes two rows (`VENDOR`, `PLATFORM`), and `settle_partner_earnings()` carves
 the Partner's share out of the platform row when a real Partner has actually
-earned it. Both writes are one transaction, so the deferred
-`allocations_must_balance` trigger never sees a torn state.
+earned it.
+
+That is also the whole reason the Partner is absent from every Paystack split. A
+split is fixed when the charge is created, and at that moment there is nobody to
+name. The alternatives are both worse than a weekly transfer: charging after
+assignment would mean the kitchen starts before anyone has paid, and there is no
+supported way to add a subaccount to a transaction Paystack has already
+processed.
+
+Both writes are one transaction, so the deferred `allocations_must_balance`
+trigger never sees a torn state.
 
 That trigger is the money invariant: **allocations for an order must sum to the
 order total, or the transaction does not commit.** It works well enough that the
@@ -62,6 +80,10 @@ somebody twice:
 2. claimed allocations are gone, so a second run finds nothing;
 3. `payouts_run_payee_unique` refuses a duplicate payout;
 4. the transfer carries the payout's own idempotency key.
+
+A run claims only `ELIGIBLE` allocations, which is what keeps split settlement
+and payout settlement from ever paying the same money twice: an allocation
+Paystack already routed is written `SETTLED`, and `SETTLED` is not `ELIGIBLE`.
 
 Transfers go through `PaymentProvider.sendTransfer()`.
 
@@ -102,6 +124,42 @@ them; `create_settlement_run` refuses it outright.
 **Campus Dash does not run a vendor wallet.** A vendor sees earned / awaiting /
 settled and their past settlements — never a stored balance implying we are
 holding their money.
+
+## The Partner weekly payout policy
+
+A Partner earns **GH₵5** per completed delivery and is paid **weekly**, once
+their available earnings reach **GH₵20**
+(`pricing_config.partner_min_payout_pesewas`, editable at `/admin/pilot`).
+
+| Balance at the run | What happens                                       |
+| ------------------ | -------------------------------------------------- |
+| GH₵5 / 10 / 15     | Held. Carried forward to the next weekly cycle.    |
+| GH₵20              | Paid.                                              |
+| GH₵35              | **All GH₵35** is paid, not GH₵20 with a remainder. |
+
+**"Carried forward" has to mean owed and reachable.** `create_settlement_run()`
+claims the allocations, then RELEASES the claim for any payee under the
+threshold _inside the same transaction_ — so the money is owed again the moment
+the run returns and the next run sweeps it. The failure this prevents is the one
+where a run claims money, declines to send it, and leaves it attached to a
+payout nothing will ever process: owed to nobody, invisible to every later run.
+`tests/partner-payouts.test.js` asks "where is the money now" after every
+scenario for exactly that reason.
+
+**Two thresholds, deliberately.** Vendors settle by Paystack split at the moment
+of the charge; the vendor run is a fallback for stores with no subaccount, and
+holding a small store's food money for a week would be wrong. So
+`partner_min_payout_pesewas` is a Partner policy and `min_payout_pesewas` is the
+general floor. `payout_threshold_for()` is the one function that decides which
+applies, so a dashboard and a run can never disagree.
+
+**What a Partner is told, and what they are not.** The dashboard states the
+policy: earnings accumulate, payouts run weekly, a balance under GH₵20 carries
+forward. It never mentions a payment provider or a provider minimum. Those are
+Campus Dash's constraints to work within, not an explanation owed to somebody
+who has done the work — and `my_partner_payouts()` deliberately returns no
+provider failure text, mapping FAILED to "processing" because a failed transfer
+puts the money straight back into the next run.
 
 ## Reconciliation
 
