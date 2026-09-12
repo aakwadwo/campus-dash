@@ -34,12 +34,71 @@ export const dynamic = 'force-dynamic';
  */
 
 /**
- * Bounds the provider call so the whole handler answers inside Supabase's five
- * seconds. Arkesel normally responds in well under a second; if it does not,
- * failing fast and letting Supabase retry beats holding the budget open until
- * it expires and the customer is told nothing at all.
+ * Supabase's whole budget for this hook, from the moment IT dispatched the
+ * request — not from the moment this handler started running.
  */
-const PROVIDER_TIMEOUT_MS = 3500;
+const HOOK_DEADLINE_MS = 5000;
+
+/**
+ * Held back for reading the body, verifying the HMAC, serialising the response
+ * and getting it back over the wire. Generous on purpose: answering late is the
+ * one outcome with no recovery, because Supabase stops listening.
+ */
+const RESPONSE_RESERVE_MS = 700;
+
+/** Never hand the provider more than this, however much budget is left. */
+const PROVIDER_TIMEOUT_CEILING_MS = 4000;
+
+/**
+ * Below this there is not enough time left for Arkesel to answer, so spending
+ * what remains only guarantees a late response. Give up immediately instead and
+ * return the retryable status — Supabase's own retry lands on a warm function
+ * with a full budget, which is the attempt most likely to succeed.
+ */
+const PROVIDER_TIMEOUT_FLOOR_MS = 1200;
+
+/**
+ * How long the provider may take, measured against SUPABASE'S clock.
+ *
+ * THIS IS THE FIX, AND IT IS NOT "3500 BECAME A BIGGER NUMBER".
+ *
+ * The old budget was a flat 3500ms measured from the first line of this
+ * handler. That silently assumed the handler starts the instant Supabase sends
+ * the request, and on a cold Vercel invocation it does not — so the true
+ * elapsed time was cold start PLUS 3500ms PLUS the response, which is how a
+ * hook whose own timeout fired at 3.5s still produced "Failed to reach hook
+ * within maximum time of 5.000000 seconds" in production. Both log lines were
+ * true at once, which is what made it confusing.
+ *
+ * Standard Webhooks puts the dispatch time in `webhook-timestamp`, so the
+ * remaining budget is a fact we can read rather than a number we guess. When
+ * the header is missing or implausible (clock skew, a replay, a test) this
+ * falls back to measuring from when the handler started, which is the old
+ * behaviour and never worse than it.
+ *
+ * Note what this deliberately does NOT do: it does not make Arkesel faster and
+ * does not pretend a message was accepted. It makes the handler ANSWER IN TIME,
+ * so a slow send becomes a retry Supabase will actually make instead of a
+ * deadline nobody hears about.
+ */
+function providerBudgetMs({ dispatchedAt, handlerStartedAt, now = Date.now() }) {
+  const startedCountingAt =
+    Number.isFinite(dispatchedAt) && dispatchedAt > 0 && dispatchedAt <= now
+      ? dispatchedAt
+      : handlerStartedAt;
+
+  const remaining = HOOK_DEADLINE_MS - (now - startedCountingAt) - RESPONSE_RESERVE_MS;
+  return Math.min(remaining, PROVIDER_TIMEOUT_CEILING_MS);
+}
+
+/**
+ * When Supabase says it sent this, in milliseconds. Standard Webhooks carries
+ * SECONDS since the epoch; anything else is treated as absent.
+ */
+function dispatchedAtFrom(headers) {
+  const raw = Number(headers.get('webhook-timestamp'));
+  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : null;
+}
 
 export async function POST(request) {
   const receivedAt = Date.now();
@@ -123,12 +182,31 @@ export async function POST(request) {
     msgLen: message.length,
   });
 
+  // What is genuinely left of Supabase's five seconds, not what was left when
+  // this file was written. See providerBudgetMs().
+  const budgetMs = providerBudgetMs({
+    dispatchedAt: dispatchedAtFrom(request.headers),
+    handlerStartedAt: receivedAt,
+  });
+
+  if (budgetMs < PROVIDER_TIMEOUT_FLOOR_MS) {
+    // Too little left to be worth spending. Answering NOW is what keeps the
+    // documented retry available; spending the remainder would answer late, and
+    // a late answer is one Supabase has already stopped waiting for.
+    console.error(
+      `[send-sms-hook] only ${Math.round(budgetMs)}ms of the hook budget left on arrival — ` +
+        'asking Supabase to retry rather than answering late'
+    );
+    trace('budget.exhausted', { budgetMs: Math.round(budgetMs) });
+    return retryable('could not deliver verification code');
+  }
+
   let result;
   try {
-    trace('provider.start');
+    trace('provider.start', { budgetMs: Math.round(budgetMs) });
     result = await provider.send(phone, message, {
       tag: 'AUTH_OTP',
-      timeoutMs: PROVIDER_TIMEOUT_MS,
+      timeoutMs: Math.round(budgetMs),
       trace,
     });
     trace('provider.done', {

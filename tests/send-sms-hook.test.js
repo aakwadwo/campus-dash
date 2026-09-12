@@ -124,6 +124,127 @@ describe('Send SMS Hook → Arkesel', () => {
     assert.equal(seenSignal instanceof AbortSignal, true);
   });
 
+  /**
+   * THE PRODUCTION FAILURE, as a test.
+   *
+   * Supabase's five seconds start when IT dispatches, not when this handler
+   * starts running. A cold Vercel invocation can eat seconds of that before a
+   * line of our code executes, and the old flat 3500ms budget was measured from
+   * our own first line — so the handler spent 3.5s it did not have and answered
+   * after the deadline. Production logged both halves of that at once:
+   * "Arkesel did not respond within 3500ms" from us, and "Failed to reach hook
+   * within maximum time of 5.000000 seconds" from Supabase.
+   *
+   * The budget now comes from `webhook-timestamp`, so a request that arrives
+   * late is answered immediately with the retryable status instead of spending
+   * a budget that has already gone.
+   */
+  test('a request that arrives with almost no budget left is not spent on Arkesel', async () => {
+    mockArkesel();
+
+    const body = otpPayload();
+    // Dispatched 4.5 seconds ago: inside the replay tolerance, but past the
+    // point where Arkesel could answer before Supabase stops listening.
+    const timestamp = Math.floor(Date.now() / 1000) - 5;
+    const response = await POST(
+      hookRequest(body, signWebhook({ body, secret: SECRET, timestamp }))
+    );
+
+    assert.equal(response.status, 503, 'a late arrival must ask for the retry, not answer late');
+    assert.equal(response.headers.get('retry-after'), '2');
+    assert.equal(arkeselCalls.length, 0, 'no point calling Arkesel with no budget left');
+  });
+
+  test('a request with budget to spare does reach Arkesel', async () => {
+    mockArkesel();
+
+    const body = otpPayload();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const response = await POST(
+      hookRequest(body, signWebhook({ body, secret: SECRET, timestamp }))
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(arkeselCalls.length, 1, 'a fresh request must still be sent');
+  });
+
+  /**
+   * Arkesel taking longer than the budget is the ordinary slow case, and it
+   * must come back as the retryable shape rather than a hard failure — a retry
+   * lands on a warm function with a full five seconds, which is the attempt
+   * most likely to succeed.
+   */
+  test('an Arkesel timeout asks Supabase to retry', async () => {
+    mockArkesel(() => {
+      const error = new Error('The operation was aborted due to timeout');
+      error.name = 'TimeoutError';
+      return error;
+    });
+
+    const body = otpPayload();
+    const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('retry-after'), '2');
+  });
+
+  /**
+   * A gateway HTML page instead of JSON. Treated as transient because that is
+   * what it almost always is, and it must never crash the handler — a throw
+   * here is a 500 with no retry and a customer who is told nothing.
+   */
+  test('a non-JSON Arkesel response is handled and asks for a retry', async () => {
+    mockArkesel(() => ({ status: 502, body: undefined }));
+    globalThis.fetch = async (url, init) => {
+      arkeselCalls.push({ url: String(url), init });
+      return { status: 502, text: async () => '<html><body>Bad Gateway</body></html>' };
+    };
+
+    const body = otpPayload();
+    const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+
+    assert.equal(response.status, 503, 'a gateway page is transient');
+    assert.equal(response.headers.get('retry-after'), '2');
+  });
+
+  /**
+   * Supabase's documented contract: JSON, and only a status it understands.
+   * Anything else surfaces to the customer as a bare 500.
+   */
+  test('every outcome answers with JSON and a status Supabase understands', async () => {
+    const outcomes = [
+      ['accepted', () => ({ code: 'ok', message: 'Successfully Sent' })],
+      ['rejected', () => ({ code: '105', message: 'Insufficient balance' })],
+      [
+        'timed out',
+        () => {
+          const e = new Error('aborted');
+          e.name = 'TimeoutError';
+          return e;
+        },
+      ],
+    ];
+
+    for (const [label, responder] of outcomes) {
+      arkeselCalls = [];
+      mockArkesel(responder);
+
+      const body = otpPayload();
+      const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+
+      assert.match(
+        response.headers.get('content-type') ?? '',
+        /application\/json/,
+        `${label}: Supabase requires JSON`
+      );
+      assert.ok(
+        [200, 202, 204, 500, 503].includes(response.status),
+        `${label}: ${response.status} is not a status the hook contract allows`
+      );
+      await response.json();
+    }
+  });
+
   test('an unsigned request is refused and Arkesel is never called', async () => {
     mockArkesel();
     const response = await POST(hookRequest(otpPayload(), {}));
