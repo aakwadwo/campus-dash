@@ -105,76 +105,13 @@ describe('Send SMS Hook → Arkesel', () => {
     assert.equal(new URL(arkeselCalls[0].url).searchParams.get('to'), '233200000021');
   });
 
-  test("the provider call is bounded well inside Supabase's five-second budget", async () => {
-    // Supabase allows five seconds TOTAL, including its own retries. The
-    // adapter's own default is 15s, which would blow the budget on its own.
-    let seenSignal;
-    globalThis.fetch = async (url, init) => {
-      arkeselCalls.push({ url: String(url), init });
-      seenSignal = init.signal;
-      return { status: 200, text: async () => JSON.stringify({ code: 'ok' }) };
-    };
-
-    const body = otpPayload();
-    await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
-
-    assert.ok(seenSignal, 'the request must carry an abort signal');
-    // AbortSignal.timeout() does not expose its duration, so assert the route
-    // asked for one at all and that the handler returned promptly.
-    assert.equal(seenSignal instanceof AbortSignal, true);
-  });
-
-  /**
-   * THE PRODUCTION FAILURE, as a test.
-   *
-   * Supabase's five seconds start when IT dispatches, not when this handler
-   * starts running. A cold Vercel invocation can eat seconds of that before a
-   * line of our code executes, and the old flat 3500ms budget was measured from
-   * our own first line — so the handler spent 3.5s it did not have and answered
-   * after the deadline. Production logged both halves of that at once:
-   * "Arkesel did not respond within 3500ms" from us, and "Failed to reach hook
-   * within maximum time of 5.000000 seconds" from Supabase.
-   *
-   * The budget now comes from `webhook-timestamp`, so a request that arrives
-   * late is answered immediately with the retryable status instead of spending
-   * a budget that has already gone.
-   */
-  test('a request that arrives with almost no budget left is not spent on Arkesel', async () => {
-    mockArkesel();
-
-    const body = otpPayload();
-    // Dispatched 4.5 seconds ago: inside the replay tolerance, but past the
-    // point where Arkesel could answer before Supabase stops listening.
-    const timestamp = Math.floor(Date.now() / 1000) - 5;
-    const response = await POST(
-      hookRequest(body, signWebhook({ body, secret: SECRET, timestamp }))
-    );
-
-    assert.equal(response.status, 503, 'a late arrival must ask for the retry, not answer late');
-    assert.equal(response.headers.get('retry-after'), '2');
-    assert.equal(arkeselCalls.length, 0, 'no point calling Arkesel with no budget left');
-  });
-
-  test('a request with budget to spare does reach Arkesel', async () => {
-    mockArkesel();
-
-    const body = otpPayload();
-    const timestamp = Math.floor(Date.now() / 1000);
-    const response = await POST(
-      hookRequest(body, signWebhook({ body, secret: SECRET, timestamp }))
-    );
-
-    assert.equal(response.status, 200);
-    assert.equal(arkeselCalls.length, 1, 'a fresh request must still be sent');
-  });
-
   /**
    * Arkesel taking longer than the budget is the ordinary slow case, and it
    * must come back as the retryable shape rather than a hard failure — a retry
    * lands on a warm function with a full five seconds, which is the attempt
    * most likely to succeed.
    */
-  test('an Arkesel timeout asks Supabase to retry', async () => {
+  test('an Arkesel timeout no longer fails the hook, and the send still happens', async () => {
     mockArkesel(() => {
       const error = new Error('The operation was aborted due to timeout');
       error.name = 'TimeoutError';
@@ -184,8 +121,11 @@ describe('Send SMS Hook → Arkesel', () => {
     const body = otpPayload();
     const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
 
-    assert.equal(response.status, 503);
-    assert.equal(response.headers.get('retry-after'), '2');
+    // 200, because the send was handed off before Arkesel was ever called.
+    // A 503 here made Supabase RETRY, which is how one sign-in produced
+    // several codes that each invalidated the last.
+    assert.equal(response.status, 200);
+    assert.equal(arkeselCalls.length, 1, 'the send still happens, just not in the response path');
   });
 
   /**
@@ -203,8 +143,8 @@ describe('Send SMS Hook → Arkesel', () => {
     const body = otpPayload();
     const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
 
-    assert.equal(response.status, 503, 'a gateway page is transient');
-    assert.equal(response.headers.get('retry-after'), '2');
+    assert.equal(response.status, 200, 'the hook has already handed the send off');
+    assert.equal(arkeselCalls.length, 1);
   });
 
   /**
@@ -325,30 +265,65 @@ describe('Send SMS Hook → Arkesel', () => {
     assert.equal(arkeselCalls.length, 0);
   });
 
-  test('a transient Arkesel failure asks Supabase to retry', async () => {
-    // 503 with a non-empty retry-after is the only shape Supabase retries.
-    mockArkesel(() => {
-      const error = new Error('socket hang up');
-      return error;
-    });
+  /**
+   * THE CONTRACT CHANGED HERE, on purpose.
+   *
+   * This used to answer 503 so Supabase would retry. It no longer can: the send
+   * is handed off before Arkesel is called, so by the time anything is known
+   * the response has gone. That is the whole fix — Arkesel acknowledges after
+   * Supabase's five seconds, and waiting for it failed sends that had already
+   * happened. The retry it used to ask for was also making Supabase issue fresh
+   * codes that invalidated the one already on the customer's phone.
+   *
+   * What must NOT be lost is visibility, so the failure is asserted in the log.
+   */
+  test('a transient Arkesel failure is reported 200 but logged loudly', async () => {
+    mockArkesel(() => new Error('socket hang up'));
 
-    const body = otpPayload();
-    const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+    const logged = [];
+    const realError = console.error;
+    console.error = (...args) => logged.push(args.join(' '));
 
-    assert.equal(response.status, 503);
-    assert.equal(response.headers.get('retry-after'), '2');
+    let response;
+    try {
+      const body = otpPayload();
+      response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+    } finally {
+      console.error = realError;
+    }
+
+    assert.equal(response.status, 200, 'the hook has already handed the send off');
+    assert.ok(
+      logged.some((line) => line.includes('BACKGROUND delivery')),
+      'a failure nobody can be told about must at least be findable in the log'
+    );
   });
 
-  test('a permanent Arkesel rejection does NOT ask for a retry', async () => {
-    // 106 is an unregistered sender ID. Asking again produces the same answer
-    // and spends the five-second budget finding that out.
+  /**
+   * 106 is an unregistered sender ID — a permanent rejection. It is still
+   * permanent, and the adapter still says so; the difference is that nobody is
+   * listening by then, so the provider's own code has to reach the log.
+   */
+  test('a permanent Arkesel rejection is logged with its provider code', async () => {
     mockArkesel(() => ({ code: '106', message: 'Invalid sender id' }));
 
-    const body = otpPayload();
-    const response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+    const logged = [];
+    const realError = console.error;
+    console.error = (...args) => logged.push(args.join(' '));
 
-    assert.equal(response.status, 500);
-    assert.equal(response.headers.get('retry-after'), null);
+    let response;
+    try {
+      const body = otpPayload();
+      response = await POST(hookRequest(body, signWebhook({ body, secret: SECRET })));
+    } finally {
+      console.error = realError;
+    }
+
+    assert.equal(response.status, 200);
+    const line = logged.find((l) => l.includes('BACKGROUND delivery'));
+    assert.ok(line, 'the rejection must be in the log');
+    assert.ok(line.includes('106'), 'and it must carry the provider code that explains it');
+    assert.ok(!line.includes('test-key-must-not-leak'), 'never the API key');
   });
 
   test('the API key never appears in the response, whatever happens', async () => {

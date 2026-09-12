@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/auth/webhook-signature';
 import { getSmsProvider, normaliseGhanaPhone } from '@/lib/sms';
 import { config } from '@/lib/config';
@@ -34,70 +34,37 @@ export const dynamic = 'force-dynamic';
  */
 
 /**
- * Supabase's whole budget for this hook, from the moment IT dispatched the
- * request — not from the moment this handler started running.
+ * How long the background Arkesel call may take.
+ *
+ * NOT a slice of Supabase's five seconds any more. The response has already
+ * gone by the time this is used, so the only thing this bounds is how long a
+ * stuck request may hold the invocation open. Arkesel answers in one to four
+ * seconds in practice; fifteen is the adapter's own default and is generous
+ * enough that a slow-but-successful send completes rather than being cut off,
+ * which is the failure this whole change exists to stop.
  */
-const HOOK_DEADLINE_MS = 5000;
+const BACKGROUND_TIMEOUT_MS = 15_000;
 
 /**
- * Held back for reading the body, verifying the HMAC, serialising the response
- * and getting it back over the wire. Generous on purpose: answering late is the
- * one outcome with no recovery, because Supabase stops listening.
- */
-const RESPONSE_RESERVE_MS = 700;
-
-/** Never hand the provider more than this, however much budget is left. */
-const PROVIDER_TIMEOUT_CEILING_MS = 4000;
-
-/**
- * Below this there is not enough time left for Arkesel to answer, so spending
- * what remains only guarantees a late response. Give up immediately instead and
- * return the retryable status — Supabase's own retry lands on a warm function
- * with a full budget, which is the attempt most likely to succeed.
- */
-const PROVIDER_TIMEOUT_FLOOR_MS = 1200;
-
-/**
- * How long the provider may take, measured against SUPABASE'S clock.
+ * Hands work off to run after the response has been sent.
  *
- * THIS IS THE FIX, AND IT IS NOT "3500 BECAME A BIGGER NUMBER".
+ * after() is the whole point of this route's design, but it THROWS when there
+ * is no request scope around it — a direct invocation, or a runtime that does
+ * not provide one. An exception there would turn a working send into a 500 and
+ * no SMS at all, which is a far worse failure than the one being fixed, so the
+ * fallback runs the same work inline and returns its promise.
  *
- * The old budget was a flat 3500ms measured from the first line of this
- * handler. That silently assumed the handler starts the instant Supabase sends
- * the request, and on a cold Vercel invocation it does not — so the true
- * elapsed time was cold start PLUS 3500ms PLUS the response, which is how a
- * hook whose own timeout fired at 3.5s still produced "Failed to reach hook
- * within maximum time of 5.000000 seconds" in production. Both log lines were
- * true at once, which is what made it confusing.
- *
- * Standard Webhooks puts the dispatch time in `webhook-timestamp`, so the
- * remaining budget is a fact we can read rather than a number we guess. When
- * the header is missing or implausible (clock skew, a replay, a test) this
- * falls back to measuring from when the handler started, which is the old
- * behaviour and never worse than it.
- *
- * Note what this deliberately does NOT do: it does not make Arkesel faster and
- * does not pretend a message was accepted. It makes the handler ANSWER IN TIME,
- * so a slow send becomes a retry Supabase will actually make instead of a
- * deadline nobody hears about.
+ * The fallback is not a second code path in production: on Vercel, inside a
+ * real request, after() always applies. It matters because whatever calls this
+ * route directly is not Supabase and has no five-second budget to protect.
  */
-function providerBudgetMs({ dispatchedAt, handlerStartedAt, now = Date.now() }) {
-  const startedCountingAt =
-    Number.isFinite(dispatchedAt) && dispatchedAt > 0 && dispatchedAt <= now
-      ? dispatchedAt
-      : handlerStartedAt;
-
-  const remaining = HOOK_DEADLINE_MS - (now - startedCountingAt) - RESPONSE_RESERVE_MS;
-  return Math.min(remaining, PROVIDER_TIMEOUT_CEILING_MS);
-}
-
-/**
- * When Supabase says it sent this, in milliseconds. Standard Webhooks carries
- * SECONDS since the epoch; anything else is treated as absent.
- */
-function dispatchedAtFrom(headers) {
-  const raw = Number(headers.get('webhook-timestamp'));
-  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : null;
+function schedule(work) {
+  try {
+    after(work);
+    return null;
+  } catch {
+    return work();
+  }
 }
 
 export async function POST(request) {
@@ -182,76 +149,63 @@ export async function POST(request) {
     msgLen: message.length,
   });
 
-  // What is genuinely left of Supabase's five seconds, not what was left when
-  // this file was written. See providerBudgetMs().
-  const budgetMs = providerBudgetMs({
-    dispatchedAt: dispatchedAtFrom(request.headers),
-    handlerStartedAt: receivedAt,
+  // THE HANDOFF. Everything that can be judged has been judged: the signature
+  // is verified, the payload is well formed, the number is sendable and the
+  // message is built. What remains is one HTTP call whose ANSWER Supabase does
+  // not need and cannot wait for.
+  //
+  // Arkesel accepts and delivers the message but acknowledges it after
+  // Supabase's five seconds — measured at 3856ms against a 3856ms budget in
+  // production, with the SMS arriving anyway. Waiting for that acknowledgement
+  // was failing a send that had already happened, and the 503 it returned made
+  // Supabase RETRY, which is how one sign-in produced several codes that each
+  // invalidated the last.
+  //
+  // after() runs the call once the response has been sent, in the same
+  // invocation, which Vercel keeps alive for exactly this. Supabase gets its
+  // 2xx inside the budget; Arkesel gets as long as it needs.
+  const inline = schedule(async () => {
+    try {
+      trace('provider.start', { background: true, timeoutMs: BACKGROUND_TIMEOUT_MS });
+      const result = await provider.send(phone, message, {
+        tag: 'AUTH_OTP',
+        // No longer racing Supabase, so the provider gets a realistic bound
+        // rather than whatever was left of a budget it could never meet.
+        timeoutMs: BACKGROUND_TIMEOUT_MS,
+        trace,
+      });
+
+      if (result.ok) {
+        trace('provider.done', { ok: true, elapsedMs: result.elapsedMs, balance: result.balance });
+        return;
+      }
+
+      // THE ONE THING THIS COSTS US, stated plainly rather than buried: the
+      // response has already gone, so a rejection here cannot be told to
+      // Supabase or to the person waiting. It has to be findable in the log,
+      // because the log is now the only place it exists. The provider's own
+      // message never contains the API key or the request URL — see
+      // lib/sms/arkesel.js.
+      console.error(
+        `[send-sms-hook] BACKGROUND delivery failed after responding 200: ${result.error}` +
+          (result.providerCode ? ` (provider code ${result.providerCode})` : '') +
+          ` — the customer is waiting for a code that will not arrive; they can use Resend`
+      );
+      trace('provider.failed', { background: true, code: result.providerCode });
+    } catch (error) {
+      console.error(
+        `[send-sms-hook] BACKGROUND delivery threw after responding 200: ${error.message}`
+      );
+      trace('provider.threw', { background: true });
+    }
   });
 
-  if (budgetMs < PROVIDER_TIMEOUT_FLOOR_MS) {
-    // Too little left to be worth spending. Answering NOW is what keeps the
-    // documented retry available; spending the remainder would answer late, and
-    // a late answer is one Supabase has already stopped waiting for.
-    console.error(
-      `[send-sms-hook] only ${Math.round(budgetMs)}ms of the hook budget left on arrival — ` +
-        'asking Supabase to retry rather than answering late'
-    );
-    trace('budget.exhausted', { budgetMs: Math.round(budgetMs) });
-    return retryable('could not deliver verification code');
-  }
+  // Only ever set by the no-request-scope fallback above; in production this is
+  // null and the response goes out while Arkesel is still being called.
+  if (inline) await inline;
 
-  let result;
-  try {
-    trace('provider.start', { budgetMs: Math.round(budgetMs) });
-    result = await provider.send(phone, message, {
-      tag: 'AUTH_OTP',
-      timeoutMs: Math.round(budgetMs),
-      trace,
-    });
-    trace('provider.done', {
-      ok: result.ok,
-      code: result.providerCode,
-      elapsedMs: result.elapsedMs,
-      balance: result.balance,
-    });
-  } catch (error) {
-    // A provider that throws rather than returning. Treated as transient: we
-    // genuinely do not know whether the message went out.
-    console.error('[send-sms-hook] provider threw:', error.message);
-    trace('provider.threw');
-    return retryable('could not deliver verification code');
-  }
-
-  if (!result.ok) {
-    // The provider's own message, which never contains the API key or the
-    // request URL — see lib/sms/arkesel.js.
-    console.error(`[send-sms-hook] delivery failed: ${result.error}`);
-    trace('respond', { status: result.retryable ? 503 : 500, retryable: result.retryable });
-
-    // Asking again only helps when the failure was transient. A rejected sender
-    // ID or an unreachable number produces the same answer every time, and
-    // retrying it just burns the five-second budget before Supabase gives up.
-    return result.retryable
-      ? retryable('could not deliver verification code')
-      : NextResponse.json(
-          { error: { http_code: 500, message: 'could not deliver verification code' } },
-          { status: 500 }
-        );
-  }
-
-  // No output is required; an empty 200 is a successful response.
-  trace('respond', { status: 200 });
+  // Supabase's contract is a 2xx with a JSON body, and nothing about the
+  // provider. No output is required; an empty 200 is a successful response.
+  trace('respond', { status: 200, handedOff: true });
   return NextResponse.json({});
-}
-
-/**
- * A 503 with a non-empty retry-after is the only shape Supabase will retry.
- * Two seconds is its own backoff, and three retries still fit the budget.
- */
-function retryable(message) {
-  return NextResponse.json(
-    { error: { http_code: 503, message } },
-    { status: 503, headers: { 'retry-after': '2' } }
-  );
 }
