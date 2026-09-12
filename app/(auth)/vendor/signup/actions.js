@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { actionFailure } from '@/lib/errors';
 import { signUp } from '@/lib/vendor';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { isOtpShape } from '@/lib/auth/customer-signup';
 
 const CONTEXT = 'vendor sign-up';
@@ -54,6 +55,44 @@ function collect(formData) {
  */
 function at(state) {
   return { ...state, at: Date.now() };
+}
+
+/**
+ * Who, if anyone, already holds this number.
+ *
+ * ONE PERSON, ONE IDENTITY, ONE PHONE. `users_phone_key` says a number backs a
+ * single identity, and that is the model — capabilities stack on one
+ * auth.users.id rather than each getting an account of its own.
+ *
+ * A customer signs in by EMAIL and gives their phone as a profile field, so
+ * public.users.phone holds it while auth.users.phone is NULL. Asking Supabase
+ * for a phone OTP therefore found no identity and made a SECOND one, and
+ * confirming it collided with the customer's row — the production 500.
+ *
+ * The service-role client is required because this reads a row belonging to
+ * somebody who is not signed in. It returns an id and nothing else: no name, no
+ * email, nothing that would turn this into a way to enumerate who banks where.
+ */
+async function identityHoldingPhone(phone) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.from('users').select('id').eq('phone', phone).maybeSingle();
+
+  if (error) {
+    console.error('[vendor-signup] could not check the phone number:', error.message);
+    // Unknown is not "free". Treating a failed lookup as "nobody has it" is how
+    // the second identity got created in the first place.
+    return { unknown: true, id: null };
+  }
+  return { unknown: false, id: data?.id ?? null };
+}
+
+/** The signed-in account, or null. Never trusted for authority — only identity. */
+async function currentUserId() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user?.id ?? null;
 }
 
 /** The number that received the code: the carried one, else the typed one. */
@@ -113,6 +152,62 @@ export async function startVendorSignUpAction(_prev, formData) {
   if (!phone) return fail('Enter a valid Ghanaian phone number, e.g. 020 123 4567.');
 
   if (!d.accepted) return fail('You must accept the vendor terms to continue.');
+
+  // ---------------------------------------------------------------------
+  // ONE IDENTITY PER NUMBER. Decided BEFORE any code is sent, because sending
+  // one is what used to create the second identity.
+  // ---------------------------------------------------------------------
+  const holder = await identityHoldingPhone(phone);
+
+  if (holder.unknown) {
+    return fail('We could not check that number just now. Try again shortly.');
+  }
+
+  if (holder.id) {
+    const me = await currentUserId();
+
+    if (me === holder.id) {
+      // ALREADY SIGNED IN AS THE PERSON WHO OWNS THIS NUMBER, so there is
+      // nothing left to prove: the session is the proof, and the number is
+      // already on their profile. vendor_signup() reads the phone from that
+      // profile row, so the store attaches to the identity they already have —
+      // no second account, no second credential, customer data untouched.
+      try {
+        const { data: terms } = await (
+          await createClient()
+        ).rpc('current_terms', {
+          p_audience: 'VENDOR',
+        });
+        const termsId = (Array.isArray(terms) ? terms[0] : terms)?.terms_id;
+
+        await signUp({
+          applicantName: d.applicantName,
+          storeName: d.storeName,
+          isStudent: d.isStudent === 'yes',
+          description: d.description,
+          categoryId: d.categoryId,
+          termsId,
+        });
+      } catch (error) {
+        return fail(actionFailure(error, CONTEXT).message);
+      }
+
+      revalidatePath('/', 'layout');
+      redirect('/vendor/application');
+    }
+
+    // Somebody else's number, or nobody is signed in. NOT refused outright —
+    // it is very probably their own account — but the way in is the credential
+    // that account already has, not a second one minted here. Sending an OTP
+    // would create the duplicate identity; attaching this number to their auth
+    // record so an OTP could reach them would be worse, because a profile phone
+    // is self-declared and unverified, and whoever holds the handset would then
+    // be able to sign in as them.
+    return fail(
+      'That number is already on a Campus Dash account. Sign in with it first, then register ' +
+        'your store from your account — it keeps everything on one login.'
+    );
+  }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithOtp({ phone });

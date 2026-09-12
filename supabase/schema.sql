@@ -5238,39 +5238,21 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-declare
-  v_phone text;
 begin
-  -- Only CONFIRMED contact details get a profile. GoTrue inserts the auth.users
-  -- row when a code is first requested, before anything is proven — creating a
-  -- profile then would let anyone claim a phone number or address they do not
-  -- own simply by asking for a code.
   if new.phone_confirmed_at is null and new.email_confirmed_at is null then
     return new;
   end if;
 
-  -- GoTrue stores phone numbers without the leading '+'. Our E.164 check
-  -- requires it.
-  v_phone := nullif(new.phone, '');
-  if v_phone is not null and left(v_phone, 1) <> '+' then
-    v_phone := '+' || v_phone;
-  end if;
-
-  insert into public.users (id, phone, email, full_name)
-  values (
-    new.id,
-    case when new.phone_confirmed_at is not null then v_phone end,
-    case when new.email_confirmed_at is not null then lower(nullif(new.email, '')) end,
-    nullif(btrim(coalesce(new.raw_user_meta_data ->> 'full_name', '')), '')
-  )
-  on conflict (id) do nothing;
-
+  perform public.handle_new_auth_user_for(new.id);
   return new;
 end;
 $$;
 
 
 ALTER FUNCTION "public"."handle_new_auth_user"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."handle_new_auth_user"() IS 'Provisions public.users for an account created already confirmed. Delegates to handle_new_auth_user_for() so the handling of a contested phone or address lives in exactly one place.';
 
 
 CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user_for"("p_user_id" "uuid") RETURNS "void"
@@ -5280,33 +5262,73 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_auth_user_for"("p_user_id" "uuid
 declare
   v_user  auth.users%rowtype;
   v_phone text;
+  v_email text;
+  v_name  text;
 begin
   select * into v_user from auth.users where id = p_user_id;
   if not found then
     return;
   end if;
+
+  -- Only a CONFIRMED contact detail provisions anything. GoTrue inserts the
+  -- auth.users row when a code is first requested, before anything is proven.
   if v_user.phone_confirmed_at is null and v_user.email_confirmed_at is null then
     return;
   end if;
 
+  -- GoTrue stores phone numbers without the leading '+'. Our E.164 check wants it.
   v_phone := nullif(v_user.phone, '');
   if v_phone is not null and left(v_phone, 1) <> '+' then
     v_phone := '+' || v_phone;
   end if;
+  if v_user.phone_confirmed_at is null then
+    v_phone := null;
+  end if;
+
+  v_email := case
+               when v_user.email_confirmed_at is not null
+               then lower(nullif(v_user.email, ''))
+             end;
+  v_name := nullif(btrim(coalesce(v_user.raw_user_meta_data ->> 'full_name', '')), '');
+
+  -- Already carried by ANOTHER identity, so not ours to take. Dropped from this
+  -- insert rather than fought over, and reported so it is findable.
+  if v_phone is not null and exists (
+    select 1 from public.users u where u.phone = v_phone and u.id <> p_user_id
+  ) then
+    raise warning 'handle_new_auth_user_for: phone % already belongs to another identity; provisioning % without it', v_phone, p_user_id;
+    v_phone := null;
+  end if;
+
+  if v_email is not null and exists (
+    select 1 from public.users u where lower(u.email) = v_email and u.id <> p_user_id
+  ) then
+    raise warning 'handle_new_auth_user_for: email already belongs to another identity; provisioning % without it', p_user_id;
+    v_email := null;
+  end if;
 
   insert into public.users (id, phone, email, full_name)
-  values (
-    p_user_id,
-    case when v_user.phone_confirmed_at is not null then v_phone end,
-    case when v_user.email_confirmed_at is not null then lower(nullif(v_user.email, '')) end,
-    nullif(btrim(coalesce(v_user.raw_user_meta_data ->> 'full_name', '')), '')
-  )
+  values (p_user_id, v_phone, v_email, v_name)
   on conflict (id) do nothing;
+
+exception
+  -- BELT AND BRACES. The checks above are not atomic against a concurrent
+  -- insert, and a lost race must still not reach GoTrue as a 500. Provision the
+  -- bare identity so confirmation completes; the contact details are the
+  -- application's problem, not auth's.
+  when unique_violation then
+    raise warning 'handle_new_auth_user_for: lost a race on a contact detail for %; provisioning without phone or email (%)', p_user_id, sqlerrm;
+    insert into public.users (id, full_name)
+    values (p_user_id, v_name)
+    on conflict (id) do nothing;
 end;
 $$;
 
 
 ALTER FUNCTION "public"."handle_new_auth_user_for"("p_user_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."handle_new_auth_user_for"("p_user_id" "uuid") IS 'Provisions public.users when a contact detail is CONFIRMED. A phone or address already held by another identity is DROPPED from the insert rather than contested — never reassigned, never allowed to raise. An escaping unique_violation here aborts GoTrue''s confirmation transaction and surfaces as an opaque 500 "Error confirming user".';
 
 
 CREATE OR REPLACE FUNCTION "public"."is_admin"() RETURNS boolean
