@@ -1,7 +1,11 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
-import { startVendorSignUpAction, finishVendorSignUpAction } from './actions';
+import {
+  startVendorSignUpAction,
+  finishVendorSignUpAction,
+  resendVendorCodeAction,
+} from './actions';
 import { Button, ErrorNote, Field, Input, Select, Textarea, TextLink } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
 
@@ -40,29 +44,59 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
   // 'details'` false before this form had ever been submitted — a condition
   // that could only become true after a step that could never be reached.
   const [codeState, submitCode, verifying] = useActionState(finishVendorSignUpAction, {});
+  const [resendState, resend, resending] = useActionState(resendVendorCodeAction, {});
 
   // Asked to go back and change a number. Cleared the moment a new code is
   // requested, in the action itself, so the two cannot disagree.
   const [editing, setEditing] = useState(false);
 
-  // DERIVED DURING RENDER, not synchronised in an effect. There is one question
-  // — has a code been sent that we are still waiting on — and three facts that
-  // answer it.
+  // DERIVED DURING RENDER from every action that can move the step, which now
+  // includes resend. Leaving resend out of this was how the code screen could
+  // vanish under somebody: a resend returning `step: 'code'` was invisible here,
+  // so the screen was decided by two states while three could change it.
+  //
+  // Only a DECISIVE 'details' sends somebody back — an action that actually ran
+  // and said so. An untouched initial state says nothing and must not outvote a
+  // code that has been sent.
+  const decisive = [resendState.step, codeState.step].find(Boolean);
   const step =
-    detailsState.step === 'code' && codeState.step !== 'details' && !editing ? 'code' : 'details';
+    !editing && detailsState.step === 'code' && decisive !== 'details' ? 'code' : 'details';
 
-  // The values that survive the step change. The code step's copy wins once it
-  // has one, because it is the more recent round trip.
-  const v = { ...detailsState, ...(codeState.storeName ? codeState : {}) };
+  // The values that survive the step change. Later round trips win.
+  const v = {
+    ...detailsState,
+    ...(codeState.storeName ? codeState : {}),
+    ...(resendState.storeName ? resendState : {}),
+  };
+
+  // The number the newest code actually went to, and when it was sent — the
+  // resend is the more recent fact whenever it has one.
+  const phone = resendState.phone ?? codeState.phone ?? detailsState.phone ?? null;
+  const sentAt = resendState.sentAt ?? detailsState.sentAt ?? null;
+
+  // ONE MESSAGE, AND IT IS THE NEWEST ONE — decided by when each action
+  // actually returned, not by a fixed order between them. A fixed order buries
+  // a fresh verification error under a stale "a new code is on its way", which
+  // is precisely the case that leaves somebody staring at a code screen that
+  // has silently refused them.
+  const newest = [resendState, codeState, detailsState]
+    .filter((state) => state?.at && (state.error || state.notice))
+    .sort((a, b) => b.at - a.at)[0];
+  const message = newest?.error ?? newest?.notice ?? null;
+  const messageIsError = Boolean(newest?.error);
 
   if (step === 'code') {
     return (
       <CodeStep
         values={v}
-        notice={detailsState.notice}
-        error={codeState.error}
+        phone={phone}
+        message={message}
+        messageIsError={messageIsError}
         submit={submitCode}
         verifying={verifying}
+        resend={resend}
+        resending={resending}
+        sentAt={sentAt}
         resubmitting={resubmitting}
         onBack={() => setEditing(true)}
       />
@@ -186,61 +220,147 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
 }
 
 /**
+ * How long before "Send a new code" comes back.
+ *
+ * SIXTY, NOT FORTY-FIVE. The email flow uses 45 because that is comfortably
+ * over the project's minimum interval between EMAILS. Supabase's default
+ * minimum interval between SMS messages is sixty seconds, and a button that
+ * re-enables at 45 only to be refused by the provider is worse than one that
+ * waits — the vendor reads the refusal as the flow being broken again. The
+ * action still surfaces a 429 if a project is configured stricter than this.
+ */
+const RESEND_COOLDOWN_SECONDS = 60;
+
+/** Seconds left before another code may be requested. */
+function useCooldown(sentAt) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!sentAt) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [sentAt]);
+
+  if (!sentAt) return 0;
+  return Math.max(0, RESEND_COOLDOWN_SECONDS - Math.floor((now - sentAt) / 1000));
+}
+
+/**
  * The code screen.
  *
- * Separated out so it can announce itself — `autoFocus` on the input and a
+ * Separated out so it can announce itself — focus on the input and a
  * `role="status"` line naming the number — because the whole failure this form
  * is recovering from was a step change nobody could see.
+ *
+ * The number being verified rides in a hidden field as E.164, so the code is
+ * checked against the number it was SENT to rather than against a fresh reading
+ * of whatever is in the details form.
  */
-function CodeStep({ values, notice, error, submit, verifying, resubmitting, onBack }) {
+function CodeStep({
+  values,
+  phone,
+  message,
+  messageIsError,
+  submit,
+  verifying,
+  resend,
+  resending,
+  sentAt,
+  resubmitting,
+  onBack,
+}) {
   const input = useRef(null);
+  const remaining = useCooldown(sentAt);
+  const busy = verifying || resending;
 
   useEffect(() => {
     input.current?.focus();
   }, []);
 
   return (
-    <form action={submit} className="space-y-4">
+    <div className="space-y-4">
+      <form action={submit} className="space-y-4">
+        <Carried values={values} phone={phone} />
+
+        <div className="rounded-card bg-brand-50 p-3.5" role="status">
+          <p className="text-sm leading-relaxed">
+            We sent a 6-digit code to {phone ?? values.phoneRaw}.
+          </p>
+        </div>
+
+        <Field label="Verification code">
+          <OtpInput ref={input} disabled={busy} />
+        </Field>
+
+        <Button type="submit" size="lg" block disabled={busy}>
+          {verifying ? (
+            <span className="inline-flex items-center gap-2">
+              <Spinner />
+              Checking…
+            </span>
+          ) : resubmitting ? (
+            'Resubmit application'
+          ) : (
+            'Register my store'
+          )}
+        </Button>
+      </form>
+
+      {/* A SEPARATE FORM, not a second button in the one above. Two submits in
+          one form race each other for the same pending state, and the browser
+          would post the half-typed code along with the resend. */}
+      <form action={resend}>
+        <Carried values={values} phone={phone} />
+        <div className="text-center">
+          <button
+            type="submit"
+            disabled={busy || remaining > 0}
+            className="text-brand-700 press-sm disabled:text-faint text-sm font-semibold underline-offset-4 hover:underline disabled:no-underline"
+          >
+            {resending
+              ? 'Sending…'
+              : remaining > 0
+                ? `Resend code in ${remaining}s`
+                : 'Resend code'}
+          </button>
+        </div>
+      </form>
+
+      {message ? (
+        messageIsError ? (
+          <ErrorNote>{message}</ErrorNote>
+        ) : (
+          <p role="status" className="text-muted text-center text-sm leading-relaxed">
+            {message}
+          </p>
+        )
+      ) : null}
+
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={busy}
+        className="text-muted hover:text-ink block w-full text-center text-sm font-medium underline underline-offset-4 disabled:opacity-55"
+      >
+        Change my details or number
+      </button>
+    </div>
+  );
+}
+
+/** Everything both forms on the code screen have to post back. */
+function Carried({ values, phone }) {
+  return (
+    <>
       <input type="hidden" name="applicant_name" value={values.applicantName ?? ''} />
       <input type="hidden" name="store_name" value={values.storeName ?? ''} />
       <input type="hidden" name="is_student" value={values.isStudent ?? ''} />
       <input type="hidden" name="description" value={values.description ?? ''} />
       <input type="hidden" name="category_id" value={values.categoryId ?? ''} />
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
-
-      <div className="rounded-card bg-brand-50 p-3.5" role="status">
-        <p className="text-sm leading-relaxed">
-          {notice ?? `We sent a 6-digit code to ${values.phoneRaw}.`}
-        </p>
-      </div>
-
-      <Field label="Verification code">
-        <OtpInput ref={input} disabled={verifying} />
-      </Field>
-
-      <Button type="submit" size="lg" block disabled={verifying}>
-        {verifying ? (
-          <span className="inline-flex items-center gap-2">
-            <Spinner />
-            Checking…
-          </span>
-        ) : resubmitting ? (
-          'Resubmit application'
-        ) : (
-          'Register my store'
-        )}
-      </Button>
-      {error ? <ErrorNote>{error}</ErrorNote> : null}
-
-      <button
-        type="button"
-        onClick={onBack}
-        disabled={verifying}
-        className="text-muted hover:text-ink block w-full text-center text-sm font-medium underline underline-offset-4 disabled:opacity-55"
-      >
-        Change my details or number
-      </button>
-    </form>
+      {/* E.164, and the one the code was sent to. */}
+      <input type="hidden" name="verified_phone" value={phone ?? ''} />
+    </>
   );
 }
 
