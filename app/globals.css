@@ -120,6 +120,12 @@
   /* Light, and only light. Form controls, scrollbars and the like render on the
      same ground as everything else. */
   color-scheme: light;
+
+  /* Stops iOS inflating body copy after a rotation — a second, quieter way the
+     layout used to end up out of proportion with itself. 100% means "render the
+     size we asked for", not "prevent the user from zooming". */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -131,6 +137,34 @@ body {
   /* Kills the 300ms tap delay without disabling pinch-zoom, which is how the
      viewport used to buy the same thing at the cost of accessibility. */
   touch-action: manipulation;
+}
+
+/* ==========================================================================
+   THE PHONE THAT SLOWLY ZOOMS ITSELF
+   ==========================================================================
+   THIS IS THE "the app keeps getting bigger" BUG, and it is one line of CSS.
+
+   iOS Safari zooms the viewport whenever a text field smaller than 16px takes
+   focus. Campus Dash sets fields at 15px (the kit) and 14px (a couple of dozen
+   hand-rolled ones), so every tap into a field zoomed the page — and because
+   pinch-zoom is deliberately left ENABLED for accessibility, the zoom stayed
+   after the keyboard closed. From there the sticky header is wider than the
+   visual viewport, so it reads as "the header does not span the screen", and
+   everything else reads as scaled. Nobody zoomed anything on purpose.
+
+   The fix is to make the fields big enough that Safari has no reason to zoom,
+   and ONLY on the widths where the problem exists. Desktop keeps the 15px the
+   design asks for. Checkboxes and radios are excluded: they have no text and
+   sizing them here would just make them grow.
+
+   The alternative — maximum-scale=1 — is what this codebase deliberately
+   removed, because it fails WCAG 1.4.4 for the people who most need to zoom. */
+@media (max-width: 639.98px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 /* Large type is set tight; body type is not. This is most of what makes the

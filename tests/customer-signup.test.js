@@ -165,13 +165,29 @@ describe('customer sign-up decisions', () => {
   // The code
   // =========================================================================
 
-  test('a six-digit code is the shape, and the range tolerates a project setting', () => {
-    // Supabase issues six by default, but otp_length is configurable. A form
-    // that hard-coded six would refuse every code the day somebody changed it.
-    for (const token of ['123456', '1234', '12345678', ' 123456 ']) {
+  test('a code is SIX digits, and nothing else is', () => {
+    // Six is the one length Campus Dash issues — `otp_length = 6` for both the
+    // email and the SMS flow. This used to tolerate four to eight "in case the
+    // project setting changed", which is how a hosted project quietly set to
+    // eight went unnoticed: the codes were wrong and the check said nothing.
+    // Matching the one length we issue turns that into an immediate failure.
+    for (const token of ['123456', ' 123456 ']) {
       assert.equal(isOtpShape(token), true, token);
     }
-    for (const token of ['', '123', '123456789', 'abcdef', '12 34 56', '12345a', null, undefined]) {
+    for (const token of [
+      '',
+      '123',
+      '1234',
+      '12345',
+      '1234567',
+      '12345678',
+      '123456789',
+      'abcdef',
+      '12 34 56',
+      '12345a',
+      null,
+      undefined,
+    ]) {
       assert.equal(isOtpShape(token), false, String(token));
     }
   });

@@ -159,8 +159,9 @@ site_url = "http://localhost:3000"
 # of <origin>/login/admin/recover, and GoTrue silently DISCARDS a redirect that
 # is not on this list and falls back to site_url — which lands the recipient on
 # the home page with a spent token and no explanation. Both spellings of the dev
-# origin are listed because PUBLIC_APP_URL says localhost and site_url says
-# 127.0.0.1, and to a browser those are two different origins.
+# origin are listed because the two are different origins to a browser, and a
+# cookie written on one is not readable on the other — which is what made a
+# perfectly good reset link report itself expired.
 #
 # A hosted project needs the same under Authentication → URL Configuration →
 # Redirect URLs. See docs/AUTH.md.

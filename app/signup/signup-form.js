@@ -9,6 +9,7 @@ import {
 } from './actions';
 import { LEVELS, RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
 import { Button, ErrorNote, Field, Input, Select, TextLink } from '@/app/ui';
+import OtpInput from '@/app/otp-input';
 
 /**
  * The details form starts on its own step; every other action starts EMPTY.
@@ -264,18 +265,7 @@ function CodeStep({ values, next, submitCode, verifying, resend, resending, stat
         </p>
 
         <Field label="Verification code">
-          <input
-            name="token"
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            pattern="[0-9]*"
-            maxLength={8}
-            required
-            autoFocus
-            placeholder="123456"
-            className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint h-14 w-full border px-4 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums transition-colors outline-none"
-          />
+          <OtpInput autoFocus disabled={verifying} />
         </Field>
 
         <Button type="submit" size="lg" block disabled={verifying || resending}>

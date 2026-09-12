@@ -107,10 +107,13 @@ describe(
         subject: match.Subject,
         body,
         token: (body.match(/\b\d{6}\b/) ?? [null])[0],
-        // The template each email came from, told apart by its own copy.
-        template: /finish creating your account/i.test(body)
+        // The template each email came from, told apart by its own copy. Keyed
+        // on the SCREEN each one names — "sign-up" vs "sign-in" — because that
+        // is the actual difference between the two emails and is the last part
+        // of the copy that could be reworded without the distinction going too.
+        template: /finish creating your account|sign-up screen/i.test(body)
           ? 'confirm-signup'
-          : /already have open/i.test(body)
+          : /sign-in screen/i.test(body)
             ? 'magic-link'
             : 'unknown',
       };

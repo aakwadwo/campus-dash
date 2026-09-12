@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { startVendorSignUpAction, finishVendorSignUpAction } from './actions';
 import { Button, ErrorNote, Field, Input, Select, Textarea, TextLink } from '@/app/ui';
+import OtpInput from '@/app/otp-input';
 
 /**
  * The store form first, the code second.
@@ -214,17 +215,7 @@ function CodeStep({ values, notice, error, submit, verifying, resubmitting, onBa
       </div>
 
       <Field label="Verification code">
-        <input
-          ref={input}
-          name="token"
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          required
-          placeholder="123456"
-          disabled={verifying}
-          className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint h-14 w-full border px-4 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums transition-colors outline-none disabled:opacity-60"
-        />
+        <OtpInput ref={input} disabled={verifying} />
       </Field>
 
       <Button type="submit" size="lg" block disabled={verifying}>

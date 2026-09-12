@@ -65,7 +65,7 @@ export default function VendorSearch({ vendors, categories }) {
       ) : null}
 
       {present.length > 1 ? (
-        <div className="-mx-5 mb-7 flex gap-2 overflow-x-auto px-5 pb-1">
+        <div className="-mx-4 mb-7 flex gap-2 overflow-x-auto px-4 pb-1 sm:-mx-6 sm:px-6">
           <Chip active={category === ''} onClick={() => setCategory('')}>
             All
           </Chip>

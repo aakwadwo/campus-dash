@@ -3,6 +3,7 @@
 import { useActionState } from 'react';
 import { requestOtp, verifyOtp } from '../actions';
 import { Button, ErrorNote, Field, Input } from '@/app/ui';
+import OtpInput from '@/app/otp-input';
 
 const INITIAL = { step: 'phone' };
 
@@ -44,16 +45,7 @@ export default function VendorLoginForm({ next }) {
           <input type="hidden" name="phone" value={phone} />
           <input type="hidden" name="next" value={next} />
           <Field label="Verification code">
-            <input
-              name="token"
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              required
-              autoFocus
-              placeholder="123456"
-              className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint h-14 w-full border px-4 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums transition-colors outline-none"
-            />
+            <OtpInput autoFocus disabled={verifying} />
           </Field>
           <SubmitButton pending={verifying} label="Verify" pendingLabel="Checking…" />
           <Message state={state} />

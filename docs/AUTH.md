@@ -39,6 +39,26 @@ credential.
 `is_admin()` inside every `admin_*` function is — but there is no reason to put
 the door on the map.
 
+## Six digits, and where that is actually decided
+
+Every Campus Dash verification code is **six digits** — the email code and the
+SMS code alike. `isOtpShape()` accepts exactly six, the inputs accept exactly
+six, and `app/otp-input.js` is the single component all four screens use.
+
+**The length is a PROJECT setting, not a code setting.** `supabase/config.toml`
+carries `otp_length = 6` under both `[auth.email]` and `[auth.sms]`, which
+governs the local stack. A hosted project has its own, under Authentication →
+Providers → Email (and SMS), and it is set independently of anything in this
+repository. A project set to eight sends eight-digit codes into a six-digit box
+and every sign-in fails — which is exactly what happened, and it went unnoticed
+for a while because the shape check used to tolerate four to eight "in case the
+setting changed". It no longer does, on purpose: a mismatch should fail loudly
+on the first attempt rather than quietly for weeks.
+
+**NOT the handoff codes.** Those are FOUR digits, they are generated and checked
+by Campus Dash rather than Supabase, and hard rule 11 is about them. Nothing
+here touches them.
+
 ## Who verifies what
 
 Supabase Auth generates and validates every code. **We never generate, store or
@@ -193,7 +213,7 @@ ways back in, and they are for different situations.
 | ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `/login/admin/forgot`  | The address is checked against `is_admin` FIRST. Only an administrator is emailed anything.      |
 | the email              | A link, not a code — see `supabase/templates/reset-password.html` for why this one is different. |
-| `/login/admin/recover` | Spends the token, establishes a session, redirects. A route, not a page: the token is good once. |
+| `/login/admin/recover` | Spends the token and establishes the session — in a SERVER ACTION, see below.                    |
 | `/login/admin/reset`   | The new password. `is_admin` is re-checked here and again in the action.                         |
 | back to `/login/admin` | The recovery session is SIGNED OUT. The new password still has to be proved.                     |
 
@@ -214,6 +234,45 @@ Four things keep it from being a way in:
 Supabase Auth issues and validates the recovery token. We never generate, store
 or check one, which keeps that surface in the same audited place as every other
 code.
+
+#### Why the recovery page is shaped the way it is
+
+Three things about it look over-engineered and are each load-bearing. All three
+were bugs first, and every one of them presented identically: the link bounced
+straight back to "enter your email".
+
+**The token is spent in a Server Action, not in the page.** Cookies are
+READ-ONLY in a Server Component, and `lib/supabase/server.js` swallows the write
+(it has to — the same client renders pages). So a page that verified the token
+succeeded, wrote no session, and redirected to a password form that then found
+nobody signed in. The token was burnt for nothing.
+
+**It handles three link shapes,** because which one arrives depends on the
+project's email template and flow setting:
+
+| Shape                             | Where it comes from                      | Spent by                               |
+| --------------------------------- | ---------------------------------------- | -------------------------------------- |
+| `?token_hash=…&type=recovery`     | `supabase/templates/reset-password.html` | `verifyOtp` on a plain client          |
+| `#access_token=…&refresh_token=…` | Supabase's DEFAULT template              | read in the browser, set by the action |
+| `?code=…`                         | the PKCE exchange                        | `exchangeCodeForSession`               |
+
+A FRAGMENT NEVER REACHES A SERVER — the browser strips it before the request —
+so that shape has to be read by client JavaScript and handed back. This is why
+the entry point is a page with a small client component rather than a route
+handler, and it is what makes the flow work on a project whose Reset Password
+template has not been customised.
+
+**The request is made on a non-PKCE client.** `@supabase/ssr` runs PKCE, which
+makes Supabase issue a `pkce_` token redeemable only in the browser that ASKED
+for it — and a reset email is, more often than not, opened on a phone. Asking on
+a plain client produces a token any browser can redeem.
+
+**The exchange runs exactly once per visit,** guarded by a ref. A recovery token
+is single-use and React StrictMode runs effects twice in development, so the
+first call spent the token and the second was told it had expired — a working
+link reporting itself broken. For the same reason the effect has no `cancelled`
+flag: StrictMode's cleanup would set it before the answer came back, and the
+navigation would be dropped with a good session already in hand.
 
 **The locked-out-of-everything one — `npm run admin:password`**
 

@@ -27,7 +27,7 @@ export default function AccountNav({ items }) {
 
   return (
     <nav aria-label="Account" className="lg:sticky lg:top-24">
-      <ul className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
+      <ul className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:-mx-6 sm:px-6 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
         {items.map((item) => {
           const current = isCurrent(item);
           return (

@@ -15,7 +15,7 @@ import { quoteScanAction, submitScanOrderAction } from './actions';
  * The quote comes from the server every time the restaurant or destination
  * changes. Nothing here computes a price; it only displays one.
  */
-export default function ScanForm({ restaurants, locations }) {
+export default function ScanForm({ restaurants, locations, initialQuote = null }) {
   const [scan, setScan] = useState(null); // { path, contentType, byteSize }
   const [vendorId, setVendorId] = useState(restaurants[0]?.id ?? '');
   const [locationId, setLocationId] = useState(locations[0]?.location_id ?? '');
@@ -28,7 +28,15 @@ export default function ScanForm({ restaurants, locations }) {
   // in step — and it means a slow reply for an old selection can never be shown
   // against a new one.
   const key = `${vendorId}|${locationId}`;
-  const [priced, setPriced] = useState({ key: null, quote: null, error: null });
+  // SEEDED WITH THE SERVER'S QUOTE for the selection this form opens on, so the
+  // first render is already priced and the button is already live. `key: null`
+  // used to mean "nothing is priced", which was true for one round trip on every
+  // single visit.
+  const [priced, setPriced] = useState(() => ({
+    key: initialQuote ? `${restaurants[0]?.id ?? ''}|${locations[0]?.location_id ?? ''}` : null,
+    quote: initialQuote,
+    error: null,
+  }));
 
   // Re-price whenever the two inputs that affect price change. The scan itself
   // never affects the price: Campus Dash does not know or care what the meal is
@@ -36,6 +44,10 @@ export default function ScanForm({ restaurants, locations }) {
   useEffect(() => {
     let cancelled = false;
     if (!vendorId || !locationId) return undefined;
+    // Already priced — the server sent this one, or a previous change fetched
+    // it. Re-asking for a quote we are already showing is the round trip this
+    // screen was making on mount.
+    if (priced.key === key) return undefined;
 
     quoteScanAction({ vendorId, destinationLocationId: locationId }).then((result) => {
       if (cancelled) return;
@@ -49,7 +61,7 @@ export default function ScanForm({ restaurants, locations }) {
     return () => {
       cancelled = true;
     };
-  }, [vendorId, locationId, key]);
+  }, [vendorId, locationId, key, priced.key]);
 
   const fresh = priced.key === key;
   const quote = fresh ? priced.quote : null;

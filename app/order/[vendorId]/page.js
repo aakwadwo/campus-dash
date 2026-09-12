@@ -104,7 +104,7 @@ export default async function VendorMenuPage({ params }) {
           </div>
 
           {images.length > 1 ? (
-            <ul className="-mx-5 mt-5 flex gap-3 overflow-x-auto px-5 pb-1 sm:mx-0 sm:px-0">
+            <ul className="-mx-4 mt-5 flex gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
               {images.slice(1).map((image) => (
                 <li key={image.id} className="shrink-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}

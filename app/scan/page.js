@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { listScanRestaurants } from '@/lib/scan';
+import { listScanRestaurants, quoteScanOrder } from '@/lib/scan';
 import { listDeliverableLocations } from '@/lib/customer';
 import ScanForm from './scan-form';
 import SiteHeader from '@/app/site-header';
@@ -37,6 +37,25 @@ export default async function ScanPage() {
 
   const open = restaurants.filter((r) => r.is_accepting_orders);
 
+  // PRICED HERE, NOT AFTER THE PAGE LOADS.
+  //
+  // The form used to mount with no quote and fire a server action for one, so
+  // the first thing anybody saw on this screen was a disabled button and a
+  // "working out the price" line — a whole extra round trip, on a phone, before
+  // the page was usable. The default selection is known right here, where two
+  // queries are already in flight, so the price ships WITH the page and the
+  // form is live on first paint. A re-quote still happens, but only when
+  // somebody actually changes the restaurant or the destination.
+  const first = open[0] ?? null;
+  const firstLocation = (locations ?? [])[0] ?? null;
+  const initialQuote =
+    first && firstLocation
+      ? await quoteScanOrder({
+          vendorId: first.id,
+          destinationLocationId: firstLocation.location_id,
+        }).catch(() => null)
+      : null;
+
   return (
     <div className="min-h-dvh">
       <SiteHeader active="browse" />
@@ -58,7 +77,7 @@ export default async function ScanPage() {
               again when one reopens.
             </p>
           ) : (
-            <ScanForm restaurants={open} locations={locations ?? []} />
+            <ScanForm restaurants={open} locations={locations ?? []} initialQuote={initialQuote} />
           )}
         </Container>
       </main>

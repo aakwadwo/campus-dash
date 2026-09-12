@@ -198,8 +198,10 @@ export async function verifyOtp(_prevState, formData) {
   const requested = safeNext(formData.get('next'));
 
   if (!phone) return { step: 'phone', error: 'Start again with your phone number.' };
-  if (!/^\d{4,8}$/.test(token)) {
-    return { step: 'code', phone, error: 'Enter the code from the SMS.' };
+  // Six digits, the same as the email code — `auth.sms.otp_length`. See
+  // isOtpShape in lib/auth/customer-signup.js for why this is not a range.
+  if (!isOtpShape(token)) {
+    return { step: 'code', phone, error: 'Enter the 6-digit code from the SMS.' };
   }
 
   // Same tag as the request leg, so the two lines pair up in the log and the

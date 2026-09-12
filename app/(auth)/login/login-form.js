@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from 'react';
 import { requestEmailCode, verifyEmailCode, resendEmailCode } from './actions';
 import { RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
 import { Button, ErrorNote, Field, Input } from '@/app/ui';
+import OtpInput from '@/app/otp-input';
 
 /**
  * The address form starts on its own step; the other actions start EMPTY.
@@ -79,18 +80,7 @@ export default function LoginForm({ next }) {
         </p>
 
         <Field label="Verification code">
-          <input
-            name="token"
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            pattern="[0-9]*"
-            maxLength={8}
-            required
-            autoFocus
-            placeholder="123456"
-            className="rounded-input border-line-strong bg-surface focus:border-brand-600 placeholder:text-faint h-14 w-full border px-4 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums transition-colors outline-none"
-          />
+          <OtpInput autoFocus disabled={verifying} />
         </Field>
 
         <Button type="submit" size="lg" block disabled={verifying || resending}>

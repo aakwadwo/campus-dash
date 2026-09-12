@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { actionFailure } from '@/lib/errors';
 import { signUp } from '@/lib/vendor';
+import { isOtpShape } from '@/lib/auth/customer-signup';
 
 const CONTEXT = 'vendor sign-up';
 
@@ -85,7 +86,10 @@ export async function finishVendorSignUpAction(_prev, formData) {
   const fail = (error) => ({ step: 'code', ...carry(d), phone, error });
 
   if (!phone) return { step: 'details', ...carry(d), error: 'Start again with your details.' };
-  if (!/^\d{4,8}$/.test(token)) return fail('Enter the code from the SMS.');
+  // Six digits — `auth.sms.otp_length`, the same code length as every other
+  // Campus Dash verification. Not to be confused with the FOUR-digit handoff
+  // codes, which are ours and stay four.
+  if (!isOtpShape(token)) return fail('Enter the 6-digit code from the SMS.');
 
   const supabase = await createClient();
   const { error: verifyError } = await supabase.auth.verifyOtp({ phone, token, type: 'sms' });

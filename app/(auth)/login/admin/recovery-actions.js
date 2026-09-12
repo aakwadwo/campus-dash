@@ -2,6 +2,7 @@
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { createClient as createPlainClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { config } from '@/lib/config';
@@ -103,6 +104,81 @@ async function isRecoverableAdmin(email) {
   return Boolean(profile?.is_admin && !profile.is_suspended);
 }
 
+/**
+ * Spends a recovery token and establishes the session.
+ *
+ * A SERVER ACTION, AND THAT IS THE WHOLE REASON IT EXISTS. Cookies are
+ * READ-ONLY in a Server Component, and lib/supabase/server.js swallows the
+ * write silently (it has to — the same client is used for rendering). So a page
+ * that verified the token appeared to succeed, wrote no session, and bounced
+ * the visitor to "enter your email" one redirect later. Actions can write
+ * cookies; pages cannot. The token is verified here, or nowhere.
+ *
+ * Handles all three shapes. The fragment one arrives as a pair of tokens the
+ * BROWSER read out of `location.hash` and handed back — the server could not
+ * have seen them itself, but it is still the only place that can write the
+ * cookie, so the browser reads and this writes.
+ */
+export async function completeAdminRecovery({
+  tokenHash = null,
+  code = null,
+  accessToken = null,
+  refreshToken = null,
+}) {
+  const supabase = await createClient();
+
+  // The fragment shape. The tokens were minted by Supabase for this recovery
+  // and are about to become an HttpOnly cookie, which is a better place for
+  // them than the address bar they arrived in.
+  if (accessToken && refreshToken) {
+    const { error } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (error) {
+      console.error('[auth] recovery setSession (fragment) failed:', error.message);
+      return { ok: false };
+    }
+    return { ok: true };
+  }
+
+  if (tokenHash) {
+    // A PLAIN client to verify: @supabase/ssr runs PKCE and would go looking
+    // for a verifier cookie belonging to the browser that ASKED for the link,
+    // which is routinely not the one the mail app opened.
+    const plain = createPlainClient(config.supabaseUrl(), config.supabasePublishableKey(), {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data, error } = await plain.auth.verifyOtp({ type: 'recovery', token_hash: tokenHash });
+    if (error || !data?.session) {
+      console.error('[auth] recovery verifyOtp failed:', error?.message ?? 'no session returned');
+      return { ok: false };
+    }
+
+    const { error: setError } = await supabase.auth.setSession({
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+    });
+    if (setError) {
+      console.error('[auth] recovery setSession failed:', setError.message);
+      return { ok: false };
+    }
+    return { ok: true };
+  }
+
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) {
+      console.error('[auth] recovery code exchange failed:', error.message);
+      return { ok: false };
+    }
+    return { ok: true };
+  }
+
+  return { ok: false };
+}
+
 /** Step one: ask for a link. */
 export async function requestAdminPasswordReset(_prevState, formData) {
   const email = String(formData.get('email') ?? '')
@@ -110,14 +186,16 @@ export async function requestAdminPasswordReset(_prevState, formData) {
     .toLowerCase();
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return { error: 'Enter the email address you sign in with.' };
+    return { error: 'Enter the email address you sign in with.', email };
   }
 
   if (!(await isRecoverableAdmin(email))) {
     // Nothing is sent, and the caller cannot tell. Logged so an administrator
     // who swears they asked for a link can be told what actually happened.
     console.warn(`[auth] password reset requested for a non-administrator address: ${email}`);
-    return { sent: true, notice: SENT };
+    // Stamped and echoed exactly as a real send is, so the two are
+    // indistinguishable from the outside — including the resend cooldown.
+    return { sent: true, sentAt: Date.now(), email, notice: SENT };
   }
 
   const redirectTo = await recoveryRedirectUrl();
@@ -126,7 +204,20 @@ export async function requestAdminPasswordReset(_prevState, formData) {
     return { error: 'Password reset is unavailable right now.' };
   }
 
-  const supabase = await createClient();
+  // A PLAIN CLIENT, AND THIS IS THE FIX FOR THE LINK THAT NEVER WORKED.
+  //
+  // @supabase/ssr runs the PKCE flow, which makes Supabase issue a `pkce_`
+  // token and stash a verifier cookie in THIS browser. The reset email is then
+  // only redeemable in the browser that asked for it — and an email is, more
+  // often than not, opened on a phone. Every one of those attempts came back
+  // looking like an expired link.
+  //
+  // Asking on a client with no PKCE and no storage produces a plain token, which
+  // /login/admin/recover can verify server-side from anywhere. Supabase still
+  // issues and validates it; only the shape changes.
+  const supabase = createPlainClient(config.supabaseUrl(), config.supabasePublishableKey(), {
+    auth: { persistSession: false, autoRefreshToken: false, flowType: 'implicit' },
+  });
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
 
   if (error) {
@@ -137,7 +228,7 @@ export async function requestAdminPasswordReset(_prevState, formData) {
     return { error: 'Could not send the reset email. Try again shortly.' };
   }
 
-  return { sent: true, notice: SENT };
+  return { sent: true, sentAt: Date.now(), email, notice: SENT };
 }
 
 /**
