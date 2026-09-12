@@ -33,10 +33,13 @@ applies to the NEXT order only — an order already placed keeps its snapshot._
 
 ## Timing — the assumptions most likely to be wrong
 
-**4. How fast do vendors actually answer?**
-60 seconds is assumed. A stall at lunchtime may need three minutes. If it is
-wrong, orders expire constantly and students stop trying.
-_Measured as `median_vendor_response_seconds`._
+**4. How long does a store actually take to cook?**
+Unknown, and it now matters more than it did: a Partner is assigned while the
+food is being made, so a store that takes twenty minutes has somebody waiting on
+it rather than being found afterwards. If preparation is much slower than
+assumed, the Partner-side copy ("wait for the store to mark it ready") stops
+being reassuring and starts being an unpaid wait.
+_Measured as `median_prep_seconds`._
 
 **5. How many Partners are online at peak?**
 Unknown. If the answer is "none between lectures", `FAILED_NO_PARTNER` becomes
@@ -186,9 +189,6 @@ For the avoidance of re-litigating:
 
 - Partner, never "runner".
 - No maps, GPS, live tracking, ratings, reviews, chat, coupons or loyalty.
-- One active delivery per Partner. This is enforced by a unique index, so
-  allowing more is a **migration**, not a setting — which is why there is
-  deliberately no config knob for it.
-- Vendor registration is closed.
 - Vendors never see a customer's phone number.
-- The vendor accepts before the customer pays.
+- A store never sees an order that has not been paid for.
+- Nothing is charged for an order somebody walks away from.

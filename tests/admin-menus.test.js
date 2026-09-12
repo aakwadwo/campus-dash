@@ -126,9 +126,12 @@ describe('admin — menus and prices', () => {
 
   // --- THE INVARIANT THAT MATTERS -----------------------------------------
   test('repricing through the admin path does NOT change an order already placed', async () => {
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    // 2 × GH₵35 + 5% (GH₵3.50). No delivery fee at submission: pickup or
-    // delivery is chosen after the vendor accepts.
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    // 2 × GH₵35 + 5% (GH₵3.50). Collected, so no delivery fee.
     assert.equal(order.total_pesewas, 7350);
 
     await admin('select * from public.admin_update_menu_item($1, $2, null, null, $3)', [
@@ -148,8 +151,12 @@ describe('admin — menus and prices', () => {
     );
     assert.equal(items[0].unit_price_pesewas, 3500, 'the ORIGINAL price is preserved');
 
-    const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    // GH₵100 food + 5%. Still no delivery fee at submission.
+    const later = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    // GH₵100 food + 5%.
     assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
   });
 

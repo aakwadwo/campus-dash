@@ -108,8 +108,8 @@ Use three DIFFERENT accounts, and never weaken the conflict rules to make it
 work:
 
 - **Customer A** places the order — say `ama@acity.edu.gh`.
-- **Vendor C** accepts, prepares and marks it READY — `0200000011` (by SMS) for Kitchen
-  One.
+- **Vendor C** prepares and marks it READY — `0200000011` (by SMS) for Kitchen
+  One. There is nothing to accept: the order arrives paid for.
 - **Partner B** must be neither the customer nor the owner of that vendor. Adjoa
   (`adjoa@acity.edu.gh`) works for a Kitchen One order placed by Ama.
 
@@ -119,14 +119,20 @@ suspecting a bug.
 
 ### The two things most likely to surprise you
 
-**After the vendor accepts, the customer is asked pickup or delivery** — and
-only then is there a Pay button. An order sitting at "Choose how you want it"
-is not stuck.
+**A store sees nothing until the order is paid for.** If you place an order and
+the vendor board is empty, that is correct — go and pay it. There is no Accept
+button anywhere any more.
 
-**The pickup code is on the VENDOR's screen**, not the Partner's. Open the
-order in `/vendor/<id>/orders/<orderId>`, read the four digits out, and type
-them into the Partner's app. The delivery code goes the other way: it is on the
-customer's order screen and the Partner types that one in too.
+**The handoff code is on the STORE's screen**, never on the screen of whoever is
+collecting. Open the order in `/vendor/<id>/orders/<orderId>`, read the four
+digits out, and type them into the collector's app — the Partner's at
+`/partner/delivery` for a delivery, or the customer's own order page for a
+collection. The delivery code goes the other way: it is on the customer's order
+screen and the Partner types that one in.
+
+**A Partner is offered the job while the food is still cooking.** The offer says
+"Still being prepared", and the code box does not appear on their screen until
+the store presses Ready.
 
 ### Testing Partner capacity
 
@@ -184,14 +190,16 @@ switching between four browser profiles cannot beat the real ones:
 
 | Setting               | Seeded for manual use | Production intent |
 | --------------------- | --------------------- | ----------------- |
-| Vendor answer window  | 30 min                | 60 s              |
 | Partner search window | 30 min                | 10 min            |
 | Customer-absent wait  | 60 s                  | 5 min             |
 | Payment timeout       | 5 min                 | 15 min            |
 
 Change any of them live at `/admin/pilot`. The automated tests set their own
-values and ignore these. To feel the real 60-second vendor window, set it at
-`/admin/pilot` before placing the order.
+values and ignore these.
+
+**The payment timeout is also the pay-by deadline.** An order somebody prices
+and never pays for is CANCELLED by the sweep once it passes — set it short at
+`/admin/pilot` if you want to watch that happen.
 
 ## The full lifecycle
 
@@ -200,33 +208,33 @@ A Jollof (GH₵35) delivered costs GH₵35.00 + GH₵1.75 + GH₵5.00 = **GH₵4
 Collected, it costs **GH₵36.75** — the delivery fee is added when, and only
 when, the customer asks for a delivery.
 
-1. **Customer** `/order` → Test Kitchen One → add items → Review → **Send order
-   to vendor**. Note there is no pickup/delivery question here and no delivery
-   fee in the total: a single Jollof reads GH₵35.00 + GH₵1.75 = **GH₵36.75**.
-2. **Vendor** `/vendor` → the order is in **NEW** → Accept.
-3. **Customer** `/orders/[id]` → the stage is **Choose how you want it**, with
-   both prices side by side (GH₵36.75 to collect, GH₵41.75 delivered). Choose
-   **Bring it to me**, pick a room (Room 101/102/204/205), confirm. Only now is
-   there a Pay button, and the total has moved to GH₵41.75.
-4. **Payment** starts and settles itself after ~2 seconds. Stay on the order
-   page — the page poll is what delivers the fake provider's callback.
-5. **Vendor** → Start preparing → Food is ready.
-6. **Partner** `/partner` → go online → `/partner/offers` → accept the delivery.
-   The offer shows a zone, never a room. The moment it is accepted, the Partner
-   dashboard shows the **room, the customer's name and a Call customer button**.
-   A Partner may hold TWO at a time; a third is refused.
-7. **Pickup** — the **vendor** opens the order and reads out the 4-digit pickup
-   code; the **Partner** types it in at `/partner/delivery`.
-8. **Delivery** — the **customer** reads out their delivery code at
-   `/orders/[id]`; the **Partner** types it in. Order completes, and the
-   customer's phone number disappears from the Partner's view immediately.
-9. **Admin** `/admin/money` → the order splits vendor / Partner / platform and
+1. **Customer** `/order` → Test Kitchen One → add items → **Checkout**. Choose
+   **Campus Dash Partner** and a room (Room 101/102/204/205). The total moves to
+   GH₵41.75 as you choose; collecting instead reads GH₵36.75. Press **Pay**.
+2. **Payment** opens, and the fake provider settles itself after ~2 seconds.
+   Stay on the order page — the page poll is what delivers its callback.
+3. **Vendor** `/vendor` → the order appears **already paid**, in **To prepare**,
+   with a queue number (`001`). There is no Accept button.
+4. **Partner** `/partner` → go online → `/partner/offers`. The offer is ALREADY
+   THERE, marked **Still being prepared**: the pool opened when the money
+   landed. Accept it. The offer shows a zone, never a room; the moment it is
+   accepted the Partner dashboard shows the **room, the customer's first name
+   and a Call button**. A Partner may hold TWO at a time; a third is refused.
+5. **Vendor** → **Ready for pickup**. The Partner's screen now says "Collect
+   from Test Kitchen One" and a code box appears.
+6. **Pickup** — the **vendor** opens the order and reads out the 4-digit code;
+   the **Partner** types it in at `/partner/delivery`.
+7. **Delivery** — the **customer** reads out their delivery code at
+   `/orders/[id]`; the **Partner** types it in. Order completes, GH₵5 lands in
+   the Partner's earnings, and the customer's phone number disappears from the
+   Partner's view immediately.
+8. **Admin** `/admin/money` → the order splits vendor / Partner / platform and
    sums to the total. `/admin/settlements` → create a run and pay it out.
-10. **Admin, verifying the data rather than the screen** — `/admin/orders/[id]`
-    shows the three state dimensions, the allocations, the event log and the
-    notifications for one order. For the rows themselves, Supabase Studio
-    (http://127.0.0.1:54323) or the hosted table editor: `orders`, `allocations`,
-    `payments`, `payouts`, `order_events`, `notification_events`, `admin_actions`.
+9. **Admin, verifying the data rather than the screen** — `/admin/orders/[id]`
+   shows the three state dimensions, the allocations, the event log and the
+   notifications for one order. For the rows themselves, Supabase Studio
+   (http://127.0.0.1:54323) or the hosted table editor: `orders`, `allocations`,
+   `payments`, `payouts`, `order_events`, `notification_events`, `admin_actions`.
 
 ### Also worth walking
 
@@ -237,12 +245,19 @@ when, the customer asks for a delivery.
   The store becomes ACTIVE and stays **closed** until its owner opens it.
 - **Vendor storefront** — sign in as a vendor, `/vendor/profile`, upload a photo
   and change the category. Both appear on `/order` immediately.
-- **Pickup order** — choose "Collect it myself" after the vendor accepts. No
-  Partner, no delivery fee; the customer shows a collection code and the vendor
-  types it in.
-- **Vendor rejection** and **letting the answer window expire**.
-- **Item availability** — vendor marks an item unavailable; it disappears from
-  the customer menu but placed orders keep their price.
+- **Collection order** — choose "Collect it yourself" at the checkout. No
+  Partner, no delivery fee. The **vendor** reads a code off their screen and the
+  **customer** types it into their own order page.
+- **Letting an order go unpaid** — place one and walk away. The sweep cancels it
+  once the payment timeout passes, and nothing is charged.
+- **Sold out** — vendor `/vendor/menu` → mark the Jollof sold out. It stays on
+  the customer menu, marked **Sold out**, and cannot be added. Close the store
+  and open it again: everything is available once more.
+- **Partner delivery switched off** — Admin `/admin/pilot` → untick **Partner
+  delivery is available**. New checkouts offer collection only; an order already
+  paid for is untouched and still completes.
+- **Disposable pack fee** — Admin `/admin/pilot` → set it, then place a scan
+  errand at `/scan`. It appears as its own line; a food order never shows one.
 - **Stuck payment** — restart `npm run dev` while a payment is pending. The
   fake provider's in-memory record is lost, so it hangs; after the payment
   timeout the customer can abandon it and retry, and a sweep runs every 15 min.

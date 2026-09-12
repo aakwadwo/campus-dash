@@ -284,7 +284,7 @@ Vendor daily and Partner weekly settlement are unchanged. Paystack simply sits
 behind the same `PaymentProvider` interface.
 
 What did change is the lifecycle, because **provider acceptance is not
-delivery** (hard rule 11):
+delivery** (hard rule 15):
 
 ```
 PENDING  ──(Paystack accepted the transfer)──▶  PROCESSING

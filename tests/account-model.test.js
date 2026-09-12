@@ -138,20 +138,19 @@ describe('account model — identity and capabilities', () => {
   /**
    * Runs customer sign-up as the given identity, committing the result.
    *
-   * NO EMAIL PARAMETER and NO ID PHOTOGRAPH. The address is read from
-   * auth.users, where the verification code put it; the student ID photograph
-   * moved to the Partner application, which is the only review that looks at
-   * one. The phone is collected because a Partner has to be able to ring.
+   * NO EMAIL PARAMETER, NO ID PHOTOGRAPH AND NO STUDENT ID NUMBER. The address
+   * is read from auth.users, where the verification code put it; the student ID
+   * photograph moved to the Partner application, which is the only review that
+   * looks at one; and the typed number went away entirely, because the verified
+   * @acity.edu.gh address is the school's own record of who somebody is. The
+   * phone is collected because a Partner has to be able to ring.
+   *
+   * The parameter survives with a default so a caller holding a legacy value can
+   * still pass one — which is what the uniqueness test below does.
    */
   async function onboard(
     userId,
-    {
-      fullName = 'Test Student',
-      studentId = `TEST-STU-${Math.floor(Math.random() * 1e9)}`,
-      level = '200',
-      phone = null,
-      termsId,
-    } = {}
+    { fullName = 'Test Student', studentId = null, level = '200', phone = null, termsId } = {}
   ) {
     const terms = termsId ?? (await currentCustomerTermsId());
     return asUser(
@@ -161,10 +160,10 @@ describe('account model — identity and capabilities', () => {
           await c.query('select * from public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
             String(fullName).split(' ')[0] || 'Test',
             String(fullName).split(' ').slice(1).join(' ') || 'Student',
-            studentId,
             level,
             phone ?? nextPhone(),
             terms,
+            studentId,
           ])
         ).rows[0],
       { commit: true }
@@ -174,7 +173,7 @@ describe('account model — identity and capabilities', () => {
   /** Attempts an order as the given account. A vendor and some items, no more. */
   const tryOrder = (userId) =>
     asUser(userId, (c) =>
-      c.query('select * from public.submit_order($1, $2::jsonb)', [
+      c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
         VENDORS.one,
         JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
       ])
@@ -216,7 +215,7 @@ describe('account model — identity and capabilities', () => {
     // But submit_order is not even callable by anon, let alone permitted.
     const error = await expectRejection(
       asAnon((c) =>
-        c.query('select * from public.submit_order($1, $2::jsonb)', [
+        c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
           VENDORS.one,
           JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
         ])
@@ -247,7 +246,7 @@ describe('account model — identity and capabilities', () => {
       id,
       async (c) =>
         (
-          await c.query('select * from public.submit_order($1, $2::jsonb)', [
+          await c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
             VENDORS.one,
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
           ])
@@ -281,21 +280,26 @@ describe('account model — identity and capabilities', () => {
     const id = await newEmailIdentity(nextSchoolEmail());
     const terms = await currentCustomerTermsId();
 
+    // A STUDENT ID NUMBER IS NOT AMONG THEM any more, and its absence is
+    // asserted separately below rather than by a missing row here.
     const cases = [
-      [['', 'Mensah', 'S1', '200', '+233208880031'], /first name is required/],
-      [['Kwame', '', 'S1', '200', '+233208880031'], /last name is required/],
-      [['Kwame', 'Mensah', '', '200', '+233208880031'], /student ID number is required/],
-      [['Kwame', 'Mensah', 'S1', '', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', 'S1', 'Class of 2029', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', 'S1', '500', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', 'S1', '200', ''], /phone number is required/],
-      [['Kwame', 'Mensah', 'S1', '200', '0201234567'], /valid phone number/],
+      [['', 'Mensah', '200', '+233208880031'], /first name is required/],
+      [['Kwame', '', '200', '+233208880031'], /last name is required/],
+      [['Kwame', 'Mensah', '', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', 'Class of 2029', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', '500', '+233208880031'], /choose your level/],
+      [['Kwame', 'Mensah', '200', ''], /phone number is required/],
+      [['Kwame', 'Mensah', '200', '0201234567'], /valid phone number/],
     ];
 
     for (const [args, expected] of cases) {
       const error = await expectRejection(
         asUser(id, (c) =>
-          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [...args, terms])
+          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
+            ...args,
+            terms,
+            null,
+          ])
         )
       );
       assert.match(error.message, expected);
@@ -303,6 +307,28 @@ describe('account model — identity and capabilities', () => {
 
     // None of the failures left a half-built capability behind.
     assert.equal((await capabilities(id)).can_order, false);
+  });
+
+  test('signing up asks for no student ID number, and grants the capability without one', async () => {
+    const id = await newEmailIdentity(nextSchoolEmail());
+    await onboard(id);
+
+    const caps = await capabilities(id);
+    assert.equal(caps.can_order, true, 'a number was never the thing that granted this');
+    assert.equal(caps.student_id_number, null);
+
+    // The column is still there, still unique when present, and still holding
+    // whatever an account created before the change declared.
+    const stored = await asService(
+      async (c) =>
+        (
+          await c.query(
+            'select student_id_number from public.customer_profiles where user_id = $1',
+            [id]
+          )
+        ).rows[0]
+    );
+    assert.equal(stored.student_id_number, null);
   });
 
   test('terms acceptance is part of sign-up, not a screen that can be skipped', async () => {
@@ -497,7 +523,7 @@ describe('account model — identity and capabilities', () => {
       ACTORS.admin,
       async (c) =>
         (
-          await c.query('select * from public.submit_order($1, $2::jsonb)', [
+          await c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
             VENDORS.one,
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
           ])
@@ -695,13 +721,29 @@ describe('account model — identity and capabilities', () => {
     assert.equal(caps.can_order, true);
   });
 
-  test('one student ID backs one identity', async () => {
+  /**
+   * Nothing new writes this column, but the accounts created before it stopped
+   * being asked for still carry one — and the uniqueness that guarded it still
+   * has to hold, or two legacy rows could collide on a later migration. The
+   * index is partial now, so "no number" is not a value that collides.
+   */
+  test('a legacy student ID still backs exactly one identity', async () => {
     const first = await newEmailIdentity(nextSchoolEmail());
     await onboard(first, { studentId: 'TEST-STU-DUP-1' });
 
     const second = await newEmailIdentity(nextSchoolEmail());
     const error = await expectRejection(onboard(second, { studentId: 'TEST-STU-DUP-1' }));
     assert.match(error.message, /student ID number is already registered/);
+  });
+
+  test('accounts with no student ID number do not collide with one another', async () => {
+    const first = await newEmailIdentity(nextSchoolEmail());
+    await onboard(first);
+    const second = await newEmailIdentity(nextSchoolEmail());
+    await onboard(second);
+
+    assert.equal((await capabilities(first)).can_order, true);
+    assert.equal((await capabilities(second)).can_order, true);
   });
 
   test('one phone number backs one identity, even though it is not the credential', async () => {

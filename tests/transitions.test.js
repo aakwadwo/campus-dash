@@ -13,9 +13,7 @@ import {
 import {
   submitOrder,
   acceptedOrder,
-  vendorAccept,
   payOrder,
-  vendorPrepare,
   vendorReady,
   orderReadyForDispatch,
   partnerAccept,
@@ -35,15 +33,15 @@ describe('state transitions', () => {
   test('an invalid transition is refused and the order is untouched', async () => {
     const order = await submitOrder();
 
-    // READY without ever being accepted, paid or prepared.
+    // READY without ever being paid for.
     const result = await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_mark_ready($1)', [
       order.order_id,
     ]);
     assert.equal(result.success, false);
-    assert.match(result.reason, /cannot be marked ready from state SUBMITTED/);
+    assert.match(result.reason, /cannot be marked ready from state ACCEPTED/);
 
     const stored = await getOrder(order.order_id);
-    assert.equal(stored.order_status, 'SUBMITTED');
+    assert.equal(stored.order_status, 'ACCEPTED');
     assert.equal(stored.ready_at, null);
   });
 
@@ -63,21 +61,26 @@ describe('state transitions', () => {
     );
     assert.equal(events.length, 1);
     assert.equal(events[0].event, 'VENDOR_READY');
-    assert.equal(events[0].from_state, 'SUBMITTED');
+    assert.equal(events[0].from_state, 'ACCEPTED');
     assert.equal(events[0].to_state, 'READY');
-    assert.match(events[0].reason, /not PREPARING/);
+    assert.match(events[0].reason, /not a paid order being prepared/);
   });
 
-  test('the vendor cannot start preparing before the money is in', async () => {
-    const order = await acceptedOrder();
+  test('a store is never shown an order until the money is in', async () => {
+    const order = await submitOrder();
 
-    const result = await tryTransition(
+    // The kitchen has nothing to do: an unpaid order is not on the board and
+    // there is no move a store can make on it.
+    const rows = await asUser(
       ACTORS.vendor1Staff,
-      'select public.vendor_mark_preparing($1)',
-      [order.order_id]
+      async (c) =>
+        (await c.query('select * from public.vendor_order_board($1)', [VENDORS.one])).rows
     );
-    assert.equal(result.success, false);
-    assert.match(result.reason, /payment must be PAID/);
+    assert.deepEqual(rows, []);
+
+    await payOrder(order.order_id);
+    const stored = await getOrder(order.order_id);
+    assert.equal(stored.order_status, 'PREPARING', 'paying is what reaches the kitchen');
   });
 
   test('the happy path walks all the way to COMPLETED', async () => {
@@ -92,10 +95,16 @@ describe('state transitions', () => {
   });
 
   // --- 14 ------------------------------------------------------------------
-  test('vendor timeout expires the order and takes no payment', async () => {
+  /**
+   * THERE IS NO VENDOR WINDOW LEFT TO ELAPSE. What can still go stale is an
+   * order somebody priced and never paid for — a basket taken to a checkout and
+   * abandoned. It is CANCELLED rather than EXPIRED, because nobody failed to
+   * answer, and nothing was ever charged.
+   */
+  test('an order nobody pays for is swept, and takes no payment', async () => {
     const order = await submitOrder();
 
-    // Wind the deadline into the past rather than waiting 60 real seconds.
+    // Wind the pay-by deadline into the past rather than waiting it out.
     await asService((c) =>
       c.query(
         "update public.orders set accept_deadline_at = now() - interval '1 second' where id = $1",
@@ -109,8 +118,9 @@ describe('state transitions', () => {
     assert.equal(expired, 1);
 
     const stored = await getOrder(order.order_id);
-    assert.equal(stored.order_status, 'EXPIRED');
-    assert.equal(stored.payment_status, 'UNPAID', 'NO payment is taken for an auto-rejected order');
+    assert.equal(stored.order_status, 'CANCELLED');
+    assert.equal(stored.payment_status, 'UNPAID', 'nothing is ever charged for one of these');
+    assert.match(stored.cancellation_reason, /not paid for/);
 
     const payments = await asService(
       async (c) =>
@@ -119,21 +129,24 @@ describe('state transitions', () => {
     assert.equal(payments.length, 0);
   });
 
-  test('a vendor cannot accept after the window has elapsed', async () => {
+  test('a payment already in flight is left alone by the sweep', async () => {
     const order = await submitOrder();
-    await asService((c) =>
-      c.query(
+    await asService(async (c) => {
+      await c.query("select * from public.create_payment_intent($1, 'fake', $2)", [
+        order.order_id,
+        `sweep-${order.order_id}`,
+      ]);
+      await c.query(
         "update public.orders set accept_deadline_at = now() - interval '1 second' where id = $1",
         [order.order_id]
-      )
-    );
+      );
+    });
 
-    const result = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_accept_order($1)',
-      [order.order_id]
+    const expired = await asService(
+      async (c) => (await c.query('select public.expire_stale_orders() as n')).rows[0].n
     );
-    assert.equal(result.success, false);
+    assert.equal(expired, 0, 'PENDING belongs to expire_stale_payments, which asks the provider');
+    assert.equal((await getOrder(order.order_id)).order_status, 'ACCEPTED');
   });
 
   test('an expired order cannot then be paid', async () => {
@@ -259,11 +272,11 @@ describe('state transitions', () => {
 
     const secrets = await getSecrets(order.order_id);
     assert.notEqual(secrets.pickup_code, firstCode);
-    // Four bumps, and each is a real event: choosing DELIVERY clears any
-    // collection code, the first claim issues one, the cancellation kills it,
-    // and the second claim issues another. The version only ever moves forward,
-    // which is what makes an old code dead rather than merely unused.
-    assert.equal(secrets.pickup_code_version, 4);
+    // Three bumps, and each is a real event: the first claim issues a code, the
+    // cancellation kills it, and the second claim issues another. The version
+    // only ever moves forward, which is what makes an old code dead rather than
+    // merely unused.
+    assert.equal(secrets.pickup_code_version, 3);
 
     // The old code is worthless, in the new Partner's hand.
     const stale = await tryTransition(
@@ -338,8 +351,12 @@ describe('state transitions', () => {
 
   // --- 11 ------------------------------------------------------------------
   test('a price change after submission does not alter the existing order', async () => {
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    // 2 x GH₵35 + 10% (GH₵7) + GH₵5 = GH₵82
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    // 2 × GH₵35 + 5%. Collection, so no delivery fee.
     assert.equal(order.total_pesewas, 7350);
 
     // The vendor raises the price from GH₵35.00 to GH₵50.00.
@@ -360,8 +377,12 @@ describe('state transitions', () => {
     assert.equal(items[0].name_snapshot, 'Jollof Rice with Chicken');
 
     // A NEW order picks up the new price.
-    const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
-    // 2 × GH₵50 + 5%. No delivery fee at submission — that is chosen later.
+    const later = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    // 2 × GH₵50 + 5%.
     assert.equal(later.total_pesewas, 10500, 'the new order uses the new price');
   });
 
@@ -403,15 +424,14 @@ describe('state transitions', () => {
       'no delivery fee on a pickup order'
     );
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
 
     let stored = await getOrder(order.order_id);
     assert.equal(stored.delivery_status, 'NONE', 'dispatch never opens for pickup');
 
-    // The customer shows their collection code at the counter and the vendor
-    // types it in. Reading it here stands in for that conversation.
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1, $2)', [
+    // The store reads the code out and the CUSTOMER types it in. Reading it
+    // here stands in for that conversation.
+    await tryTransition(ACTORS.customerAma, 'select public.customer_complete_pickup($1, $2)', [
       order.order_id,
       (await getSecrets(order.order_id)).pickup_code,
     ]);
@@ -424,7 +444,6 @@ describe('state transitions', () => {
   test('a pickup order never appears in the Partner offer list', async () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
 
     const offers = await asUser(

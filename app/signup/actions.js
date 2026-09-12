@@ -27,10 +27,10 @@ const CONTEXT = 'customer sign-up';
  *             a link: a link opens in whichever browser the mail app picks,
  *             which on a phone is routinely not the one holding this form
  *   complete  ONLY reached when verification SUCCEEDED and onboarding did not.
- *             A duplicate student ID is the case that matters: the code has
- *             been spent and the session is real, so asking for another code
- *             would ask for one that cannot exist. This step keeps the session
- *             and lets them correct the field.
+ *             A phone number already on another account is the case that
+ *             matters: the code has been spent and the session is real, so
+ *             asking for another code would ask for one that cannot exist.
+ *             This step keeps the session and lets them correct the field.
  *
  * The details ride the code step in hidden fields, so a mistyped code costs one
  * field rather than the whole form.
@@ -42,9 +42,10 @@ const CONTEXT = 'customer sign-up';
  * this action were bypassed entirely the capability still could not be
  * acquired: `authenticated` holds no write grant on customer_profiles.
  *
- * NO PHONE OTP, and NO STUDENT ID PHOTOGRAPH. A verified school address is the
- * proof of being a student; the phone is a profile fact, so a Partner can ring
- * on arrival.
+ * NO PHONE OTP, NO STUDENT ID PHOTOGRAPH AND NO STUDENT ID NUMBER. A verified
+ * @acity.edu.gh address is the school's own record of who this is, which is the
+ * proof; the phone is a profile fact, so a Partner can ring on arrival. A
+ * number typed into a box and checked against nothing proved neither.
  */
 
 function collect(formData) {
@@ -52,7 +53,6 @@ function collect(formData) {
     firstName: String(formData.get('first_name') ?? '').trim(),
     lastName: String(formData.get('last_name') ?? '').trim(),
     email: String(formData.get('email') ?? '').trim(),
-    studentIdNumber: String(formData.get('student_id_number') ?? '').trim(),
     level: String(formData.get('level') ?? '').trim(),
     phoneRaw: String(formData.get('phone') ?? '').trim(),
     accepted: formData.get('accept_terms') === 'on',
@@ -66,7 +66,6 @@ function carry(details) {
     firstName: details.firstName,
     lastName: details.lastName,
     email: details.email,
-    studentIdNumber: details.studentIdNumber,
     level: details.level,
     phoneRaw: details.phoneRaw,
   };
@@ -103,7 +102,6 @@ async function grantCustomer(details) {
   await completeOnboarding({
     firstName: checked.firstName,
     lastName: checked.lastName,
-    studentIdNumber: checked.studentIdNumber,
     level: checked.level,
     phone: checked.phone,
     termsId,

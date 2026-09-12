@@ -44,12 +44,32 @@ errand away. Zero would be a decision — a deliberately free errand.
 
 A scan order therefore costs:
 
-| Line                     | Amount      |
-| ------------------------ | ----------- |
-| Food through Campus Dash | GH₵0.00     |
-| Delivery fee             | GH₵5.00     |
-| Scan service fee         | GH₵2.00     |
-| **Customer pays**        | **GH₵7.00** |
+| Line                     | Amount    |
+| ------------------------ | --------- |
+| Food through Campus Dash | GH₵0.00   |
+| Delivery fee             | GH₵5.00   |
+| Scan service fee         | GH₵2.00   |
+| Disposable pack fee      | admin-set |
+| **Customer pays**        | the sum   |
+
+## The disposable pack fee
+
+**Scan errands only.** Campus Dash buys the containers a meal scan is carried in;
+a normal food order arrives in the store's own packaging and is charged nothing
+for it. `orders_pack_fee_scan_only` is a CHECK constraint rather than a
+convention, so it cannot leak onto a food order however the calling code
+changes.
+
+The amount lives in `pricing_config.scan_pack_fee_pesewas`, editable at
+`/admin/pilot`. Nothing hard-codes it: `price_scan_order()` reads it,
+`quote_scan_order()` returns it as its own line, and the checkout prints it as
+its own line — a customer who is charged for something is entitled to see what.
+
+It is **snapshotted onto the order** like every other figure, so raising it
+tomorrow does not change what somebody already agreed to pay. Zero is a real
+setting and means Campus Dash absorbs the cost; unlike the service fee, there is
+no "not configured" state, because packaging with no price is free packaging
+rather than an unpriced product.
 
 ## State
 
@@ -174,12 +194,16 @@ shows up in settlement queries and tells a reader the restaurant is owed
 something. It is not.
 
 ```
-customer pays          GH₵7.00   service fee + delivery fee
+customer pays          GH₵7.00   service fee + delivery fee (+ any pack fee)
 PLATFORM allocation    GH₵7.00   at payment
 PARTNER allocation     GH₵5.00   carved out of PLATFORM on delivery
-net platform           GH₵2.00   the scan service fee
+net platform           GH₵2.00   the scan service fee, plus the pack fee
 VENDOR allocation      — no row is written at all —
 ```
+
+The pack fee rides in the PLATFORM row for the same reason the service fee does:
+`create_order_allocations()` computes it as `total − subtotal`, and Campus Dash
+is who actually buys the containers.
 
 **Paystack's processing fee is a platform expense, and it is a platform expense
 by construction rather than by policy.** `payments` records only the gross amount

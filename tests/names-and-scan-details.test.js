@@ -110,6 +110,110 @@ describe('first names and the scan brief', () => {
     assert.equal(row.full_name, 'Akosua', 'a mononym is a name');
   });
 
+  // =========================================================================
+  // The phone number, in Settings
+  // =========================================================================
+  /**
+   * A CUSTOMER'S NUMBER IS A PROFILE FIELD — it is what a Partner rings on
+   * arrival, and it is theirs to change. A VENDOR'S IS A CREDENTIAL: they sign
+   * in with it, so a settings form that could move it would be an account
+   * takeover with a text input. Both rules live in SQL.
+   */
+  test('a customer can change the number a Partner rings', async () => {
+    const original = await asService(
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma]))
+          .rows[0].phone
+    );
+
+    try {
+      await asUser(
+        ACTORS.customerAma,
+        (c) =>
+          c.query('select public.update_my_profile($1, $2, $3)', ['Ama', 'Owusu', '+233208887777']),
+        { commit: true }
+      );
+
+      const row = await asService(
+        async (c) =>
+          (await c.query('select * from public.users where id = $1', [ACTORS.customerAma])).rows[0]
+      );
+      assert.equal(row.phone, '+233208887777');
+    } finally {
+      // The identity table is NOT truncated between tests — it is the seeded
+      // cast — so a committed change here would follow every later suite around.
+      await asService((c) =>
+        c.query('update public.users set phone = $1 where id = $2', [original, ACTORS.customerAma])
+      );
+    }
+  });
+
+  test('leaving the number out leaves it alone, rather than clearing it', async () => {
+    const before = await asService(
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma]))
+          .rows[0].phone
+    );
+
+    await asUser(
+      ACTORS.customerAma,
+      (c) => c.query('select public.update_my_profile($1, $2)', ['Ama', 'Owusu']),
+      { commit: true }
+    );
+
+    const after = await asService(
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma]))
+          .rows[0].phone
+    );
+    assert.equal(after, before, 'a name form must not be able to delete a phone number');
+  });
+
+  test('a badly shaped number is refused before it reaches the column', async () => {
+    const error = await expectRejection(
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.update_my_profile($1, $2, $3)', ['Ama', 'Owusu', '0201234567'])
+      )
+    );
+    assert.match(error.message, /valid phone number/i);
+  });
+
+  test('a number already on another account is refused, and says so', async () => {
+    const theirs = await asService(
+      async (c) =>
+        (await c.query('select phone from public.users where id = $1', [ACTORS.customerKwesi]))
+          .rows[0].phone
+    );
+
+    const error = await expectRejection(
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.update_my_profile($1, $2, $3)', ['Ama', 'Owusu', theirs])
+      )
+    );
+    assert.match(error.message, /already used by another Campus Dash account/i);
+  });
+
+  test('a store owner cannot move the number they sign in with', async () => {
+    const error = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.update_my_profile($1, $2, $3)', ['Kofi', 'Mensah', '+233208886666'])
+      )
+    );
+    assert.match(error.message, /how you sign in/i);
+
+    // And their name still changes, because that is not a credential.
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select public.update_my_profile($1, $2)', ['Kofi', 'Mensah']),
+      { commit: true }
+    );
+    const row = await asService(
+      async (c) =>
+        (await c.query('select * from public.users where id = $1', [ACTORS.vendor1Staff])).rows[0]
+    );
+    assert.equal(row.first_name, 'Kofi');
+  });
+
   test('capabilities carry the parts as well as the whole', async () => {
     const caps = await asUser(
       ACTORS.customerAma,

@@ -14,9 +14,8 @@ them back to the same stall with the basket still in the page.
 Placing an order needs the **CUSTOMER capability**, which is a
 `customer_profiles` row, which is acquired by completing sign-up:
 
-- full name
+- first and last name
 - school email — it must end **exactly** `@acity.edu.gh` — and a code sent to it
-- student ID number (unique: one ID backs one account)
 - level: 100, 200, 300 or 400
 - a phone number
 - acceptance of the current customer terms
@@ -35,11 +34,17 @@ anyone claim any student's.
 Partner standing outside a door can ring. It is unique — one number must not
 describe two people — but it is never how a customer signs in.
 
-**There is no ID photograph.** There used to be, and nobody ever looked at it:
-no review consumes one for an ordinary customer, so collecting it was cost
-without a control. The document moved to the Partner application, which is the
-one review that genuinely compares a card against a face. Signing up to order
-lunch no longer requires an upload.
+**There is no ID photograph, and no ID NUMBER either.** Both used to be asked
+for and neither was ever checked against anything: no review consumes them for
+an ordinary customer, so collecting them was cost without a control. The
+photograph moved to the Partner application, which is the one review that
+genuinely reads a card. The number went away entirely — a verified
+`@acity.edu.gh` address is the school's own record of who somebody is, and a
+number typed into a box was a second copy of that with nothing behind it.
+
+`customer_profiles.student_id_number` survives, NULLABLE and unique-when-present,
+because the accounts created before the change still carry one and a past review
+should stay auditable against what it was made on. Nothing new writes it.
 
 It is not a new account. The identity already exists — an address was verified
 to get this far — so sign-up only ever adds a capability to the `auth.users.id`
@@ -55,35 +60,42 @@ one first.
 ## The flow, and why it is in this order
 
 ```
-pick items  →  submit  →  VENDOR ACCEPTS  →  CUSTOMER CHOOSES pickup or delivery
-                              │                          │
-                              │                     price recalculates
-                              │                          ▼
-                              │                   customer pays  →  vendor cooks  →  READY
-                              │
-                         or rejects / no answer → nothing is charged, ever
+pick items  →  choose collection or delivery  →  see the FINAL price  →  PAY
+                                                                          │
+                                                                          ▼
+                                              the store receives a PAID order
+                                                                          │
+                                              delivery: a Partner is sought
+                                                        WHILE it is being made
+                                                                          ▼
+                                                     READY  →  handoff  →  done
 ```
 
-Two orderings matter here, and both are deliberate.
+**Everything is decided at the checkout, and the store only ever sees an order
+somebody has paid for.** There is no acceptance step and no 60-second window.
+A store answering a doorbell was the most fragile part of the product: it put a
+countdown on a phone next to a hot plate, it produced orders that expired for
+nobody's fault, and it made the customer wait to find out what their lunch was
+going to cost.
 
-**The vendor accepts before the customer pays.** That is the whole reason
-`order_status` and `payment_status` are separate fields: an order can be
-accepted and unpaid, or paid and not yet cooked, and neither implies the other.
-A single status column would have forced a choice between charging people for
-food that was never accepted, or letting vendors cook for people who never paid.
+`submit_order()` therefore takes the fulfilment and the destination, prices the
+whole thing — food, the 5% service fee, and the GH₵5 if a Partner is bringing it
+— and creates the order ACCEPTED, which from here means "priced and payable".
+`confirm_payment()` is what moves it to PREPARING and, for a delivery, what
+opens the Partner search.
 
-**The customer chooses pickup or delivery after that, and before paying.** It
-used to be asked at the basket, which put the most consequential choice — do I
-walk there, or do I pay someone GH₵5 to bring it — before the one fact that
-decides it, which is whether there is going to be an order at all.
+`order_status` and `payment_status` stay separate fields for the same reason
+they always were: an order can be priced and unpaid, or paid and not yet cooked,
+and neither implies the other.
 
-So `orders.fulfilment_type` is NULLABLE, and NULL is a STATE rather than a
-missing value: the vendor has not answered yet, or has, and the customer has not
-chosen. `create_payment_intent()` refuses an order still in it, so nothing is
-ever charged for a delivery nobody asked for. `customer_choose_fulfilment()`
-recomputes the total from the order's own price snapshot plus the delivery fee
-read from `pricing_config` now — the caller sends no amount and there is no
-parameter for one.
+**The choice can still be changed, while nothing has been paid.**
+`customer_choose_fulfilment()` recomputes the total from the order's own price
+snapshot plus the delivery fee read from `pricing_config` now — the caller sends
+no amount and there is no parameter for one.
+
+**An order nobody pays for is swept.** `accept_deadline_at` is the pay-by
+deadline, and `expire_stale_orders()` cancels what is past it. Nothing is ever
+charged.
 
 **One order is exactly one vendor.** There is no multi-vendor cart and no way to
 express one: `orders.vendor_id` is a single column.
@@ -118,19 +130,27 @@ customer's anything, or the contents of `order_secrets`.
 The screen shows a single **stage**, computed in the database from all three
 state dimensions together:
 
-| Stage                                           | Means                                         |
-| ----------------------------------------------- | --------------------------------------------- |
-| `AWAITING_VENDOR`                               | 60-second countdown. Nothing charged.         |
-| `CHOOSE_FULFILMENT`                             | Accepted. Collect it, or have it brought?     |
-| `PAYMENT_REQUIRED`                              | Chosen, and priced. Pay now.                  |
-| `PAYMENT_PROCESSING`                            | Charge in flight. Do not pay again.           |
-| `PAYMENT_FAILED`                                | Nothing taken. Retry creates a new attempt.   |
-| `PAID_AWAITING_KITCHEN` / `PREPARING` / `READY` | Progress.                                     |
-| `SEARCHING_PARTNER`                             | Cooked, and looking for somebody to bring it. |
-| `PARTNER_ASSIGNED`                              | A Partner is on their way to the vendor.      |
-| `ON_THE_WAY`                                    | They have it, and are coming to you.          |
-| `NO_PARTNER` / `CUSTOMER_ABSENT`                | Something went wrong with the delivery only.  |
-| `REJECTED` / `EXPIRED` / `CANCELLED`            | Over, with the reason, and no charge.         |
+| Stage                            | Means                                                    |
+| -------------------------------- | -------------------------------------------------------- |
+| `PAYMENT_REQUIRED`               | Priced. Pay now and the store starts.                    |
+| `PAYMENT_PROCESSING`             | Charge in flight. Do not pay again.                      |
+| `PAYMENT_FAILED`                 | Nothing taken. Retry creates a new attempt.              |
+| `PREPARING`                      | Paid, and being made.                                    |
+| `PREPARING_PARTNER_ASSIGNED`     | Being made, and somebody has already agreed to bring it. |
+| `READY`                          | On the counter. The store will give you a code.          |
+| `SEARCHING_PARTNER`              | Made, and looking for somebody to bring it.              |
+| `PARTNER_ASSIGNED`               | Your Partner is collecting it now.                       |
+| `ON_THE_WAY`                     | They have it, and are coming to you.                     |
+| `NO_PARTNER` / `CUSTOMER_ABSENT` | Something went wrong with the delivery only.             |
+| `COMPLETED` / `CANCELLED`        | Over, with the reason, and no surprise charge.           |
+
+`AWAITING_VENDOR`, `REJECTED` and `EXPIRED` are historical: they describe orders
+placed before a store stopped answering doorbells. Nothing new reaches them, and
+the wording survives so an old order still reads as a sentence.
+
+`PREPARING_PARTNER_ASSIGNED` is the one the new shape adds, and it is the
+update people actually want: "Kwame has accepted your order", arriving while the
+food is still on the stove.
 
 Deriving this once in SQL means no screen has to reason about how the three
 dimensions interact — which is exactly where a UI gets it wrong.
@@ -229,19 +249,28 @@ hands the same event to the same handler. **Only the transport is simulated** �
 signature verification, deduplication and the state transition are all the
 production path.
 
-## Delivery is recorded, not dispatched
+## Delivery is dispatched at PAYMENT
 
 A delivery order stores its destination and its zone, and `delivery_status`
-stays `NONE` until the vendor marks the food READY. No Partner is sought during
-Phase 6. That is not a gap in the customer flow; it is where dispatch belongs.
+moves `NONE → SEARCHING` the moment `confirm_payment()` succeeds — not when the
+food is ready. A Partner claimed while the kitchen works is a Partner who is not
+found at the last minute and not left standing at a counter.
+
+The offer carries `food_is_ready` so the Partner knows whether to set off or
+wait, and `partner_confirm_pickup()` refuses until the order is READY — checked
+before the code, so an eager attempt costs no attempt.
 
 The customer sees their **own full destination** (`… / Floor 2 / Room 204`). The
-vendor only ever sees the block.
+store only ever sees the block.
 
 ## Not built
 
-Cancelling an order after submission, editing a basket after submission,
-reordering, saved addresses, and any customer-facing Partner profile beyond a
-first name and a phone number for the length of one delivery. The first two are
-deliberate: once a vendor has accepted, the order is a commitment on both sides,
-and unwinding it is an admin action with a recorded reason.
+Editing a basket after submission, reordering, saved addresses, and any
+customer-facing Partner profile beyond a first name and a phone number for the
+length of one delivery.
+
+A customer can still change **collection or delivery** while the order is
+unpaid, and can walk away from an unpaid order entirely — the sweep cancels it
+and nothing is charged. What they cannot do is unwind a PAID order: that is a
+commitment on both sides, and undoing it is an admin action with a recorded
+reason.

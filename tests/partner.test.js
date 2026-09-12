@@ -19,6 +19,8 @@ import {
   tryTransition,
   getAllocations,
   submitOrder,
+  payOrder,
+  vendorReady,
 } from './helpers/flow.js';
 
 /**
@@ -117,6 +119,59 @@ describe('partner system', () => {
       );
       assert.match(noId.message, /photograph of your student ID is required/);
     }
+  });
+
+  /**
+   * THE AGREEMENT IS RECORDED, not implied by a sentence under a button. It
+   * lands in the same transaction as the application, against the published
+   * version, so "they agreed" is a row somebody can point at.
+   */
+  test('applying records the Partner terms acceptance alongside the application', async () => {
+    const terms = await asService(
+      async (c) =>
+        (
+          await c.query(
+            "select id, version from public.terms_documents where audience = 'PARTNER' and published_at is not null order by version desc limit 1"
+          )
+        ).rows[0]
+    );
+
+    await asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2)', [
+      'ama/student-id.jpg',
+      terms.id,
+    ]);
+
+    const accepted = await asService(
+      async (c) =>
+        (
+          await c.query(
+            "select * from public.terms_acceptances where user_id = $1 and audience = 'PARTNER'",
+            [ACTORS.customerAma]
+          )
+        ).rows
+    );
+    assert.equal(accepted.length, 1);
+    assert.equal(accepted[0].version, terms.version);
+  });
+
+  test('the wrong audience of terms is refused, rather than silently ignored', async () => {
+    const customerTerms = await asService(
+      async (c) =>
+        (
+          await c.query(
+            "select id from public.terms_documents where audience = 'CUSTOMER' order by version desc limit 1"
+          )
+        ).rows[0].id
+    );
+
+    const error = await expectRejection(
+      asPartner(ACTORS.customerAma, 'select public.partner_apply($1, $2)', [
+        'ama/student-id.jpg',
+        customerTerms,
+      ])
+    );
+    assert.match(error.message, /Partner terms must be accepted/);
+    assert.equal(await application(ACTORS.customerAma), null, 'and no application was written');
   });
 
   test('a new application stores no face photograph', async () => {
@@ -284,14 +339,29 @@ describe('partner system', () => {
     assert.ok(!('customer_id' in offer));
   });
 
-  test('an unpaid or unready order is never offered', async () => {
-    const submitted = await submitOrder();
-    assert.equal((await offers(ACTORS.partnerYaw)).length, 0, 'not accepted yet');
+  /**
+   * PAYMENT IS THE GATE, not READY. The pool opens the moment the money lands,
+   * so a Partner can claim a job while the kitchen works — but an order nobody
+   * has paid for is not work, and is never offered.
+   */
+  test('an unpaid order is never offered, and paying is what offers it', async () => {
+    const order = await submitOrder();
+    assert.equal((await offers(ACTORS.partnerYaw)).length, 0, 'nothing has been paid for');
 
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_accept_order($1)', [
-      submitted.order_id,
-    ]);
-    assert.equal((await offers(ACTORS.partnerYaw)).length, 0, 'accepted but not paid or ready');
+    await payOrder(order.order_id);
+
+    const open = await offers(ACTORS.partnerYaw);
+    const offer = open.find((o) => o.order_id === order.order_id);
+    assert.ok(offer, 'paid, so it is work');
+    assert.equal(offer.food_is_ready, false, 'and the Partner is told it is not cooked yet');
+  });
+
+  test('a collection order is never offered to anybody', async () => {
+    const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
+    await payOrder(order.order_id);
+    await vendorReady(order.order_id);
+
+    assert.equal((await offers(ACTORS.partnerYaw)).length, 0, 'there is nobody to bring it to');
   });
 
   test('a pickup order is never offered to anyone', async () => {
@@ -509,19 +579,19 @@ describe('partner system', () => {
     );
     assert.equal(rows.length, 0);
 
-    // And no Partner has a route to the pickup code AT ALL any more — it is the
-    // vendor's to read out, and vendor_pickup_code() refuses anyone who does not
-    // staff the store.
+    // And no Partner has a route to the handoff code AT ALL — it is the store's
+    // to read out, and vendor_handoff_code() refuses anyone who does not staff
+    // the store. Including the Partner who is actually carrying the order.
     const code = await expectRejection(
       asUser(ACTORS.partnerAdjoa, (c) =>
-        c.query('select public.vendor_pickup_code($1)', [order.order_id])
+        c.query('select public.vendor_handoff_code($1)', [order.order_id])
       )
     );
     assert.match(code.message, /not authorised for this order/);
 
     const alsoTheAssignedOne = await expectRejection(
       asUser(ACTORS.partnerYaw, (c) =>
-        c.query('select public.vendor_pickup_code($1)', [order.order_id])
+        c.query('select public.vendor_handoff_code($1)', [order.order_id])
       )
     );
     assert.match(alsoTheAssignedOne.message, /not authorised for this order/);

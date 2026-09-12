@@ -12,18 +12,23 @@ import { applyAction } from '../actions';
  *
  * A Partner already holds the CUSTOMER capability — the database refuses this
  * application without it — which means a verified @acity.edu.gh address has
- * already established who this is. Name, student ID number and level are on the
- * account. Re-asking would imply a second identity is being created, which is
- * exactly the confusion this flow exists to avoid.
+ * already established who this is. Re-asking for a name would imply a second
+ * identity is being created, which is exactly the confusion this flow exists to
+ * avoid.
+ *
+ * Nor is a student ID NUMBER asked for, here or anywhere any more. What a
+ * reviewer judges is the card; a number typed into a box was never checked
+ * against anything.
  *
  * There is also no face photograph any more. It proved nothing the school
  * address had not already proved, and it was the most sensitive thing Campus
  * Dash was storing. What remains is the student ID card, the Partner terms, and
  * a person at Campus Dash reading the application.
  */
-export default function ApplyForm({ profile }) {
+export default function ApplyForm() {
   const [state, submit, submitting] = useActionState(applyAction, {});
   const [idPath, setIdPath] = useState('');
+  const [accepted, setAccepted] = useState(false);
 
   // The form is REPLACED on success. Leaving a filled-in form on screen under a
   // success message reads as "nothing happened" and invites a second submission
@@ -47,22 +52,30 @@ export default function ApplyForm({ profile }) {
     <form action={submit} className="mt-6 space-y-6">
       <input type="hidden" name="student_id_image_path" value={idPath} />
 
-      {/* Read-only, and shown rather than re-asked: seeing it here is how an
-          applicant understands that the same account is being upgraded rather
-          than a second one created. */}
-      <section className="rounded-card bg-surface border-line border p-4">
-        <h2 className="text-sm font-medium">Your student details</h2>
-        <p className="text-muted mt-1 text-xs">
-          Already on your account, from when you signed up. Your school email is verified, so
-          nothing here needs checking again.
-        </p>
-        <dl className="mt-3 space-y-1.5 text-sm">
-          <Row label="Student ID" value={profile?.student_id_number} />
-          <Row label="Level" value={profile?.level} />
-        </dl>
-      </section>
-
       <StudentIdUpload path={idPath} onUploaded={setIdPath} />
+
+      {/* THE AGREEMENT IS RECORDED, not implied by a sentence under a button.
+          partner_apply() writes the acceptance against the published version in
+          the same transaction as the application. */}
+      <label className="border-line bg-surface-2 rounded-card flex items-start gap-3 border p-3.5">
+        <input
+          type="checkbox"
+          name="accept_terms"
+          checked={accepted}
+          onChange={(event) => setAccepted(event.target.checked)}
+          className="accent-brand-500 mt-0.5 size-4 shrink-0"
+        />
+        <span className="text-muted text-sm leading-relaxed">
+          I accept the{' '}
+          <Link
+            href="/terms?audience=PARTNER"
+            className="text-brand-700 font-medium underline underline-offset-4"
+          >
+            Campus Dash Partner terms
+          </Link>
+          .
+        </span>
+      </label>
 
       {state.message ? (
         <p
@@ -75,24 +88,27 @@ export default function ApplyForm({ profile }) {
 
       <button
         type="submit"
-        disabled={submitting || !idPath}
+        disabled={submitting || !idPath || !accepted}
         className="press bg-brand-700 hover:bg-brand-800 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
       >
-        {submitting ? 'Submitting…' : 'Submit application'}
+        {submitting ? (
+          <span className="inline-flex items-center gap-2">
+            <span
+              aria-hidden
+              className="inline-block size-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
+            />
+            Submitting…
+          </span>
+        ) : (
+          'Submit application'
+        )}
       </button>
-      <p className="text-muted text-center text-xs">
-        By applying you agree to the Campus Dash Partner terms.
-      </p>
+      {!idPath ? (
+        <p className="text-muted text-center text-xs">
+          Add a photo of your student ID to continue.
+        </p>
+      ) : null}
     </form>
-  );
-}
-
-function Row({ label, value }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted">{label}</dt>
-      <dd className="font-medium">{value ?? '-'}</dd>
-    </div>
   );
 }
 
@@ -156,7 +172,7 @@ function StudentIdUpload({ path, onUploaded }) {
         Photo of your student ID <span className="text-bad">*</span>
       </h2>
       <p className="text-muted mt-1 text-xs leading-relaxed">
-        Make sure the name and ID number are readable. It is stored privately and deleted after the
+        Make sure your name and photo are readable. It is stored privately and deleted after the
         review retention period.
       </p>
 

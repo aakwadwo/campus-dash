@@ -30,7 +30,6 @@ describe('customer sign-up decisions', () => {
     firstName: 'Kwame',
     lastName: 'Mensah',
     email: 'kwame.mensah@acity.edu.gh',
-    studentIdNumber: '20230123',
     level: '200',
     phoneRaw: '020 123 4567',
     accepted: true,
@@ -91,8 +90,14 @@ describe('customer sign-up decisions', () => {
     assert.equal(result.lastName, 'Mensah');
   });
 
-  test('a student ID number is required', () => {
-    assert.match(validateSignUpDetails({ ...VALID, studentIdNumber: '   ' }).error, /student ID/i);
+  test('no student ID number is asked for, and supplying one changes nothing', () => {
+    // The verified @acity.edu.gh address is the school's own record of who this
+    // is. A number typed into a box was a second copy nobody checked against
+    // anything, so the field is gone — and a form that still sent one is
+    // accepted and ignored rather than refused.
+    assert.equal(validateSignUpDetails(VALID).ok, true);
+    assert.equal(validateSignUpDetails({ ...VALID, studentIdNumber: '   ' }).ok, true);
+    assert.ok(!('studentIdNumber' in validateSignUpDetails(VALID)));
   });
 
   test('the level must be one of the four, and nothing else', () => {
@@ -143,7 +148,6 @@ describe('customer sign-up decisions', () => {
       firstName: '',
       lastName: '',
       email: 'nope',
-      studentIdNumber: '',
       level: '',
       phoneRaw: '',
       accepted: false,

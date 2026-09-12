@@ -10,9 +10,13 @@ export const metadata = { title: 'Administrator sign-in · Campus Dash' };
  * page has three audiences and this is not one of them.
  */
 export default async function AdminLoginPage({ searchParams }) {
+  const params = await searchParams;
   // Where the guard was headed before it found no session. Only ever honoured
   // as a path on this application — see safeNext.
-  const next = safeNext((await searchParams)?.next);
+  const next = safeNext(params?.next);
+  // Arrived back from the reset form, which signs the recovery session out on
+  // purpose: the new password still has to be proved here.
+  const justReset = params?.reset === 'done';
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-12">
@@ -23,7 +27,22 @@ export default async function AdminLoginPage({ searchParams }) {
         channel is the thing that is broken.
       </p>
 
+      {justReset ? (
+        <p
+          role="status"
+          className="rounded-card border-good/30 bg-good/10 mt-6 border p-3.5 text-sm leading-relaxed"
+        >
+          Your password has been changed. Sign in with it below.
+        </p>
+      ) : null}
+
       <AdminLoginForm next={next} />
+
+      <p className="text-muted mt-4 text-sm">
+        <Link href="/login/admin/forgot" className="underline underline-offset-4">
+          Forgot your password?
+        </Link>
+      </p>
 
       <p className="text-muted mt-8 text-xs leading-relaxed">
         Ordering and Partner accounts sign in with a code sent to their school address.{' '}

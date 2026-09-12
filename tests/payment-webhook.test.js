@@ -122,11 +122,11 @@ describe('payment webhook handling', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.payment_status, 'PAID');
-    assert.equal(
-      stored.order_status,
-      'ACCEPTED',
-      'payment does not move the food forward by itself'
-    );
+    // PAYMENT IS WHAT REACHES THE KITCHEN. There is nobody to accept the order
+    // first, so the money arriving is the moment a store has work to do — and,
+    // for a delivery, the moment the offer pool opens.
+    assert.equal(stored.order_status, 'PREPARING');
+    assert.equal(stored.delivery_status, 'SEARCHING');
 
     const allocations = await asService(
       async (c) =>
@@ -204,8 +204,9 @@ describe('payment webhook handling', () => {
       ])
     );
 
-    // A second intent is refused because the order is no longer payable.
+    // A second intent is refused: the order has been paid for and has moved on
+    // to the kitchen, so it is not payable by any route.
     const error = await expectRejection(intent(order.order_id, 2));
-    assert.match(error.message, /payment is already PAID/);
+    assert.match(error.message, /must be ACCEPTED before payment|payment is already PAID/);
   });
 });

@@ -12,7 +12,6 @@ import {
 import {
   submitOrder,
   acceptedOrder,
-  vendorAccept,
   payOrder,
   orderReadyForDispatch,
   partnerAccept,

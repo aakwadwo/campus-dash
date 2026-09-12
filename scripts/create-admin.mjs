@@ -13,13 +13,19 @@
  * there is no in-app path to the first administrator, by design — bootstrapping
  * requires the service-role key, which only ever exists on a server.
  *
- * WHY THE ADMIN ALSO GETS A PHONE NUMBER
- * --------------------------------------
- * Administrators sign in with email and password, so that operational access
- * does not depend on an SMS arriving. But public.users is provisioned by a
- * trigger on phone confirmation, and its `phone` column is NOT NULL and unique —
- * one account per person, with one identity. So the account carries both: the
- * phone is the identity, the password is the credential.
+ * WHY THE ADMIN IS NOT ASKED FOR A PHONE NUMBER
+ * ---------------------------------------------
+ * An administrator has NO phone number at all — `users.phone` is NULL on the
+ * row, not merely unused. Operational access must not depend on an SMS
+ * arriving, least of all when messaging is the thing that has broken. A number
+ * attached here would also be a second way into the console AND would occupy a
+ * number that a vendor could otherwise sign up with, since `users.phone` is
+ * unique across every identity. `public.users` is provisioned on EITHER
+ * confirmation, so a confirmed email address is enough to create the row.
+ *
+ * Forgotten the password? `npm run admin:password` sets a new one on an
+ * existing administrator and can do nothing else. This script is for making
+ * one.
  *
  * NOTHING IS COMMITTED, LOGGED OR ECHOED
  * --------------------------------------
@@ -99,25 +105,12 @@ async function secret(question) {
   return answer;
 }
 
-/** Ghana local or international, normalised to E.164 — same rule as lib/sms. */
-function normalisePhone(input) {
-  const digits = String(input).replace(/[^\d+]/g, '');
-  if (/^\+233\d{9}$/.test(digits)) return digits;
-  if (/^233\d{9}$/.test(digits)) return `+${digits}`;
-  if (/^0\d{9}$/.test(digits)) return `+233${digits.slice(1)}`;
-  return null;
-}
-
 try {
   console.log('\nCampus Dash — create an administrator');
   console.log(`Project: ${URL}\n`);
 
   const email = (await ask('Email address: ')).trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('That is not an email address.');
-
-  const rawPhone = await ask('Phone number (e.g. 0201234567): ');
-  const phone = normalisePhone(rawPhone);
-  if (!phone) throw new Error('That is not a Ghanaian phone number.');
 
   const fullName = (await ask('Full name: ')).trim();
   if (!fullName) throw new Error('A name is required — it is what the audit log shows.');
@@ -135,19 +128,11 @@ try {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // GoTrue stores phone numbers without the leading '+' and matches on that
-  // form at sign-in. public.users keeps the '+' — the provisioning trigger adds
-  // it back. Getting this wrong creates a second auth user that then collides on
-  // public.users' unique phone, and the symptom is an unfindable account.
-  const gotruePhone = phone.slice(1);
-
   let userId;
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password,
-    phone: gotruePhone,
     email_confirm: true,
-    phone_confirm: true,
     user_metadata: { full_name: fullName },
   });
 
@@ -155,16 +140,14 @@ try {
     // Already registered: set the password on the existing account rather than
     // making a second identity for the same person.
     const { data: list } = await admin.auth.admin.listUsers({ perPage: 1000 });
-    const existing = list?.users?.find((u) => u.email === email || u.phone === gotruePhone);
+    const existing = list?.users?.find((u) => (u.email ?? '').toLowerCase() === email);
     if (!existing) throw createError;
 
-    console.log('\nAn account already exists for that email or phone — updating it.');
+    console.log('\nAn account already exists for that email — updating it.');
     const { error: updateError } = await admin.auth.admin.updateUserById(existing.id, {
       email,
       password,
-      phone: gotruePhone,
       email_confirm: true,
-      phone_confirm: true,
     });
     if (updateError) throw updateError;
     userId = existing.id;
@@ -177,7 +160,7 @@ try {
   // otherwise look fine right up until the first sign-in fails.
   const { data: profile, error: profileError } = await admin
     .from('users')
-    .select('id, phone, full_name, is_admin')
+    .select('id, full_name, is_admin')
     .eq('id', userId)
     .maybeSingle();
   if (profileError) throw profileError;
@@ -195,14 +178,13 @@ try {
   if (promoteError) throw promoteError;
 
   console.log('\n  Administrator ready.');
-  console.log(`  ${fullName} <${email}>  ${phone}`);
+  console.log(`  ${fullName} <${email}>`);
   console.log('\n  Sign in at /login/admin with the email and password.');
   // ADMIN does not imply CUSTOMER. This account holds the admin capability and
   // nothing else: ordering needs a customer_profiles row, which only student
-  // onboarding creates. Saying the phone "works for ordering" was true before
-  // Customer became a capability and is now simply wrong.
-  console.log('  The phone number signs this account in at /login too, but ordering');
-  console.log('  needs student onboarding — admin does not grant Customer.\n');
+  // onboarding creates.
+  console.log('  This account has no phone number and orders nothing — admin does');
+  console.log('  not grant Customer, and student onboarding is a separate thing.\n');
 } catch (error) {
   console.error(`\n  ${error.message}\n`);
   process.exitCode = 1;

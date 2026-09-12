@@ -44,9 +44,10 @@ export default async function PartnerOffersPage() {
       )}
 
       <p className="text-muted mt-6 text-xs leading-relaxed">
-        Every food order here is already cooked and waiting, so you are never sent to stand at a
-        counter. You can carry {capacity.maxActive} at once. The customer&apos;s name, exact room
-        and phone number appear as soon as an order is yours, and only while you are carrying it.
+        Every order here has been paid for. Some are still being prepared — take one early and the
+        store will tell you when it is ready, so you are never left standing at a counter. You can
+        carry {capacity.maxActive} at once. The customer&apos;s first name, exact room and phone
+        number appear as soon as an order is yours, and only while you are carrying it.
       </p>
     </main>
   );

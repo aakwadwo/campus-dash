@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { requireCustomer } from '@/lib/auth/session';
 import { getMyOrder, fulfilmentOptions, listDeliverableLocations } from '@/lib/customer';
 import { getPollIntervals } from '@/lib/platform-config';
+import { orderLabel } from '@/lib/orders/state';
 import SiteHeader from '../../site-header';
 import { STAGE } from '../stage';
 import OrderStatus from './order-status';
@@ -66,42 +67,37 @@ function stepsFor(order) {
     ];
   }
 
-  // Before the choice is made, the DELIVERY journey is drawn: it is the longer
-  // of the two, so the steps narrow when the customer picks up rather than
-  // appearing out of nowhere. `pickup` only becomes true once they said so.
+  // FOUR STEPS FOR A COLLECTION, SIX FOR A DELIVERY. The fulfilment is decided
+  // at the checkout now, so the journey is known from the first render and
+  // there is no longer a step for choosing it.
   const order_ = [
     { key: 'placed', label: 'Order placed', at: at(order.submitted_at) },
-    { key: 'accepted', label: 'Vendor accepted your order', at: at(order.accepted_at) },
-    { key: 'chosen', label: 'Pickup or delivery chosen' },
     { key: 'paid', label: 'Payment confirmed' },
-    { key: 'preparing', label: 'Your order is being prepared' },
-    {
-      key: 'ready',
-      label: pickup ? 'Ready to collect' : 'Ready for a Partner to collect',
-      at: at(order.ready_at),
-    },
+    { key: 'preparing', label: 'Your order is being prepared', at: at(order.preparing_at) },
     ...(pickup
       ? []
-      : [
-          { key: 'searching', label: 'Finding a Partner' },
-          { key: 'assigned', label: 'Partner going to the vendor', at: at(order.assigned_at) },
-          { key: 'otw', label: 'Partner picked it up, coming to you', at: at(order.picked_up_at) },
-        ]),
+      : [{ key: 'assigned', label: 'A Partner accepted it', at: at(order.assigned_at) }]),
+    {
+      key: 'ready',
+      label: pickup ? 'Ready to collect' : 'Ready for your Partner to collect',
+      at: at(order.ready_at),
+    },
+    ...(pickup ? [] : [{ key: 'otw', label: 'On the way to you', at: at(order.picked_up_at) }]),
     { key: 'done', label: pickup ? 'Collected' : 'Delivered', at: at(order.completed_at) },
   ];
 
   // Where the order has got to, expressed as an index into the list above.
   const reached = {
     AWAITING_VENDOR: 'placed',
-    CHOOSE_FULFILMENT: 'accepted',
-    PAYMENT_REQUIRED: 'chosen',
-    PAYMENT_PROCESSING: 'chosen',
+    PAYMENT_REQUIRED: 'placed',
+    PAYMENT_PROCESSING: 'placed',
     PAID_AWAITING_KITCHEN: 'paid',
     PREPARING: 'preparing',
+    PREPARING_PARTNER_ASSIGNED: 'assigned',
     READY: 'ready',
-    SEARCHING_PARTNER: 'searching',
-    NO_PARTNER: 'searching',
-    PARTNER_ASSIGNED: 'assigned',
+    SEARCHING_PARTNER: 'ready',
+    NO_PARTNER: 'ready',
+    PARTNER_ASSIGNED: 'ready',
     ON_THE_WAY: 'otw',
     CUSTOMER_ABSENT: 'otw',
     COMPLETED: 'done',
@@ -137,13 +133,14 @@ export default async function CustomerOrderPage({ params }) {
   const [order, intervals] = await Promise.all([getMyOrder(orderId), getPollIntervals()]);
   if (!order) notFound();
 
-  // Only fetched when the question is actually being asked. Both totals are
-  // computed in the database from this order's own price snapshot — the screen
-  // never adds a delivery fee to a subtotal itself.
-  const [options, locations] =
-    order.stage === 'CHOOSE_FULFILMENT'
-      ? await Promise.all([fulfilmentOptions(orderId), listDeliverableLocations()])
-      : [null, null];
+  // Only fetched while the order can still be changed — which is only while it
+  // is unpaid. Both totals are computed in the database from this order's own
+  // price snapshot; the screen never adds a delivery fee to a subtotal itself.
+  const changeable =
+    order.order_type !== 'SCAN' && ['PAYMENT_REQUIRED', 'PAYMENT_FAILED'].includes(order.stage);
+  const [options, locations] = changeable
+    ? await Promise.all([fulfilmentOptions(orderId), listDeliverableLocations()])
+    : [null, null];
 
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
   const live = !['COMPLETED', 'REJECTED', 'EXPIRED', 'CANCELLED'].includes(order.stage);
@@ -177,7 +174,7 @@ export default async function CustomerOrderPage({ params }) {
             ) : null}
             <p className="text-faint mt-4 flex items-center justify-center gap-2 font-mono text-xs">
               {live ? <LiveDot tone={stage.badge === 'bad' ? 'bad' : 'good'} /> : null}
-              {order.order_number}
+              Order {orderLabel(order)}
             </p>
           </header>
 
@@ -230,7 +227,10 @@ export default async function CustomerOrderPage({ params }) {
               <Line label="Food" value={order.subtotal_pesewas} />
               <Line label="Service fee" value={order.service_fee_pesewas} />
               {order.delivery_fee_pesewas > 0 ? (
-                <Line label="Delivery fee" value={order.delivery_fee_pesewas} />
+                <Line label="Partner delivery" value={order.delivery_fee_pesewas} />
+              ) : null}
+              {order.pack_fee_pesewas > 0 ? (
+                <Line label="Disposable pack" value={order.pack_fee_pesewas} />
               ) : null}
               <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
                 <dt className="font-semibold">Total</dt>
@@ -247,14 +247,10 @@ export default async function CustomerOrderPage({ params }) {
             </h2>
             <Facts>
               <Fact
-                label="Fulfilment"
+                label="How you get it"
                 value={
                   <Badge tone="neutral">
-                    {order.fulfilment_type === null
-                      ? 'Not chosen yet'
-                      : order.fulfilment_type === 'PICKUP'
-                        ? 'You collect'
-                        : 'Delivered to you'}
+                    {order.fulfilment_type === 'PICKUP' ? 'You collect' : 'Partner delivery'}
                   </Badge>
                 }
               />
@@ -266,9 +262,10 @@ export default async function CustomerOrderPage({ params }) {
               ) : null}
             </Facts>
 
-            {order.fulfilment_type === 'DELIVERY' && order.order_status === 'READY' ? (
+            {order.fulfilment_type === 'DELIVERY' && order.delivery_status === 'SEARCHING' ? (
               <Callout className="mt-4">
-                Your food is ready. A Partner will be found to bring it to you.
+                We are finding a Partner to bring this to you. You will see their name here as soon
+                as somebody takes it.
               </Callout>
             ) : null}
           </Card>

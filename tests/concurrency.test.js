@@ -15,7 +15,6 @@ import {
   expectRejection,
   submitOrder,
   acceptedOrder,
-  vendorAccept,
   completeDelivery,
   setPartnerPayoutThreshold,
 } from './helpers/flow.js';

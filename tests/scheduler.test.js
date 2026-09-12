@@ -33,7 +33,12 @@ describe('scheduled jobs', () => {
     ]);
   });
 
-  test('the stale-order sweep runs on its own and takes no payment', async (t) => {
+  /**
+   * There is no vendor answer window left to elapse. What the sweep now catches
+   * is an order somebody priced and walked away from — and it CANCELS it rather
+   * than expiring it, because nobody failed to answer.
+   */
+  test('the unpaid-order sweep runs on its own and takes no payment', async (t) => {
     const order = await submitOrder();
     await asService((c) =>
       c.query(
@@ -46,15 +51,15 @@ describe('scheduled jobs', () => {
     let stored;
     for (let i = 0; i < 35; i += 1) {
       stored = await getOrder(order.order_id);
-      if (stored.order_status === 'EXPIRED') break;
+      if (stored.order_status === 'CANCELLED') break;
       await new Promise((r) => setTimeout(r, 2000));
     }
 
-    if (stored.order_status !== 'EXPIRED') {
+    if (stored.order_status !== 'CANCELLED') {
       t.diagnostic('pg_cron did not fire within 70s — is the background worker running?');
     }
-    assert.equal(stored.order_status, 'EXPIRED', 'the scheduler expired it with no manual call');
-    assert.equal(stored.payment_status, 'UNPAID', 'an auto-rejected order is never charged');
+    assert.equal(stored.order_status, 'CANCELLED', 'the scheduler swept it with no manual call');
+    assert.equal(stored.payment_status, 'UNPAID', 'an order nobody paid for is never charged');
 
     const payments = await asService(
       async (c) =>
@@ -78,7 +83,7 @@ describe('scheduled jobs', () => {
   test('the sweep leaves orders inside their window alone', async () => {
     const order = await submitOrder();
     await asService((c) => c.query('select public.expire_stale_orders()'));
-    assert.equal((await getOrder(order.order_id)).order_status, 'SUBMITTED');
+    assert.equal((await getOrder(order.order_id)).order_status, 'ACCEPTED');
   });
 
   test('the sweep never touches an order the vendor already accepted', async () => {

@@ -150,6 +150,7 @@ describe('route health', { skip: running ? false : `dev server not running at ${
     '/terms',
     '/suspended',
     '/login/admin',
+    '/login/admin/forgot',
     '/login/vendor',
     '/vendor/signup',
   ]) {
@@ -169,7 +170,6 @@ describe('route health', { skip: running ? false : `dev server not running at ${
       'name="first_name"',
       'name="last_name"',
       'name="email"',
-      'name="student_id_number"',
       'name="level"',
       'name="phone"',
       'name="accept_terms"',
@@ -197,11 +197,15 @@ describe('route health', { skip: running ? false : `dev server not running at ${
     );
   });
 
-  test('/signup offers no student ID upload', async () => {
-    // Signing up to order lunch requires no document. The ID photograph
-    // belongs to the Partner application, the only review that looks at one.
+  test('/signup offers no student ID upload and asks for no ID number', async () => {
+    // Signing up to order lunch requires no document and no number. The ID
+    // photograph belongs to the Partner application, the only review that looks
+    // at one; the number was a second copy of something the verified school
+    // address already established.
     const { body } = await check('/signup');
     assert.ok(!/type=\\?"file\\?"/i.test(body), 'no upload control on customer sign-up');
+    assert.ok(!body.includes('student_id_number'), 'and no ID number field anywhere');
+    assert.ok(!/student ID number/i.test(body), 'nor a label asking for one');
   });
 
   test('/login sends a code to a school address, and links to sign-up', async () => {
@@ -223,7 +227,7 @@ describe('route health', { skip: running ? false : `dev server not running at ${
   // Customer
   // =====================================================================
 
-  for (const path of ['/account', '/orders', '/partner/apply']) {
+  for (const path of ['/account', '/account/settings', '/orders', '/partner/apply']) {
     test(`${path} is intact and guarded`, async () => {
       const r = await check(path);
       assert.ok(r.redirected || r.status === 200, `${path} answered ${r.status}`);
@@ -240,7 +244,7 @@ describe('route health', { skip: running ? false : `dev server not running at ${
   // Vendor
   // =====================================================================
 
-  for (const path of ['/vendor', '/vendor/application', '/vendor/profile']) {
+  for (const path of ['/vendor', '/vendor/application', '/vendor/profile', '/vendor/menu']) {
     test(`${path} is intact and guarded`, async () => {
       await check(path);
     });
@@ -248,6 +252,39 @@ describe('route health', { skip: running ? false : `dev server not running at ${
 
   test('a vendor order board route is intact', async () => {
     await check(`/vendor/${ids.vendor}`, { allow404: true });
+  });
+
+  /**
+   * THE STEP THAT DID NOT ADVANCE. The store form and the code form used to be
+   * derived from two action states that could never agree, so the SMS went out
+   * and the screen stayed put. A route test cannot press the button, but it can
+   * assert the shape the fix depends on: the details form is what renders
+   * first, and every field it carries into the code step is present.
+   */
+  test('/vendor/signup renders the store form, with description and category apart', async () => {
+    const { body } = await check('/vendor/signup');
+
+    for (const field of [
+      'name="applicant_name"',
+      'name="store_name"',
+      'name="is_student"',
+      'name="description"',
+      'name="category_id"',
+      'name="phone"',
+      'name="accept_terms"',
+    ]) {
+      assert.ok(body.includes(field), `the store form is missing ${field}`);
+    }
+
+    // TWO DIFFERENT QUESTIONS, labelled as two. "What do you sell?" above a
+    // category dropdown reads as one question asked twice.
+    assert.match(body, /Business description/i);
+    assert.match(body, /Business category/i);
+
+    // The code step is NOT what renders first — it appears only once a code has
+    // actually been sent.
+    assert.ok(!body.includes('name="token"'), 'the code box is the second screen');
+    assert.match(body, /Send verification code/i);
   });
 
   // =====================================================================
@@ -335,6 +372,40 @@ describe('route health', { skip: running ? false : `dev server not running at ${
         `${path} lost the destination on the way to sign-in`
       );
     }
+  });
+
+  /**
+   * The recovery pages are the one place a password can be SET from a browser,
+   * so the things that keep them from being a way in are asserted here rather
+   * than left to the reader: the form must not disclose whether an address is
+   * an administrator, and the page that sets a password must refuse to render
+   * for somebody who simply typed its path with no recovery session.
+   */
+  test('the reset form does not disclose who is an administrator', async () => {
+    const { body } = await check('/login/admin/forgot');
+    assert.ok(body.includes('name="email"'), 'recovery starts from an email address');
+    assert.ok(
+      !/type=\\?"password\\?"/i.test(body),
+      'asking for a password here would be asking the locked-out person for the thing they lost'
+    );
+  });
+
+  test('the password form is unreachable without a recovery session', async () => {
+    // Fetched directly rather than through check(), because the assertion is
+    // about WHERE it redirects and check() does not surface the header.
+    const res = await fetch(`${APP}/login/admin/reset`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(20000),
+    });
+    assert.ok(
+      res.status >= 300 && res.status < 400,
+      'typing the reset path with no recovery link must not render a password form'
+    );
+    assert.match(
+      res.headers.get('location') ?? '',
+      /\/login\/admin\/forgot/,
+      'it should send them to ask for a link'
+    );
   });
 
   test('the admin door asks for a password, and never for a code', async () => {

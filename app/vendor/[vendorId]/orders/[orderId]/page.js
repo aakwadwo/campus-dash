@@ -1,21 +1,23 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getOrderDetail, getPickupCode } from '@/lib/vendor';
+import { getOrderDetail, getHandoffCode } from '@/lib/vendor';
+import { orderLabel } from '@/lib/orders/state';
 import { formatPesewas } from '@/lib/util/money';
 import OrderActions from './order-actions';
 
 export const dynamic = 'force-dynamic';
 
 const STATUS_COPY = {
-  SUBMITTED: 'Waiting for your answer',
-  ACCEPTED: 'Accepted, waiting for payment',
+  ACCEPTED: 'Paid — start preparing',
   PREPARING: 'Preparing',
-  READY: 'Ready',
+  READY: 'Ready for pickup',
   COMPLETED: 'Completed',
-  REJECTED: 'You rejected this order',
-  EXPIRED: 'Expired, no answer in time',
   CANCELLED: 'Cancelled',
   CANCELLED_BY_VENDOR: 'You cancelled this order',
+  // Only reachable on an order placed before orders arrived paid for.
+  SUBMITTED: 'Waiting for your answer',
+  REJECTED: 'You rejected this order',
+  EXPIRED: 'Expired, no answer in time',
 };
 
 export default async function VendorOrderPage({ params }) {
@@ -27,11 +29,12 @@ export default async function VendorOrderPage({ params }) {
   const order = await getOrderDetail(orderId);
   if (!order || order.vendor_id !== vendorId) notFound();
 
-  // Fetched only when a Partner is actually standing there. vendor_pickup_code()
-  // refuses at any other moment, so this is not the guard — it is what stops a
-  // pointless call on every other order.
-  const pickupCode = order.pickup_code_available
-    ? await getPickupCode(orderId).catch(() => null)
+  // Fetched only when somebody is actually due to collect — a Partner at the
+  // counter, or a customer whose food is made. vendor_handoff_code() refuses at
+  // any other moment, so this is not the guard; it is what stops a pointless
+  // call on every other order.
+  const handoffCode = order.handoff_code_available
+    ? await getHandoffCode(orderId).catch(() => null)
     : null;
 
   return (
@@ -44,8 +47,9 @@ export default async function VendorOrderPage({ params }) {
       </Link>
 
       <header className="mt-3 mb-5">
-        <h1 className="font-mono text-2xl font-semibold">{order.order_number}</h1>
-        <p className="mt-1 font-medium">{STATUS_COPY[order.order_status] ?? order.order_status}</p>
+        <p className="text-muted text-xs font-semibold tracking-[0.14em] uppercase">Order number</p>
+        <h1 className="text-5xl leading-none font-bold tabular-nums">{orderLabel(order)}</h1>
+        <p className="mt-2 font-medium">{STATUS_COPY[order.order_status] ?? order.order_status}</p>
         {order.cancellation_reason ? (
           <p className="text-muted mt-1 text-sm">{order.cancellation_reason}</p>
         ) : null}
@@ -68,9 +72,9 @@ export default async function VendorOrderPage({ params }) {
           <Row label="Food" value={formatPesewas(order.subtotal_pesewas)} />
           <Row label="Service fee" value={formatPesewas(order.service_fee_pesewas)} />
           {order.delivery_fee_pesewas > 0 ? (
-            <Row label="Delivery fee" value={formatPesewas(order.delivery_fee_pesewas)} />
+            <Row label="Partner delivery" value={formatPesewas(order.delivery_fee_pesewas)} />
           ) : null}
-          <Row label="Customer pays" value={formatPesewas(order.total_pesewas)} strong />
+          <Row label="Customer paid" value={formatPesewas(order.total_pesewas)} strong />
         </dl>
         <p className="text-muted mt-3 text-xs">
           You receive the food amount. The service and delivery fees are not yours, and are settled
@@ -82,30 +86,28 @@ export default async function VendorOrderPage({ params }) {
         <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Details</h2>
         <dl className="space-y-1 text-sm">
           <Row
-            label="Fulfilment"
+            label="Collected by"
             value={
-              order.fulfilment_type === null
-                ? 'Customer is choosing'
-                : order.fulfilment_type === 'PICKUP'
-                  ? 'Customer collects'
-                  : 'Partner delivers'
+              order.fulfilment_type === 'PICKUP'
+                ? (order.customer_first_name ?? 'The customer')
+                : 'A Campus Dash Partner'
             }
           />
           {order.fulfilment_type === 'DELIVERY' ? (
             <Row label="Destination zone" value={order.destination_zone ?? 'Campus'} />
           ) : null}
           <Row label="Payment" value={paymentCopy(order.payment_status)} />
-          {order.fulfilment_type === 'DELIVERY' && order.order_status === 'READY' ? (
+          {order.fulfilment_type === 'DELIVERY' ? (
             <Row
               label="Partner"
-              value={order.partner_assigned ? 'Assigned, coming to collect' : 'Searching…'}
+              value={order.partner_assigned ? (order.partner_name ?? 'Assigned') : 'Searching…'}
             />
           ) : null}
           <Row label="Order age" value={formatAge(order.age_seconds)} />
         </dl>
       </section>
 
-      <OrderActions order={order} vendorId={vendorId} pickupCode={pickupCode} />
+      <OrderActions order={order} vendorId={vendorId} handoffCode={handoffCode} />
     </main>
   );
 }

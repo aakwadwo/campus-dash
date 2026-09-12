@@ -5,6 +5,7 @@ import { partnerSetAvailability } from '@/lib/orders/transitions';
 import { setMyEmail } from '@/lib/customer';
 import { createClient } from '@/lib/supabase/server';
 import { actionFailure } from '@/lib/errors';
+import { normaliseGhanaPhone } from '@/lib/sms';
 
 /**
  * The availability toggle. The database refuses this for anyone who is not an
@@ -12,7 +13,8 @@ import { actionFailure } from '@/lib/errors';
  */
 export async function setPartnerAvailability(formData) {
   await partnerSetAvailability(formData.get('available') === 'true');
-  revalidatePath('/account');
+  revalidatePath('/account', 'layout');
+  revalidatePath('/partner', 'layout');
 }
 
 /**
@@ -33,33 +35,53 @@ export async function saveMyEmail(_prev, formData) {
     return actionFailure(error, 'account');
   }
 
-  revalidatePath('/account');
+  revalidatePath('/account', 'layout');
   return { ok: true, message: 'Saved.' };
 }
 
 /**
- * The account holder's own name.
+ * The account holder's own name and phone number.
  *
  * A last name is optional and a first name is not, because the first name is
  * what the product actually uses — it is how a customer is told who is bringing
  * their order, and how a Partner is told who they are meeting.
+ *
+ * THE PHONE IS A PROFILE FIELD HERE, NOT A CREDENTIAL. It is the number a
+ * Partner rings on arrival. For a vendor it IS the sign-in credential, and
+ * update_my_profile() refuses to move it for that reason — a settings form that
+ * could change a credential is an account takeover with a text input. The
+ * refusal is in SQL; this only sends what was typed.
  */
-export async function saveMyName(_prev, formData) {
+export async function saveMyProfile(_prev, formData) {
   const firstName = String(formData.get('first_name') ?? '').trim();
   const lastName = String(formData.get('last_name') ?? '').trim();
+  const phoneRaw = String(formData.get('phone') ?? '').trim();
+
   if (!firstName) return { ok: false, message: 'Enter your first name.' };
+
+  // Normalised here so somebody typing 020 123 4567 is not told off by a
+  // regular expression in the database. An unusable value is refused before a
+  // round trip; the database checks the shape again regardless.
+  let phone = null;
+  if (phoneRaw) {
+    phone = normaliseGhanaPhone(phoneRaw);
+    if (!phone) {
+      return { ok: false, message: 'Enter a valid Ghanaian phone number, e.g. 020 123 4567.' };
+    }
+  }
 
   try {
     const supabase = await createClient();
     const { error } = await supabase.rpc('update_my_profile', {
       p_first_name: firstName,
       p_last_name: lastName || null,
+      p_phone: phone,
     });
     if (error) throw new Error(error.message);
   } catch (error) {
     return actionFailure(error, 'account');
   }
 
-  revalidatePath('/account');
+  revalidatePath('/account', 'layout');
   return { ok: true, message: 'Saved.' };
 }

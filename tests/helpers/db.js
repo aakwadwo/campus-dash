@@ -120,6 +120,9 @@ export async function resetTransactionalState() {
         public.allocations, public.payouts, public.settlement_runs,
         public.payout_destinations,
         public.payments, public.orders, public.partner_ratings,
+        -- The daily queue counters. Without this a test asserting "the first
+        -- order today is 001" reads whatever the previous file left behind.
+        public.vendor_order_counters,
         public.customer_rewards,
         public.webhook_events, public.idempotency_keys,
         public.notification_events

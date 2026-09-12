@@ -243,12 +243,17 @@ export async function signOut() {
  * AN ADMINISTRATOR HAS NO PHONE NUMBER. Not "does not use it to sign in" —
  * users.phone is NULL on the row, and nothing in the console needs one.
  *
- * There is no admin registration path and no password reset flow here. The
- * first administrator is created out-of-band with scripts/create-admin.mjs;
- * `is_admin` is a database column that no client statement can reach, because
- * users hold no UPDATE grant on public.users. /admin is not linked from any
- * public page, which is not a security control — the checks below and in every
- * admin_* function are — but there is no reason to advertise the door.
+ * There is no admin registration path here. The first administrator is created
+ * out-of-band with scripts/create-admin.mjs; `is_admin` is a database column
+ * that no client statement can reach, because users hold no UPDATE grant on
+ * public.users. /admin is not linked from any public page, which is not a
+ * security control — the checks below and in every admin_* function are — but
+ * there is no reason to advertise the door.
+ *
+ * A FORGOTTEN password is recovered in ./admin/recovery-actions.js, which emails
+ * a link only to an address that is ALREADY an administrator and signs the
+ * recovery session out the moment the password is set. It cannot create an
+ * administrator and it cannot promote one.
  */
 export async function adminSignIn(_prevState, formData) {
   const email = String(formData.get('email') ?? '')

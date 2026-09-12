@@ -22,21 +22,30 @@ factory. No business logic moves.
 
 ## Who hears what
 
-| Event             | Customer            | Vendor        | Partner                     |
-| ----------------- | ------------------- | ------------- | --------------------------- |
-| Order submitted   | ✓                   | ✓             |                             |
-| Vendor accepted   | ✓                   |               |                             |
-| Vendor rejected   | ✓                   |               |                             |
-| Payment confirmed | ✓                   | ✓             |                             |
-| Preparing         | ✓                   |               |                             |
-| Ready             | ✓                   |               |                             |
-| Partner assigned  | ✓ _(delivery code)_ | ✓ _(no code)_ | ✓ _(pickup code, earnings)_ |
-| Partner picked up | ✓                   |               | ✓ _(destination)_           |
-| Delivered         | ✓                   |               | ✓ _(earning)_               |
-| Cancelled         | ✓                   | ✓             | ✓                           |
+| Event                 | Customer             | Store                       | Partner                        |
+| --------------------- | -------------------- | --------------------------- | ------------------------------ |
+| Order created, unpaid |                      |                             |                                |
+| **Payment confirmed** | ✓                    | ✓ _(NEW PAID ORDER + link)_ |                                |
+| Ready                 | ✓ _(how to collect)_ |                             |                                |
+| Partner assigned      | ✓ _(delivery code)_  | ✓ _(no code)_               | ✓ _(earnings, wait for Ready)_ |
+| Partner picked up     | ✓                    |                             | ✓                              |
+| Delivered             | ✓                    |                             | ✓ _(added to earnings)_        |
+| Cancelled             | ✓                    | ✓                           | ✓                              |
 
-**The vendor is never sent the pickup code.** A vendor who knew it could confirm
-a handoff that never happened.
+**NOBODY IS TEXTED WHEN AN ORDER IS CREATED.** It is not a ticket yet — nothing
+has been paid, and the customer is looking at the pay button as the message
+would arrive. A store's "new order" message is the PAYMENT one, and it says PAID
+because that is the fact that makes the order real. There is no accept-or-reject
+prompt in it, because there is nothing left to accept.
+
+**No handoff code is ever sent by SMS**, to anybody. The store reads theirs off
+their own screen, behind their own session; a message is a copy in a second
+place that outlives the delivery it was sent for.
+
+**For a collection, the READY message explains the handoff** — "they will give
+you a 4-digit code, enter it in the app". That code does not exist until the
+food is made, and somebody about to walk to a counter expecting to simply be
+handed food needs to be told once.
 
 An audience with no template is simply not notified — a missing entry is how an
 event stays quiet, not a bug.
@@ -134,9 +143,10 @@ double-clicked admin button cannot send the same congratulations twice.
 forwardable, screenshottable and permanent, and it outlives the delivery it was
 sent for; the dashboard's copy expires when the authorisation does.
 
-**A handoff code, to the wrong side.** The Partner is not sent the pickup code —
-the vendor reads it off their own screen. Putting it in a message would give the
-Partner both halves of the proof.
+**A handoff code, to anybody.** The store reads it off their own screen; nobody
+receives it by SMS. Putting it in a message would give the person collecting
+both halves of the proof, and would leave a copy of it on a phone long after the
+delivery it belonged to was over.
 
 ## Names in messages
 

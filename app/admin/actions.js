@@ -632,7 +632,6 @@ export async function updateConfigAction(_prev, formData) {
         reason: str(formData, 'reason'),
         serviceFeeBps: num(formData, 'service_fee_bps'),
         deliveryFeePesewas: num(formData, 'delivery_fee_pesewas'),
-        vendorResponseSeconds: num(formData, 'vendor_response_seconds'),
         partnerSearchSeconds: num(formData, 'partner_search_seconds'),
         customerAbsentWaitSeconds: num(formData, 'customer_absent_wait_seconds'),
         paymentPendingTimeoutSeconds: num(formData, 'payment_pending_timeout_seconds'),
@@ -641,6 +640,13 @@ export async function updateConfigAction(_prev, formData) {
         scanServiceFeePesewas: num(formData, 'scan_service_fee_pesewas'),
         maxActiveDeliveriesPerPartner: num(formData, 'max_active_deliveries_per_partner'),
         partnerMinPayoutPesewas: num(formData, 'partner_min_payout_pesewas'),
+        scanPackFeePesewas: num(formData, 'scan_pack_fee_pesewas'),
+        // A CHECKBOX IS ALWAYS PRESENT OR ABSENT, never null, so this one field
+        // does not follow the "blank means leave alone" rule the rest of the
+        // form does. An unticked box is a deliberate "off", and the form
+        // renders its current value as the default so a save cannot flip it by
+        // accident.
+        partnerDeliveryEnabled: formData.get('partner_delivery_enabled') === 'on',
       }),
     'Settings saved. Fee changes apply to the next order.',
     ['/admin/pilot']

@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getMyApplication } from '@/lib/partner';
-import { getMyCustomerProfile } from '@/lib/customer';
 import ApplyForm, { ContinueOrdering } from './apply-form';
 
 export const dynamic = 'force-dynamic';
@@ -38,7 +37,7 @@ export default async function PartnerApplyPage() {
   // the database will refuse. `next` brings them back here afterwards.
   if (!me.can_order) redirect('/signup?next=%2Fpartner%2Fapply');
 
-  const [application, profile] = await Promise.all([getMyApplication(), getMyCustomerProfile()]);
+  const application = await getMyApplication();
   const state = DECIDED[application?.status];
 
   // REJECTED reopens the form underneath the explanation; PENDING_REVIEW and
@@ -67,11 +66,12 @@ export default async function PartnerApplyPage() {
         <p className="text-muted mt-2 text-sm leading-relaxed">
           Partners help other students get what they need across campus, and earn for every order
           they bring. This adds delivering to the account you already have: same login, same
-          details, same order history. All we need is a photo of your student ID.
+          details, same order history. All we need is a photo of your student ID and your agreement
+          to the Partner terms.
         </p>
       )}
 
-      {showForm ? <ApplyForm profile={profile} /> : null}
+      {showForm ? <ApplyForm /> : null}
 
       {!state ? (
         <p className="text-muted mt-8 text-center text-xs">

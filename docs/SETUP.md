@@ -102,6 +102,7 @@ npm run db:status    # URLs and keys
 npm run db:schema    # regenerate supabase/schema.sql from the migrations
 npm run db:snapshot  # print the full schema state, for comparison
 npm run admin:create # create or promote an administrator
+npm run admin:password # set a new password on an existing administrator
 npm run verify:hosted # check a project over HTTPS, with the API keys only
 ```
 

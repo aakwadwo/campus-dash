@@ -30,8 +30,8 @@ See `lib/util/money.js`.
 constraints — not in JavaScript:
 
 ```sql
-UPDATE orders SET order_status = 'ACCEPTED'
-WHERE id = $1 AND order_status = 'SUBMITTED';
+UPDATE orders SET order_status = 'READY', ready_at = now()
+WHERE id = $1 AND order_status = 'PREPARING' AND payment_status = 'PAID';
 ```
 
 Zero rows affected means the transition failed. Rejected transitions are logged,
@@ -73,8 +73,10 @@ added as channels, not as edits to order logic.
 Never collapsed into one status field, and delivery state is never used as a
 proxy for order state. **A failed delivery does not mean the food order failed.**
 
-- `order_status` — DRAFT · SUBMITTED · ACCEPTED · PREPARING · READY · COMPLETED ·
-  REJECTED · EXPIRED · CANCELLED · CANCELLED_BY_VENDOR
+- `order_status` — ACCEPTED · PREPARING · READY · COMPLETED · CANCELLED ·
+  CANCELLED_BY_VENDOR. (DRAFT, SUBMITTED, REJECTED and EXPIRED are historical:
+  they belong to the vendor-acceptance flow that no longer exists. The values
+  stay because real orders point at them.)
 - `payment_status` — UNPAID · PENDING · PAID · FAILED · REFUND_PENDING · REFUNDED
 - `delivery_status` — NONE · SEARCHING · ASSIGNED · PICKED_UP · DELIVERED ·
   FAILED_NO_PARTNER · FAILED_CUSTOMER_ABSENT
@@ -85,39 +87,50 @@ a test asserts the two have not drifted. The database is authoritative.
 ## Core flow
 
 ```
-Vendor → Items → Submit                       ONE order is ONE vendor.
+Store → Items → COLLECT or DELIVER → final price → PAY    ONE order, ONE store.
    ↓
-Vendor has 60s to ACCEPT or REJECT; no response → auto-EXPIRED, no charge
+   │  (no store has seen it yet: nothing has been paid)
    ↓
-Customer chooses PICKUP or DELIVERY           ← the price is fixed here
-   ↓                                            (fulfilment_type is NULL until
-Customer pays → PREPARING → vendor marks READY   this happens, and payment
-   ↓                                             refuses an order still in it)
-Pickup:   delivery_status stays NONE; the customer shows a collection code and
-          the vendor types it in
-Delivery: dispatch starts HERE (never at order time — a Partner should never
-          wait at the vendor for food) → broadcast to eligible Partners →
-          first valid acceptance wins, atomically → the assigned Partner gets
-          the room and the customer's phone immediately → the VENDOR reads out
-          the pickup code and the Partner types it in → the CUSTOMER reads out
-          the delivery code and the Partner types it in → complete
+confirm_payment()  →  ACCEPTED → PREPARING, and for a delivery
+   ↓                  delivery_status NONE → SEARCHING
+   │
+   ├─ the store receives a PAID order and a queue number (001, 002, 003…)
+   │
+   ├─ delivery: broadcast to eligible Partners → first valid acceptance wins,
+   │            atomically → the assigned Partner gets the room and the
+   │            customer's phone immediately, WHILE the food is still cooking
+   ↓
+store presses READY FOR PICKUP  →  a four-digit code appears on the order
+   ↓
+Collection: the store reads the code out; the CUSTOMER types it in → complete
+Delivery:   the store reads the code out; the PARTNER types it in → the CUSTOMER
+            reads out their delivery code; the PARTNER types it in → complete
 ```
 
-**The fulfilment choice sits between acceptance and payment** because that is
-where the information is. Asked at the basket, it put "do I walk there, or pay
-someone GH₵5" before the one fact that decides it: whether there is going to be
-an order at all.
+**There is no vendor acceptance step, and the order is paid for before a store
+sees it.** A store answering a doorbell put a 60-second countdown on a phone
+next to a hot plate, produced orders that expired for nobody's fault, and made
+the customer wait to find out what lunch would cost. The fulfilment choice moved
+to the checkout with it, because there is nothing left to ask it after.
+
+**Dispatch opens at PAYMENT, not at READY.** A Partner claimed while the kitchen
+works is one who is not hunted for at the last minute. Nobody is sent to stand at
+a counter either: the offer carries `food_is_ready`, and
+`partner_confirm_pickup()` refuses before the order is READY — checked before the
+code, so an eager attempt costs no attempt.
 
 **Both handoff codes follow one rule** — the person who holds the secret is
-never the person who performs the act. See `docs/PARTNER.md`.
+never the person who performs the act. The store holds the handoff code and
+whoever takes the food types it in; the customer holds the delivery code and the
+Partner types that in. See `docs/PARTNER.md`.
 
 A Partner may carry **two deliveries at once**. The limit is a partial unique
 index on a slot column, not a predicate somebody could race past.
 
 Partner cancellation before handoff keeps **the same order**: assignment is
-removed, the slot is released, delivery returns to SEARCHING, the pickup code
-rotates and the old one dies immediately. Payment and vendor preparation are
-untouched. The vendor is never asked to recreate an order.
+removed, the slot is released, delivery returns to SEARCHING, the handoff code
+rotates and the old one dies immediately. Payment and preparation are untouched,
+another Partner can take it straight away, and no administrator is involved.
 
 ## Identity and capability
 
@@ -164,8 +177,9 @@ The rules, and where each is enforced:
   the SMS ones through the same `SmsProvider` seam as every other notification,
   and an email template carries the rest. Anyone may browse the marketplace with
   no account at all.
-- Customer: sign-up — full name, verified school address, student ID number,
-  level, phone number and terms acceptance, all in one transaction. No admin
+- Customer: sign-up — first and last name, verified school address, level, phone
+  number and terms acceptance, all in one transaction. No student ID number and
+  no document: the verified address is the school's own record. No admin
   review: completing it **is** the grant. Nobody can place an order without it,
   including administrators and vendor accounts. No document is collected: no
   review ever consumed one.

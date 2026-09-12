@@ -42,18 +42,29 @@ async function run(fn, successMessage, paths = ['/partner']) {
 }
 
 /**
- * Two documents, because that is what an administrator actually compares: a
- * photograph of the student ID, and a LIVE face captured with the camera.
+ * ONE DOCUMENT AND ONE AGREEMENT: a photograph of the student ID, and the
+ * Partner terms.
  *
- * Everything else the reviewer needs — name, student ID number, level, verified
- * school address — is already on the account, and partner_apply() reads it from
- * there. This action could not pass a different student ID even if the form
- * sent one.
+ * Everything else a reviewer needs — name, level, verified school address — is
+ * already on the account, and partner_apply() reads it from there. This action
+ * could not pass a different applicant's details even if the form sent them.
+ *
+ * The terms id comes from the SERVER, not the form: current_terms() returns the
+ * published version and partner_apply() refuses anything that is not the latest
+ * one, so a stale tab cannot record an acceptance of superseded terms.
  */
 export async function applyAction(_prev, formData) {
+  if (formData.get('accept_terms') !== 'on') {
+    return { ok: false, message: 'You must accept the Partner terms to apply.' };
+  }
+
   try {
+    const { currentTerms } = await import('@/lib/terms');
+    const terms = await currentTerms('PARTNER');
+
     await partner.apply({
       studentIdImagePath: String(formData.get('student_id_image_path') ?? '').trim(),
+      termsId: terms?.terms_id ?? null,
     });
   } catch (error) {
     return fail(error);

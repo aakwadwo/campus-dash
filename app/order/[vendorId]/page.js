@@ -1,7 +1,8 @@
 import { notFound } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { getVendorWithMenu } from '@/lib/customer';
+import { getVendorWithMenu, listDeliverableLocations } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
+import { getPlatformConfig } from '@/lib/platform-config';
 import SiteHeader from '../../site-header';
 import { OrderingGate } from '../page';
 import MenuAndBasket from './menu-and-basket';
@@ -29,6 +30,13 @@ export default async function VendorMenuPage({ params }) {
 
   const result = await getVendorWithMenu(vendorId);
   if (!result) notFound();
+
+  // Where a Partner could bring it. Fetched here rather than on demand so the
+  // delivery option does not pop a second loading state inside the checkout.
+  const [locations, platform] = await Promise.all([
+    listDeliverableLocations().catch(() => []),
+    getPlatformConfig(),
+  ]);
 
   const { vendor, menu } = result;
   const available = menu.filter((item) => item.is_available).length;
@@ -131,6 +139,8 @@ export default async function VendorMenuPage({ params }) {
           <MenuAndBasket
             vendor={vendor}
             menu={menu}
+            locations={locations}
+            deliveryAvailable={platform.partner_delivery_enabled !== false}
             gate={
               me.can_order
                 ? null

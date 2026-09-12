@@ -38,12 +38,18 @@ around those as if they were settled.
    Partner assignment, permissions and settlement. Never trust the client for
    any of them — including "the payment succeeded".
 
-   Corollary: **pickup or delivery is chosen AFTER the vendor accepts and
-   BEFORE payment.** An order is submitted with `fulfilment_type` NULL — that
-   is a state, not a missing value — and `create_payment_intent` refuses an
-   order still in it. The delivery fee is added by
-   `customer_choose_fulfilment()`, recomputed from the order's own price
-   snapshot. The 5% service fee is never recomputed there.
+   Corollary: **pickup or delivery is chosen AT THE CHECKOUT, and the order is
+   PAID FOR before any store sees it.** There is no vendor acceptance step:
+   `submit_order()` takes the fulfilment and the destination, prices the whole
+   thing including the GH₵5, and creates the order ACCEPTED — a state that now
+   means "priced and payable", not "a vendor said yes". `confirm_payment()` is
+   what reaches the kitchen (ACCEPTED → PREPARING) and what opens dispatch
+   (delivery_status NONE → SEARCHING). A store's only order button is **Ready
+   for pickup**, never "Done".
+
+   `customer_choose_fulfilment()` survives as the CHANGE path, usable only
+   while the order is unpaid. Every fee it recomputes comes from the order's own
+   price snapshot; the 5% service fee is never recomputed there.
 
 2. **Three independent state dimensions** — `order_status`, `payment_status`,
    `delivery_status`. Never merge them. A failed delivery does not fail the food
@@ -72,15 +78,33 @@ around those as if they were settled.
     entirely in `lib/payments/paystack.js`.
 11. **All three handoff codes are FOUR DIGITS, and they travel from one rule:
     the person who holds the secret is never the person who performs the act.**
-    The VENDOR reads the pickup code out and the PARTNER types it in. The
-    CUSTOMER reads the delivery code out and the PARTNER types it in. For a
-    self-collection the CUSTOMER holds the code and the VENDOR types it in.
-    There is no function that shows a Partner a pickup code, and adding one
-    would make the handoff prove nothing. Four digits is ten thousand guesses,
-    so each side counts its failures and locks out — see `check_handoff_code()`
-    and `pricing_config.code_attempt_limit`. The lockout refuses the CORRECT
-    code too, because a lockout that let it through would be an oracle.
-12. **Partner capacity is CONFIGURABLE, and the limit is an index.**
+    The STORE holds the handoff code and reads it out; whoever is taking the
+    food types it in — a PARTNER collecting a delivery, or a CUSTOMER collecting
+    their own order. The CUSTOMER holds the delivery code and reads it out; the
+    PARTNER types it in. One function returns a handoff code —
+    `vendor_handoff_code()`, behind `is_vendor_staff` — and there is none that
+    shows it to a Partner or to a collecting customer. Adding one would put the
+    secret and the act on the same side of the counter and the code would prove
+    nothing. Four digits is ten thousand guesses, so each side counts its
+    failures and locks out — see `check_handoff_code()` and
+    `pricing_config.code_attempt_limit`. The lockout refuses the CORRECT code
+    too, because a lockout that let it through would be an oracle.
+
+    The COLLECTION handoff used to run the other way, with the customer holding
+    the code and the vendor typing it. The invariant is unchanged; which side of
+    the counter holds it is not, because the person collecting is the one with a
+    screen in their hand and a queue behind them.
+
+12. **The order number a person is shown is a DAILY, PER-STORE QUEUE NUMBER.**
+    001, 002, 003, restarting every calendar day, unique per store —
+    `orders.vendor_order_no`, allocated by `next_vendor_order_no()` whose
+    upsert locks the counter row, and guarded a second time by
+    `orders_vendor_day_no_unique`. `orders.order_number` (`CD-01043`) survives
+    underneath as the internal reference every payment, allocation and payout
+    keys off; it is never what a customer or a store is asked to read out. A
+    SCAN errand takes no queue number, because no store ever sees one.
+
+13. **Partner capacity is CONFIGURABLE, and the limit is an index.**
     `pricing_config.max_active_deliveries_per_partner` (default 2) decides how
     many slots exist; `orders.partner_slot`, unique per Partner while the
     delivery is live, decides that two claims never get the same one — see
@@ -88,33 +112,33 @@ around those as if they were settled.
     the index is braces. Reading a number from a table is not an atomicity
     primitive and must never be asked to be one. Lowering the maximum never
     takes an order off a Partner already carrying it.
-13. **The assigned Partner sees the customer's phone number from ASSIGNMENT
+14. **The assigned Partner sees the customer's phone number from ASSIGNMENT
     until the delivery ends, and never afterwards.** Enforced twice over: the
     RLS policy on `users`, and `partner_active_delivery()`. It is never in an
     SMS. Never hide it with CSS; never widen it to history.
-14. **Provider acceptance is not delivery.** A 200 from Arkesel means the
+15. **Provider acceptance is not delivery.** A 200 from Arkesel means the
     message was taken, not that it arrived. The outcome comes back later on the
     delivery webhook and lands on the same `notification_events` row. The same
     rule governs money out: a transfer Paystack accepted is a PROCESSING payout,
     and only `transfer.success` makes it PAID.
-15. **A browser returning from a hosted checkout proves nothing.** Payment moves
+16. **A browser returning from a hosted checkout proves nothing.** Payment moves
     on a signature-verified webhook or a server-to-server verify — never because
     someone arrived at a URL.
-16. **The vendor's share is SPLIT at the charge; everything else is a transfer.**
+17. **The vendor's share is SPLIT at the charge; everything else is a transfer.**
     A Paystack dynamic split (`type: 'flat'`, `bearer_type: 'account'`) routes
     the food subtotal to the vendor's subaccount as the customer pays, and
     `allocations.settlement_channel` records which channel each row used. THE
     PARTNER CANNOT BE IN THE SPLIT: it is fixed when the charge is created, and
     at that moment the food is not cooked and no Partner exists. Their GH₵5 is
     carved out at completion and settled by the payout run. See `docs/MONEY.md`.
-17. **A Partner earns GH₵5 a delivery and is paid weekly at GH₵20.**
+18. **A Partner earns GH₵5 a delivery and is paid weekly at GH₵20.**
     `pricing_config.partner_min_payout_pesewas` is the policy, separate from the
     general `min_payout_pesewas` because vendors settle by split. A balance under
     the threshold is RELEASED by the run in the same transaction that claimed
     it, so it is owed again immediately and swept by the next run. Never tell a
     Partner about a provider minimum: the dashboard states a weekly payout
     policy and `my_partner_payouts()` returns no provider failure text.
-18. **`users.full_name` is DERIVED from `first_name` and `last_name`.** A
+19. **`users.full_name` is DERIVED from `first_name` and `last_name`.** A
     trigger keeps them in step, so it is still the one column a read model
     selects for a display name and it can no longer drift. A customer is told a
     Partner's FIRST name and a Partner is told a customer's FIRST name; neither
@@ -135,7 +159,7 @@ Moved OFF this list, and each was on it:
   Not points, not tiers, not a wallet — and the reward itself is deliberately
   undefined in software, because Campus Dash has not decided what it is.
 - Automatic per-order VENDOR settlement, through Paystack split payments.
-  Partner settlement is still a payout run; see hard rule 16.
+  Partner settlement is still a payout run; see hard rule 17.
 
 ## Commands
 
@@ -152,6 +176,7 @@ npm run db:schema    # regenerate supabase/schema.sql from the migration-built D
 npm run db:install   # install supabase/schema.sql into SUPABASE_DB_URL (hosted)
 npm run db:snapshot  # print full schema state, for comparing two databases
 npm run admin:create # create or promote an administrator (email + password)
+npm run admin:password # set a new password on an EXISTING administrator
 npm run verify:hosted # check a project over HTTPS, with the API keys only
 npm run sms:test      # send ONE real SMS through Arkesel. Spends credit.
 npm run sms:webhook   # replay a signed delivery report at a running server

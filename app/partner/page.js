@@ -10,6 +10,7 @@ import {
   getPayouts,
 } from '@/lib/partner';
 import { formatPesewas } from '@/lib/util/money';
+import { orderLabel } from '@/lib/orders/state';
 import AvailabilityToggle from './availability-toggle';
 
 export const dynamic = 'force-dynamic';
@@ -111,12 +112,18 @@ export default async function PartnerHome() {
                 className="bg-brand-700 rounded-card block px-4 py-4 text-white"
               >
                 <p className="text-sm opacity-90">
-                  {job.delivery_status === 'ASSIGNED' ? 'To collect' : 'On the way'}
+                  {job.delivery_status !== 'ASSIGNED'
+                    ? 'On the way'
+                    : job.food_is_ready
+                      ? 'Ready to collect'
+                      : 'Being prepared'}
                 </p>
-                <p className="mt-0.5 font-mono text-lg font-semibold">{job.order_number}</p>
+                <p className="mt-0.5 text-2xl font-bold tabular-nums">#{orderLabel(job)}</p>
                 <p className="mt-1 text-sm opacity-90">
                   {job.delivery_status === 'ASSIGNED'
-                    ? `Collect from ${job.vendor_name}`
+                    ? job.food_is_ready
+                      ? `Collect from ${job.vendor_name}`
+                      : `${job.vendor_name} is still preparing it`
                     : `Take to ${job.destination ?? job.destination_zone}`}
                   {job.customer_first_name ? ` for ${job.customer_first_name}` : ''}
                 </p>
@@ -171,7 +178,7 @@ export default async function PartnerHome() {
             {history.map((job) => (
               <li key={job.order_id} className="flex items-baseline justify-between gap-3 py-2">
                 <span>
-                  <span className="font-mono text-xs">{job.order_number}</span>{' '}
+                  <span className="text-xs tabular-nums">#{orderLabel(job)}</span>{' '}
                   <span className="text-muted">{job.destination_zone}</span>
                 </span>
                 <span className="tabular-nums">

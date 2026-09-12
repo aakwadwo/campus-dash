@@ -249,9 +249,17 @@ describe('schema invariants', () => {
     //
     // ABSENT ON PURPOSE, and each absence is a rule:
     //
-    //   vendor_confirm_pickup       the handoff reversed direction — the VENDOR
-    //                               holds the code and the PARTNER types it in,
-    //                               so a Partner has no way to read one
+    //   vendor_accept_order         acceptance is gone from the product. The
+    //   vendor_reject_order         functions survive for orders placed before
+    //   vendor_mark_preparing       that changed, and for admin tooling, but no
+    //                               browser can reach them
+    //   vendor_complete_pickup_order  the collection handoff reversed: the
+    //   get_my_pickup_code            VENDOR holds the code and reads it out;
+    //   vendor_pickup_code            the CUSTOMER types it in. Either of these
+    //                                 being reachable would put the secret and
+    //                                 the act on the same side of the counter
+    //   vendor_confirm_pickup       the Partner handoff works the same way, so
+    //                               a Partner has no way to read a code either
     //   partners_to_notify_of_offer service-only: it returns other people's
     //   vendor_owner_contact        phone numbers to a caller who is not them
     //   payout_recipient_contact
@@ -328,6 +336,10 @@ describe('schema invariants', () => {
       'customer_abandon_stuck_payment',
       'customer_choose_fulfilment',
       'customer_collect_instead',
+      // The customer types in the four digits the STORE read out, and that
+      // completes a collection. The direction is the whole point — see the
+      // absence of get_my_pickup_code below.
+      'customer_complete_pickup',
       'customer_dispute_delivery',
       'customer_keep_waiting',
       'customer_order_detail',
@@ -338,9 +350,9 @@ describe('schema invariants', () => {
       'fulfilment_options',
       'get_delivery_offers',
       'get_my_delivery_code',
-      'get_my_pickup_code',
       'my_capabilities',
       'my_customer_profile',
+      'my_order_summary',
       'my_outstanding_terms',
       'my_partner_application',
       'my_partner_payouts',
@@ -375,19 +387,15 @@ describe('schema invariants', () => {
       'submit_order',
       'submit_scan_order',
       'update_my_profile',
-      'vendor_accept_order',
       'vendor_add_image',
-      'vendor_complete_pickup_order',
       'vendor_delete_image',
       'vendor_earnings_summary',
-      'vendor_mark_preparing',
+      'vendor_handoff_code',
       'vendor_mark_ready',
       'vendor_order_board',
       'vendor_order_bucket',
       'vendor_order_detail',
       'vendor_pending_count',
-      'vendor_pickup_code',
-      'vendor_reject_order',
       'vendor_set_accepting_orders',
       'vendor_set_menu_item_available',
       'vendor_set_payout_destination',

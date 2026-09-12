@@ -4,13 +4,20 @@ import { useActionState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { acceptDeliveryAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
+import { orderLabel } from '@/lib/orders/state';
 
 /**
  * Offers, with everything needed to say yes.
  *
- * Vendor, zone, walking estimate and earnings are all shown BEFORE accepting —
+ * Store, zone, walking estimate and earnings are all shown BEFORE accepting —
  * hiding them would make the decision a gamble. What is not shown is who the
- * customer is or which room, because that is not needed to judge the job.
+ * customer is or which room, because that is not needed to judge the job. Both
+ * arrive the instant the order is yours.
+ *
+ * EVERY OFFER HERE IS PAID FOR, but not every one is cooked: the pool opens the
+ * moment a customer pays, so a Partner can claim a job while the kitchen works.
+ * `food_is_ready` is therefore the most important line on the card — it is the
+ * difference between "go now" and "it is yours, wait to be called".
  */
 export default function OfferList({ offers, pollMs = 10000 }) {
   const router = useRouter();
@@ -51,11 +58,32 @@ export default function OfferList({ offers, pollMs = 10000 }) {
             ) : null}
 
             <div className="flex items-baseline justify-between gap-3">
-              <span className="font-semibold">{offer.vendor_name}</span>
+              <span className="min-w-0">
+                <span className="font-semibold">{offer.vendor_name}</span>
+                {offer.order_type === 'SCAN' ? null : (
+                  <span className="text-muted ml-2 text-sm tabular-nums">#{orderLabel(offer)}</span>
+                )}
+              </span>
               <span className="text-brand-800 font-semibold tabular-nums">
                 {formatPesewas(offer.earnings_pesewas)}
               </span>
             </div>
+
+            <p
+              className={`mt-1.5 inline-flex items-center gap-1.5 text-sm font-semibold ${
+                offer.food_is_ready ? 'text-good' : 'text-warn'
+              }`}
+            >
+              <span
+                className={`size-1.5 rounded-full ${offer.food_is_ready ? 'bg-good' : 'bg-warn'}`}
+                aria-hidden
+              />
+              {offer.order_type === 'SCAN'
+                ? 'Ready to run'
+                : offer.food_is_ready
+                  ? 'Cooked and waiting'
+                  : 'Still being prepared'}
+            </p>
 
             <dl className="text-muted mt-2 space-y-0.5 text-sm">
               <Row label="Deliver to" value={offer.destination_zone} />
@@ -70,7 +98,6 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               ) : (
                 <>
                   <Row label="Items" value={`${offer.item_count}`} />
-                  <Row label="Food" value="cooked and waiting" />
                 </>
               )}
             </dl>

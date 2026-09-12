@@ -182,6 +182,19 @@ function MoneyPanel({ quote, quoting, error }) {
           <dt className="text-muted">Service fee</dt>
           <dd>{quote ? cedis(quote.service_fee_pesewas) : '-'}</dd>
         </div>
+        {/* SCAN ERRANDS ONLY. Campus Dash buys the containers a meal scan is
+            carried in; a normal food order comes in the store's own packaging
+            and is never charged this. The amount is an admin setting, read from
+            the same quote as everything else on this list. */}
+        {quote && quote.pack_fee_pesewas > 0 ? (
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted">
+              Disposable pack
+              <span className="text-muted block text-xs">What your food is carried in</span>
+            </dt>
+            <dd>{cedis(quote.pack_fee_pesewas)}</dd>
+          </div>
+        ) : null}
         <div className="border-line flex justify-between gap-4 border-t pt-2 font-semibold">
           <dt>You pay</dt>
           <dd>{quoting ? '…' : quote ? cedis(quote.total_pesewas) : '-'}</dd>

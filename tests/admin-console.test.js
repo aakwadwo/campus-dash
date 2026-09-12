@@ -14,9 +14,7 @@ import {
 import {
   submitOrder,
   acceptedOrder,
-  vendorAccept,
   payOrder,
-  vendorPrepare,
   vendorReady,
   partnerAccept,
   completeDelivery,
@@ -82,7 +80,6 @@ describe('the admin console', () => {
       destination: LOCATIONS.room204,
     });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
     await partnerAccept(order.order_id);
     // completeDelivery reads both codes itself: the vendor releases the food
@@ -674,7 +671,6 @@ describe('the admin console', () => {
         destination: LOCATIONS.room204,
       });
       await payOrder(order.order_id);
-      await vendorPrepare(order.order_id);
       await vendorReady(order.order_id);
       return order.order_id;
     }

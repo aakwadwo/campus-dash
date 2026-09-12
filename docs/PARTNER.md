@@ -78,12 +78,23 @@ Customer capability untouched.
 
 ## Dispatch
 
-Dispatch opens when the vendor marks food **READY** — never at order time, never
-at payment. A Partner is never sent to stand at a stall waiting for cooking.
+Dispatch opens **when the customer pays** — not at order time, and no longer at
+READY. An offer therefore usually arrives while the food is still on the stove,
+which is the point: a Partner claimed early is a Partner who is not hunted for
+at the last minute, and a store whose food is going cold on the counter is the
+failure the old timing produced.
 
-An offer shows everything needed to say yes: vendor, destination **zone**,
-walking estimate, earnings, and confirmation the food is cooked. It shows
-nothing about the customer, because none of that helps judge the job.
+Nobody is sent to stand at a counter waiting, because the offer says which it
+is. Every offer carries **`food_is_ready`**, and the Partner's own job card
+carries it too — "Collect from Test Kitchen One" only appears once the store has
+pressed Ready; until then it reads "still preparing it". `partner_confirm_pickup()`
+refuses outright while the order is not READY, and it checks that BEFORE the
+code, so an eager attempt costs no attempt against the lockout.
+
+An offer shows everything else needed to say yes: store, the store's daily queue
+number, destination **zone**, walking estimate and earnings. It shows nothing
+about the customer, because none of that helps judge the job — and everything
+about them arrives the instant the job is theirs.
 
 To be offered work a Partner must be approved, available, unsuspended, and
 **below the capacity limit**. All four are re-checked inside the claim itself.
@@ -212,8 +223,13 @@ never the person who performs the act.**
 
 | Code     | Held by      | Read out by  | Typed in by | Function                      |
 | -------- | ------------ | ------------ | ----------- | ----------------------------- |
-| Pickup   | the VENDOR   | the vendor   | the PARTNER | `partner_confirm_pickup()`    |
+| Pickup   | the STORE    | the store    | the PARTNER | `partner_confirm_pickup()`    |
 | Delivery | the CUSTOMER | the customer | the PARTNER | `partner_complete_delivery()` |
+
+A customer collecting their own order is the same shape with the Partner
+removed: the store holds the code, the CUSTOMER types it into
+`customer_complete_pickup()`. One function returns a handoff code —
+`vendor_handoff_code()` — and it is behind `is_vendor_staff`.
 
 Four digits is ten thousand guesses, which is minutes of scripted requests — so
 each side counts its consecutive failures and locks out for
@@ -228,8 +244,8 @@ not carrying anything away, and a vendor who mistyped blocked a Partner standing
 in front of them. Reversing it kept the proof identical and moved the act to the
 person whose next step depends on it.
 
-There is **no function that returns a pickup code to a Partner**. The claim does
-not hand one back either. That asymmetry is the whole mechanism.
+There is **no function that returns a handoff code to a Partner**. The claim
+does not hand one back either. That asymmetry is the whole mechanism.
 
 A scan errand has no vendor handover and therefore no pickup code: its
 equivalent moment is the redemption report, which is a deliberate act and not a
@@ -239,11 +255,16 @@ side effect of having accepted the job. See `docs/SCAN.md`.
 
 Before handoff a Partner may cancel freely. No penalty in V1.
 
-**The order does not change.** `CD-01842` stays `CD-01842`: same order, same
-payment, same vendor preparation. Only the assignment is cleared — the slot is
-released too, so the Partner is free to take other work — and the pickup code
-rotates, killing the old one instantly. The vendor sees "still looking for a
-Partner" and is never asked to cancel, recreate or re-enter anything.
+**The order does not change.** Order 007 stays order 007: same order, same
+payment, same preparation. Only the assignment is cleared — the slot is released
+too, so the Partner is free to take other work — and the handoff code rotates,
+killing the old one instantly. The order goes straight back into the pool, where
+another Partner can take it; the store sees "waiting for a Partner" and is never
+asked to cancel, recreate or re-enter anything.
+
+**No administrator is involved.** A Partner who cannot do a job is ordinary, and
+routing that through a person would leave somebody's paid-for dinner waiting on
+a support queue.
 
 After handoff, cancelling is not offered — the Partner is holding food, and the
 only ways out are delivering it or the absence process.
@@ -302,6 +323,11 @@ its way, and what has been paid.
 
 There is no wallet. `allocations` is the ledger, one row per completed delivery,
 and "available" is a sum over it rather than a stored balance that could drift.
+
+**Completing a delivery adds GH₵5 to that ledger, and nothing else happens.**
+The dashboard reflects it immediately and the SMS says "added to your earnings
+balance" — never "sent" or "paid". A Partner who finishes a run at 8pm and then
+watches a MoMo balance that is not going to move has been lied to by a word.
 
 A balance under GH₵20 **carries forward**; it is never lost and never reset. See
 `docs/MONEY.md` for how the run guarantees that.

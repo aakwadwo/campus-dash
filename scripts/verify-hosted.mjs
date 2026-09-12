@@ -129,6 +129,7 @@ const EXPECTED_TABLES = [
   'users',
   'vendor_categories',
   'vendor_images',
+  'vendor_order_counters',
   'vendors',
   'webhook_events',
 ];
@@ -142,8 +143,10 @@ record(
 const KEY_FUNCTIONS = [
   'submit_order',
   'quote_order',
-  'vendor_accept_order',
   'vendor_mark_ready',
+  'vendor_handoff_code',
+  'customer_complete_pickup',
+  'next_vendor_order_no',
   'partner_accept_delivery',
   'partner_complete_delivery',
   'confirm_payment',

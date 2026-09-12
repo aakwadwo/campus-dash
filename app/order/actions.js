@@ -4,26 +4,24 @@ const CONTEXT = 'customer action';
 
 import { actionFailure } from '@/lib/errors';
 
-import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import {
   submitOrder,
   customerChooseFulfilment,
   customerRatePartner,
+  customerCompletePickup,
 } from '@/lib/orders/transitions';
 import { quoteOrder } from '@/lib/customer';
 import { startPayment, refreshPaymentState } from '@/lib/orders/payments';
 import { setMyEmail } from '@/lib/customer';
-import { notifyOrderEvent } from '@/lib/orders/notify';
-import { NOTIFICATION_EVENT } from '@/lib/notifications';
 
 /**
  * Customer actions.
  *
- * The client sends menu item ids and quantities, and later a fulfilment choice
- * and a destination. It sends no prices, no totals and no fees — and if it did
- * they would be ignored, because price_order() reads only ids and quantities
- * and customer_choose_fulfilment() recomputes from the order's own snapshot.
+ * The client sends menu item ids, quantities, a fulfilment choice and a
+ * destination. It sends no prices, no totals and no fees — and if it did they
+ * would be ignored, because quote_order() reads only ids and quantities and
+ * submit_order() recomputes every figure from the menu and pricing_config.
  */
 /**
  * Never lets a raw error reach a screen. toUserError() logs the detail
@@ -35,23 +33,41 @@ function fail(error) {
 }
 
 /**
- * The basket total, priced by the server.
+ * The checkout total, priced by the server.
  *
  * The screen never adds prices up itself. Whatever it displays came from
- * price_order(), which is the same function that will charge the customer — so
- * the number on the review screen cannot disagree with the order.
+ * quote_order(), which is the same arithmetic that will charge the customer —
+ * so the number above the Pay button cannot disagree with the order.
  */
-export async function quoteAction({ vendorId, items }) {
+export async function quoteAction({ vendorId, items, fulfilmentType = null }) {
   try {
-    const quote = await quoteOrder({ vendorId, items });
+    const quote = await quoteOrder({ vendorId, items, fulfilmentType });
     return { ok: true, quote };
   } catch (error) {
     return fail(error);
   }
 }
 
+/**
+ * Place the order and take the customer to pay for it.
+ *
+ * ONE TAP, TWO SERVER STEPS. The order has to exist before a charge can be
+ * created against it — the amount comes from the order, never from the request
+ * — but the customer should not have to press Pay on a second screen to find
+ * that out. So the order is created and the checkout is opened in the same
+ * action, and the URL is RETURNED rather than followed here: the provider's
+ * page is on another origin, and only a full browser navigation gets somebody
+ * there.
+ *
+ * IF EITHER HALF FAILS the customer still has an order. It sits UNPAID on
+ * /orders/<id> with a Pay button, and expire_stale_orders() sweeps it if they
+ * walk away. Nothing is charged and no store has been told anything.
+ */
 export async function submitOrderAction(_prev, formData) {
   const vendorId = String(formData.get('vendor_id') ?? '');
+  const fulfilmentType = formData.get('fulfilment_type') === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
+  const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
+  const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
 
   let items;
   try {
@@ -61,6 +77,9 @@ export async function submitOrderAction(_prev, formData) {
   }
   if (!Array.isArray(items) || items.length === 0) {
     return { ok: false, message: 'Your basket is empty.' };
+  }
+  if (fulfilmentType === 'DELIVERY' && !destinationLocationId) {
+    return { ok: false, message: 'Choose where the Partner should bring it.' };
   }
 
   let order;
@@ -73,17 +92,40 @@ export async function submitOrderAction(_prev, formData) {
         menuItemId: String(item.menuItemId),
         quantity: Number(item.quantity),
       })),
+      fulfilmentType,
+      destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
+      destinationNote,
     });
   } catch (error) {
     return fail(error);
   }
 
-  await notifyOrderEvent(NOTIFICATION_EVENT.ORDER_SUBMITTED, order.order_id);
-  redirect(`/orders/${order.order_id}`);
+  const orderId = order.order_id;
+  revalidatePath('/orders');
+
+  let payment;
+  try {
+    payment = await startPayment(orderId);
+  } catch (error) {
+    // The order is real and payable. Send them to it rather than losing it.
+    console.error('[order] checkout could not be opened:', error.message);
+    return { ok: true, orderId, orderHref: `/orders/${orderId}` };
+  }
+
+  if (!payment.ok) {
+    return { ok: true, orderId, orderHref: `/orders/${orderId}` };
+  }
+
+  return {
+    ok: true,
+    orderId,
+    orderHref: `/orders/${orderId}`,
+    redirectUrl: payment.redirectUrl ?? null,
+  };
 }
 
 /**
- * Pickup or delivery, chosen after the vendor has accepted.
+ * Changing pickup or delivery after the order exists and before it is paid for.
  *
  * No amount crosses this boundary. The delivery fee and the new total are
  * recomputed in the database from the order's own price snapshot, so the screen
@@ -117,8 +159,8 @@ export async function chooseFulfilmentAction(_prev, formData) {
         ok: true,
         message:
           fulfilmentType === 'PICKUP'
-            ? 'You will collect this order. Pay to send it to the kitchen.'
-            : 'A Partner will bring it. Pay to send the order to the kitchen.',
+            ? 'You will collect this order yourself.'
+            : 'A Partner will bring it. The delivery fee has been added.',
       }
     : { ok: false, message: result.reason ?? 'That is no longer possible.' };
 }
@@ -147,6 +189,37 @@ export async function payOrderAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
+}
+
+/**
+ * The customer types in the four digits the vendor read out, and collects.
+ *
+ * THE VENDOR HOLDS THE CODE. The person taking the food is the person who
+ * performs the act, exactly as a Partner types in what a vendor reads them —
+ * whoever holds the secret must not also be the one confirming, or the code
+ * proves nothing. So there is no function anywhere that shows a customer their
+ * own collection code.
+ */
+export async function completePickupAction(_prev, formData) {
+  const orderId = String(formData.get('order_id') ?? '');
+  const code = String(formData.get('pickup_code') ?? '').trim();
+
+  if (!/^\d{4}$/.test(code)) {
+    return { ok: false, message: 'Enter the 4 digits the vendor gave you.' };
+  }
+
+  let result;
+  try {
+    result = await customerCompletePickup(orderId, code);
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath('/orders');
+  return result.success
+    ? { ok: true, message: 'Collected. Enjoy it.' }
+    : { ok: false, message: result.reason ?? 'That code was not accepted.' };
 }
 
 /**

@@ -4,6 +4,7 @@ import { getCapabilities } from '@/lib/auth/session';
 import { getActiveDeliveries } from '@/lib/partner';
 import { scanImageUrl, getPartnerScanBrief } from '@/lib/scan';
 import { formatPesewas } from '@/lib/util/money';
+import { orderLabel } from '@/lib/orders/state';
 import DeliveryActions from './delivery-actions';
 import ScanCollection from './scan-collection';
 
@@ -69,21 +70,27 @@ export default async function PartnerDeliveryPage({ searchParams }) {
                   : 'bg-surface border-line text-muted'
               }`}
             >
-              {d.order_number}
+              #{orderLabel(d)}
             </Link>
           ))}
         </nav>
       ) : null}
 
       <header className="mt-3 mb-4">
-        <p className="font-mono text-sm">{delivery.order_number}</p>
+        <p className="text-muted text-sm tabular-nums">Order #{orderLabel(delivery)}</p>
         {isScan ? (
           <p className="text-brand-800 text-xs font-semibold tracking-[0.12em] uppercase">
             Scan delivery
           </p>
         ) : null}
         <h1 className="text-2xl font-semibold tracking-tight">
-          {collecting ? (isScan ? 'Redeem the scan' : 'Collect the order') : 'Deliver the order'}
+          {collecting
+            ? isScan
+              ? 'Redeem the scan'
+              : delivery.food_is_ready
+                ? 'Collect the order'
+                : 'Wait for the store'
+            : 'Deliver the order'}
         </h1>
         <p className="text-brand-800 mt-1 text-sm font-semibold">
           You earn {formatPesewas(delivery.earnings_pesewas)}
@@ -157,10 +164,21 @@ export default async function PartnerDeliveryPage({ searchParams }) {
           >
             Call the store
           </a>
-          <p className="text-muted mt-3 text-sm leading-relaxed">
-            Ask the vendor for the <strong className="text-ink">4-digit pickup code</strong> on
-            their screen and enter it below. That is what releases the food.
-          </p>
+          {/* TAKEN EARLY, ON PURPOSE. The offer pool opens the moment a customer
+              pays, so a Partner usually claims a job while it is still cooking.
+              Saying so plainly is what stops somebody walking to a counter for
+              food that is not there. */}
+          {delivery.food_is_ready ? (
+            <p className="text-muted mt-3 text-sm leading-relaxed">
+              Ask the store for the <strong className="text-ink">4-digit code</strong> on their
+              screen and enter it below. That is what releases the food.
+            </p>
+          ) : (
+            <p className="text-warn mt-3 text-sm leading-relaxed font-medium">
+              This order is still being prepared. It is yours — wait until the store marks it ready,
+              then collect it. This page updates on its own.
+            </p>
+          )}
         </section>
       ) : (
         <section className="text-muted rounded-card bg-surface border-line mt-3 border p-4 text-sm">

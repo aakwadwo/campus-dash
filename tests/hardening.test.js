@@ -12,7 +12,6 @@ import {
 import {
   submitOrder,
   acceptedOrder,
-  vendorAccept,
   payOrder,
   getOrder,
   expectRejection,
@@ -365,9 +364,9 @@ describe('pilot hardening', () => {
   });
 
   test('a changed fee applies to the NEXT order and never to a placed one', async () => {
-    const before = await submitOrder();
-    // GH₵35 food + 5% (GH₵1.75). No delivery fee at submission: pickup or
-    // delivery is chosen after the vendor accepts, and priced then.
+    const collect = { fulfilment: 'PICKUP', destination: null };
+    const before = await submitOrder(collect);
+    // GH₵35 food + 5% (GH₵1.75), collected.
     assert.equal(before.total_pesewas, 3675);
 
     await asUser(
@@ -377,17 +376,23 @@ describe('pilot hardening', () => {
     );
 
     assert.equal((await getOrder(before.order_id)).total_pesewas, 3675, 'the snapshot holds');
-    const after = await submitOrder();
+    const after = await submitOrder({ ...collect, customer: ACTORS.customerKwesi });
     assert.equal(after.total_pesewas, 3850, 'GH₵35 + 10% (GH₵3.50)');
   });
 
+  /**
+   * accept_deadline_at is the PAY-BY deadline now — there is no vendor window
+   * left to wait out — and it is read from payment_pending_timeout_seconds.
+   * Same property being asserted: a config change reaches the next order
+   * without a deploy.
+   */
   test('a changed timeout takes effect immediately', async () => {
     await asUser(
       ACTORS.admin,
       (c) =>
-        c.query('select public.admin_update_config($1, null, null, null, $2)', [
-          'vendors say 60s is too short',
-          180,
+        c.query('select public.admin_update_config($1, null, null, null, null, null, null, $2)', [
+          'a slow network at lunchtime',
+          1200,
         ]),
       { commit: true }
     );
@@ -397,7 +402,7 @@ describe('pilot hardening', () => {
     const window = Math.round(
       (new Date(stored.accept_deadline_at) - new Date(stored.submitted_at)) / 1000
     );
-    assert.equal(window, 180);
+    assert.equal(window, 1200);
   });
 
   test('nobody but an admin can change configuration', async () => {
@@ -463,7 +468,11 @@ describe('pilot hardening', () => {
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await completeDelivery(order.order_id, ACTORS.partnerYaw);
-    await submitOrder({ customer: ACTORS.customerKwesi });
+    await submitOrder({
+      customer: ACTORS.customerKwesi,
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
 
     const metrics = await asUser(
       ACTORS.admin,
@@ -474,10 +483,8 @@ describe('pilot hardening', () => {
 
     assert.equal(by.orders_placed, 2);
     assert.equal(by.orders_completed, 1);
-    // ONE, not two. A delivery is not "requested" until the customer has been
-    // asked and has said so — the second order is still waiting on its vendor,
-    // and counting it here would inflate demand for a service nobody has yet
-    // chosen to buy.
+    // ONE, not two: the second order is a collection, and counting it would
+    // inflate demand for a service nobody asked for.
     assert.equal(by.deliveries_requested, 1);
     assert.equal(by.partners_approved, 3);
     assert.equal(by.collected_pesewas, 4175);

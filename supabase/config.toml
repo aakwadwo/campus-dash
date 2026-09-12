@@ -147,9 +147,28 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+# MUST MATCH PUBLIC_APP_URL. The reset email builds its link from this, and the
+# session cookie the link sets belongs to whichever origin served it — so
+# 127.0.0.1 here and localhost in PUBLIC_APP_URL means the cookie is written on
+# one origin and read on the other, and a perfectly good link reports itself
+# expired. A hosted project sets this under Authentication → URL Configuration.
+site_url = "http://localhost:3000"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+#
+# THE ADMIN RESET LINK NEEDS THIS. resetPasswordForEmail() passes a redirectTo
+# of <origin>/login/admin/recover, and GoTrue silently DISCARDS a redirect that
+# is not on this list and falls back to site_url — which lands the recipient on
+# the home page with a spent token and no explanation. Both spellings of the dev
+# origin are listed because PUBLIC_APP_URL says localhost and site_url says
+# 127.0.0.1, and to a browser those are two different origins.
+#
+# A hosted project needs the same under Authentication → URL Configuration →
+# Redirect URLs. See docs/AUTH.md.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "http://127.0.0.1:3000/**",
+  "http://localhost:3000/**",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to the local API URL (http://127.0.0.1:<port>/auth/v1).
@@ -266,6 +285,20 @@ content_path = "./supabase/templates/magic-link.html"
 [auth.email.template.confirmation]
 subject = "Your Campus Dash code"
 content_path = "./supabase/templates/confirm-signup.html"
+
+# THE ONE TEMPLATE THAT IS A LINK AND NOT A CODE.
+#
+# Administrators are the only account with a password, so they are the only one
+# that can be locked out of a credential rather than a channel. The reset has to
+# carry them to a page that does not exist until the token is spent, which is a
+# link — see supabase/templates/reset-password.html for why it uses
+# {{ .TokenHash }} against /login/admin/recover rather than .ConfirmationURL.
+#
+# A hosted project needs the same content under Authentication → Email
+# Templates → Reset Password. See docs/AUTH.md.
+[auth.email.template.recovery]
+subject = "Reset your Campus Dash password"
+content_path = "./supabase/templates/reset-password.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

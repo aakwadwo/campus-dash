@@ -10,24 +10,34 @@ import { asService, asUser, ACTORS, VENDORS, MENU, LOCATIONS } from './db.js';
  */
 
 /**
- * Submits an order. A VENDOR AND SOME ITEMS — that is the whole submission.
+ * Submits an order: a store, some items, and how the customer wants it.
  *
- * Pickup or delivery is a separate step now, taken after the vendor accepts,
- * so it is not a parameter here. `chooseFulfilment` below is that step, and
- * `acceptedOrder` runs the two in the order the product does.
+ * PICKUP OR DELIVERY IS PART OF THE SUBMISSION now. There is no vendor
+ * acceptance to put it after — the order is priced in full at the checkout and
+ * a store only sees it once it has been paid for. What comes back is already
+ * payable, which is why `acceptedOrder` below is simply this.
  */
 export async function submitOrder({
   customer = ACTORS.customerAma,
   vendorId = VENDORS.one,
   items = [{ menu_item_id: MENU.jollof, quantity: 1 }],
+  fulfilment = 'DELIVERY',
+  destination = LOCATIONS.room204,
+  note = null,
 } = {}) {
   return asUser(
     customer,
     async (c) => {
-      const { rows } = await c.query('select * from public.submit_order($1, $2::jsonb)', [
-        vendorId,
-        JSON.stringify(items),
-      ]);
+      const { rows } = await c.query(
+        'select * from public.submit_order($1, $2::jsonb, $3, $4, $5)',
+        [
+          vendorId,
+          JSON.stringify(items),
+          fulfilment,
+          fulfilment === 'DELIVERY' ? destination : null,
+          note,
+        ]
+      );
       return rows[0];
     },
     { commit: true }
@@ -35,7 +45,7 @@ export async function submitOrder({
 }
 
 /**
- * Pickup or delivery, chosen by the customer between acceptance and payment.
+ * CHANGING pickup or delivery, after submission and before payment.
  *
  * Returns the transition envelope so a test can assert on a refusal rather than
  * only on a success.
@@ -77,23 +87,15 @@ export function parseComposite(text) {
   return { success: success === 't', reason: rest.join(',').replace(/^"|"$/g, '') || null };
 }
 
-export async function vendorAccept(orderId, staff = ACTORS.vendor1Staff) {
-  return transition(staff, 'select public.vendor_accept_order($1)', [orderId]);
-}
-
 /**
- * Submitted -> ACCEPTED -> fulfilment chosen. The state most tests want as a
- * starting point, because it is the first one at which an order can be paid.
+ * An order that is priced and payable.
+ *
+ * Kept as a named helper because dozens of tests start here and the name still
+ * says what the state IS — but it no longer involves a vendor. There is nothing
+ * to accept: submission produces this state directly.
  */
 export async function acceptedOrder(options = {}) {
-  const order = await submitOrder(options);
-  await vendorAccept(order.order_id, options.staff ?? ACTORS.vendor1Staff);
-  await chooseFulfilment(order.order_id, {
-    customer: options.customer ?? ACTORS.customerAma,
-    fulfilment: options.fulfilment ?? 'DELIVERY',
-    destination: options.destination ?? LOCATIONS.room204,
-  });
-  return order;
+  return submitOrder(options);
 }
 
 /** Attempts a transition and returns the raw envelope without throwing. */
@@ -122,21 +124,34 @@ export async function payOrder(orderId, { key = `pay-${orderId}` } = {}) {
   });
 }
 
-export async function vendorPrepare(orderId, staff = ACTORS.vendor1Staff) {
-  return transition(staff, 'select public.vendor_mark_preparing($1)', [orderId]);
-}
-
 export async function vendorReady(orderId, staff = ACTORS.vendor1Staff) {
   return transition(staff, 'select public.vendor_mark_ready($1)', [orderId]);
 }
 
-/** Submitted -> accepted -> chosen -> paid -> preparing -> READY (dispatch open). */
+/**
+ * Placed -> paid -> READY.
+ *
+ * There is no separate "start preparing" step: confirm_payment() moves a paid
+ * food order straight into PREPARING, because the store's whole job is to make
+ * it. Dispatch also opens at payment, so by the time this returns a delivery
+ * order has been SEARCHING since the money landed.
+ */
 export async function orderReadyForDispatch(options = {}) {
   const order = await acceptedOrder(options);
-  const staff = options.staff ?? ACTORS.vendor1Staff;
   await payOrder(order.order_id);
-  await vendorPrepare(order.order_id, staff);
-  await vendorReady(order.order_id, staff);
+  await vendorReady(order.order_id, options.staff ?? ACTORS.vendor1Staff);
+  return order;
+}
+
+/**
+ * Placed and paid, and therefore PREPARING with dispatch already open.
+ *
+ * The state a Partner meets most often now: the offer exists, the food does
+ * not yet. Tests that care about the difference start here.
+ */
+export async function paidOrder(options = {}) {
+  const order = await acceptedOrder(options);
+  await payOrder(order.order_id);
   return order;
 }
 
@@ -177,6 +192,22 @@ export async function completeDelivery(orderId, partner = ACTORS.partnerYaw) {
     secrets.delivery_code,
   ]);
   return secrets;
+}
+
+/**
+ * The customer collects, by typing in the code the vendor read out.
+ *
+ * The direction is the point: the STORE holds the four digits and the person
+ * taking the food types them in, exactly as a Partner does. Reading the code
+ * from order_secrets here is a test shortcut for "somebody said the number out
+ * loud" — no client role can select that table.
+ */
+export async function customerCollect(orderId, customer = ACTORS.customerAma, code = null) {
+  const pickupCode = code ?? (await getSecrets(orderId)).pickup_code;
+  return tryTransition(customer, 'select public.customer_complete_pickup($1, $2)', [
+    orderId,
+    pickupCode,
+  ]);
 }
 
 /** The Partner half of the handoff, on its own. */

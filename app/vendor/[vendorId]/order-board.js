@@ -5,29 +5,42 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { setAcceptingOrdersAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
+import { orderLabel } from '@/lib/orders/state';
 
 /**
- * The vendor's whole day on one screen.
+ * The store's whole day on one screen.
  *
- * Designed for a phone propped next to a hot plate: four clearly separated
- * groups, large touch targets, and the order nearest its deadline at the top of
- * the list that needs attention.
+ * Designed for a phone propped next to a hot plate: big numbers, large touch
+ * targets, and the oldest unmade order at the top of the list that needs
+ * attention.
+ *
+ * THREE GROUPS, because there are three things an order can be to a store now.
+ * There used to be four, and the extra one existed only because a store had to
+ * answer a doorbell before anybody paid. Every order on this board has been
+ * paid for: make it, hand it over, done.
  */
 const GROUPS = [
   {
     key: 'NEW',
-    title: 'New: needs your answer',
-    tone: 'border-warn/40 bg-warn-bg',
-    dot: 'bg-warn',
-  },
-  {
-    key: 'PREPARING',
-    title: 'Preparing',
+    title: 'To prepare',
     tone: 'border-brand-600/40 bg-brand-50',
     dot: 'bg-brand-600',
+    empty: 'Nothing to make right now.',
   },
-  { key: 'READY', title: 'Ready', tone: 'border-brand-600 bg-brand-100', dot: 'bg-brand-700' },
-  { key: 'CLOSED', title: 'Finished today', tone: 'border-line bg-surface', dot: 'bg-black/20' },
+  {
+    key: 'READY',
+    title: 'Ready — waiting to be collected',
+    tone: 'border-brand-600 bg-brand-100',
+    dot: 'bg-brand-700',
+    empty: 'Nothing waiting at the counter.',
+  },
+  {
+    key: 'CLOSED',
+    title: 'Finished',
+    tone: 'border-line bg-surface',
+    dot: 'bg-surface-3',
+    empty: 'Nothing finished yet today.',
+  },
 ];
 
 export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000 }) {
@@ -39,26 +52,38 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
     vendorId: vendor.vendor_id,
     pending,
     initialPending,
+    pollMs,
     onChange: () => router.refresh(),
   });
 
   return (
     <main className="mx-auto max-w-2xl px-4 pt-4 pb-16">
-      <header className="mb-4">
+      <header className="mb-5">
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight">{vendor.name}</h1>
-            <p className="text-muted text-sm">
-              {vendor.is_accepting_orders ? 'Open for orders' : 'Closed to new orders'}
+            <p className="mt-0.5 flex items-center gap-1.5 text-sm">
+              <span
+                className={`size-1.5 rounded-full ${vendor.is_accepting_orders ? 'bg-good' : 'bg-surface-3'}`}
+                aria-hidden
+              />
+              <span
+                className={vendor.is_accepting_orders ? 'text-good font-semibold' : 'text-muted'}
+              >
+                {vendor.is_accepting_orders ? 'Open for orders' : 'Closed to new orders'}
+              </span>
             </p>
-            <Link
-              href="/vendor/profile"
-              className="text-brand-700 mt-1 inline-block text-sm font-medium"
-            >
-              Store details, photos and menu →
-            </Link>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              <Link href="/vendor/menu" className="text-brand-700 font-medium">
+                Menu &amp; sold out →
+              </Link>
+              <Link href="/vendor/profile" className="text-brand-700 font-medium">
+                Store details →
+              </Link>
+            </div>
           </div>
-          <form action={toggleOpen}>
+
+          <form action={toggleOpen} className="shrink-0">
             <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
             <input
               type="hidden"
@@ -68,18 +93,27 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
             <button
               type="submit"
               disabled={toggling}
-              className={`rounded-full px-4 py-2 text-sm font-semibold ${
+              className={`press rounded-full px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-60 ${
                 vendor.is_accepting_orders
                   ? 'text-ink bg-surface ring-line-strong ring-1'
                   : 'bg-brand-700 text-white'
               }`}
             >
-              {vendor.is_accepting_orders ? 'Close store' : 'Open store'}
+              {toggling
+                ? vendor.is_accepting_orders
+                  ? 'Closing…'
+                  : 'Opening…'
+                : vendor.is_accepting_orders
+                  ? 'Close store'
+                  : 'Open store'}
             </button>
           </form>
         </div>
         {openState.message ? (
-          <p className={`mt-2 text-sm ${openState.ok ? 'text-brand-700' : 'text-bad'}`}>
+          <p
+            role="status"
+            className={`mt-2.5 text-sm ${openState.ok ? 'text-brand-700' : 'text-bad'}`}
+          >
             {openState.message}
           </p>
         ) : null}
@@ -87,11 +121,10 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
 
       {pending > 0 ? (
         <p
-          role="alert"
-          className="press bg-warn-bg text-warn mb-4 rounded-full px-4 py-3 text-sm font-semibold transition-colors"
+          role="status"
+          className="bg-warn-bg text-warn mb-4 rounded-full px-4 py-3 text-sm font-semibold"
         >
-          {pending === 1 ? '1 new order is waiting' : `${pending} new orders are waiting`}. Answer
-          before the countdown runs out.
+          {pending === 1 ? '1 paid order to prepare' : `${pending} paid orders to prepare`}.
         </p>
       ) : null}
 
@@ -114,7 +147,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               </ul>
             ) : (
               <p className="text-muted rounded-card border-line border border-dashed px-4 py-4 text-sm">
-                Nothing here.
+                {group.empty}
               </p>
             )}
           </section>
@@ -128,99 +161,57 @@ function OrderCard({ order, vendorId, tone }) {
   return (
     <Link
       href={`/vendor/${vendorId}/orders/${order.order_id}`}
-      className={`block rounded-lg border px-4 py-3 ${tone}`}
+      className={`press rounded-card block border px-4 py-3.5 transition-colors ${tone}`}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <span className="font-mono text-base font-semibold">{order.order_number}</span>
-        <span className="tabular-nums">{formatPesewas(order.total_pesewas)}</span>
+        {/* THE NUMBER THE COUNTER CALLS OUT. Three digits, restarting at 001
+            every morning, unique to this store — not a database key. */}
+        <span className="text-2xl leading-none font-bold tabular-nums">{orderLabel(order)}</span>
+        <span className="font-semibold tabular-nums">{formatPesewas(order.total_pesewas)}</span>
       </div>
-      <div className="text-muted mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <div className="text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span>
           {order.item_count} item{order.item_count === 1 ? '' : 's'}
         </span>
         <span>
-          {order.fulfilment_type === null
-            ? 'Choosing pickup or delivery'
-            : order.fulfilment_type === 'PICKUP'
-              ? 'Pickup'
-              : `Delivery · ${order.destination_zone ?? 'campus'}`}
+          {order.fulfilment_type === 'PICKUP'
+            ? 'Customer collects'
+            : `Partner delivery · ${order.destination_zone ?? 'campus'}`}
         </span>
-        <PaymentTag order={order} />
-        {order.bucket === 'NEW' ? (
-          <Countdown key={order.seconds_to_deadline} seconds={order.seconds_to_deadline} />
-        ) : (
-          <Age key={order.age_seconds} seconds={order.age_seconds} />
-        )}
+        <Age key={order.age_seconds} seconds={order.age_seconds} />
       </div>
-      {/* THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. A Partner standing there
-          waiting for a code, or a customer about to walk up for a collection,
-          are the two things that require the vendor to do something right now. */}
+      {/* THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. Somebody standing there
+          waiting for a code is the only thing that requires the store to act
+          this second. */}
       {order.partner_waiting ? (
-        <p className="text-brand-700 mt-1 text-sm font-medium">
-          Partner waiting — open to read out the pickup code
+        <p className="text-brand-700 mt-1.5 text-sm font-semibold">
+          Partner waiting — open to read out the code
         </p>
       ) : order.awaiting_collection ? (
-        <p className="text-brand-700 mt-1 text-sm font-medium">
-          Waiting for the customer to collect
+        <p className="text-brand-700 mt-1.5 text-sm font-semibold">
+          Customer collecting — open to read out the code
         </p>
       ) : order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
-        <p className="text-muted mt-1 text-sm font-medium">Finding a Partner…</p>
+        <p className="text-muted mt-1.5 text-sm font-medium">Waiting for a Partner…</p>
       ) : null}
     </Link>
   );
 }
 
-function PaymentTag({ order }) {
-  const label = {
-    UNPAID: 'Not paid',
-    PENDING: 'Payment processing',
-    PAID: 'Paid',
-    FAILED: 'Payment failed',
-    REFUND_PENDING: 'Refund pending',
-    REFUNDED: 'Refunded',
-  }[order.payment_status];
-
-  const tone =
-    order.payment_status === 'PAID'
-      ? 'text-brand-700'
-      : order.payment_status === 'FAILED'
-        ? 'text-bad'
-        : 'text-muted';
-
-  return <span className={`font-medium ${tone}`}>{label}</span>;
-}
-
 /**
- * Ticking values.
+ * A ticking age.
  *
- * Both anchor on the number the SERVER computed and count from there, rather
- * than reading the clock during render. That keeps render pure and means a
- * phone with a wrong clock still shows the right countdown. The parent re-keys
- * these on every board refresh so they re-anchor to fresh server values.
+ * Anchors on the number the SERVER computed and counts from there, rather than
+ * reading the clock during render. That keeps render pure and means a phone
+ * with a wrong clock still shows the right elapsed time. The parent re-keys it
+ * on every board refresh so it re-anchors to a fresh server value.
  */
-function useCountFrom(initial, step) {
-  const [value, setValue] = useState(initial ?? 0);
-  useEffect(() => {
-    const timer = setInterval(() => setValue((current) => current + step), 1000);
-    return () => clearInterval(timer);
-  }, [step]);
-  return value;
-}
-
-/** The 60-second answer window. */
-function Countdown({ seconds }) {
-  const left = useCountFrom(seconds, -1);
-  if (seconds == null) return null;
-  if (left <= 0) return <span className="text-bad font-semibold">expiring…</span>;
-  return (
-    <span className={`font-semibold tabular-nums ${left <= 15 ? 'text-bad' : 'text-warn'}`}>
-      {left}s to answer
-    </span>
-  );
-}
-
 function Age({ seconds }) {
-  const elapsed = useCountFrom(seconds, 1);
+  const [elapsed, setElapsed] = useState(seconds ?? 0);
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed((current) => current + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
   if (seconds == null) return null;
   const minutes = Math.floor(elapsed / 60);
   return <span className="tabular-nums">{minutes < 1 ? 'just now' : `${minutes} min ago`}</span>;
@@ -237,7 +228,8 @@ function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange 
   const previous = useRef(initialPending ?? pending);
 
   useEffect(() => {
-    document.title = pending > 0 ? `(${pending}) New orders · Campus Dash` : 'Vendor · Campus Dash';
+    document.title =
+      pending > 0 ? `(${pending}) Orders to prepare · Campus Dash` : 'Vendor · Campus Dash';
   }, [pending]);
 
   useEffect(() => {

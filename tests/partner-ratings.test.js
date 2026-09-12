@@ -15,7 +15,6 @@ import {
   partnerConfirmPickup,
   completeDelivery,
   payOrder,
-  vendorPrepare,
   vendorReady,
   tryTransition,
   expectRejection,
@@ -149,7 +148,6 @@ describe('partner ratings', () => {
   test('a self-collected order has no Partner to rate', async () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP' });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
 
     const secrets = await asService(
@@ -157,7 +155,8 @@ describe('partner ratings', () => {
         (await c.query('select * from public.order_secrets where order_id = $1', [order.order_id]))
           .rows[0]
     );
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1,$2)', [
+    // The store reads the code out; the CUSTOMER types it in.
+    await tryTransition(ACTORS.customerAma, 'select public.customer_complete_pickup($1,$2)', [
       order.order_id,
       secrets.pickup_code,
     ]);

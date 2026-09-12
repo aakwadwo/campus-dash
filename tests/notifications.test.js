@@ -19,11 +19,13 @@ const transitionsSource = readFileSync(
 const notifySource = readFileSync(new URL('../lib/orders/notify.js', import.meta.url), 'utf8');
 
 describe('order notifications', () => {
+  /**
+   * ONE VENDOR TRANSITION IS LEFT. Accept, reject and "start preparing" went
+   * with the doorbell: an order reaches a store already paid for, and the only
+   * thing the store says about it is that it is made.
+   */
   test('every vendor transition announces its event', () => {
     const expected = {
-      vendorAcceptOrder: 'ORDER_ACCEPTED',
-      vendorRejectOrder: 'ORDER_REJECTED',
-      vendorMarkPreparing: 'ORDER_PREPARING',
       vendorMarkReady: 'ORDER_READY',
     };
 
@@ -56,15 +58,7 @@ describe('order notifications', () => {
   });
 
   test('every event the vendor flow emits has an audience', () => {
-    for (const event of [
-      'ORDER_SUBMITTED',
-      'ORDER_ACCEPTED',
-      'ORDER_REJECTED',
-      'ORDER_PREPARING',
-      'ORDER_READY',
-      'PAYMENT_CONFIRMED',
-      'ORDER_CANCELLED',
-    ]) {
+    for (const event of ['ORDER_READY', 'PAYMENT_CONFIRMED', 'ORDER_CANCELLED']) {
       assert.match(
         notifySource,
         new RegExp(`NOTIFICATION_EVENT\\.${event}\\]:`),
@@ -75,8 +69,6 @@ describe('order notifications', () => {
 
   test('every configured audience has copy that renders', () => {
     const cases = [
-      [NOTIFICATION_EVENT.ORDER_SUBMITTED, AUDIENCE.VENDOR],
-      [NOTIFICATION_EVENT.ORDER_SUBMITTED, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_ACCEPTED, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_REJECTED, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.CUSTOMER],
@@ -87,17 +79,21 @@ describe('order notifications', () => {
       [NOTIFICATION_EVENT.ORDER_CANCELLED, AUDIENCE.VENDOR],
     ];
 
+    // THE QUEUE NUMBER, which is what notifyOrderEvent now puts here. A store
+    // calls out "007"; CD-01234 is a database key nobody reads down a phone.
     const context = {
-      orderNumber: 'CD-01234',
+      orderNumber: '007',
       vendorName: 'Test Kitchen One',
       totalPesewas: 9700,
+      itemCount: 2,
+      appUrl: 'https://example.test',
       isPickup: false,
     };
 
     for (const [event, audience] of cases) {
       const message = renderSms(event, audience, context);
       assert.ok(message, `${event} -> ${audience} must have copy`);
-      assert.ok(message.includes('CD-01234'), 'every message names the order');
+      assert.ok(message.includes('007'), 'every message names the order');
       assert.ok(!message.includes('undefined'), `${event} -> ${audience} rendered "undefined"`);
       assert.ok(
         message.length <= 320,
@@ -106,8 +102,35 @@ describe('order notifications', () => {
     }
   });
 
+  /**
+   * NOBODY IS TEXTED WHEN AN ORDER IS CREATED. It is not a ticket yet: nothing
+   * has been paid, and the customer is looking at the pay button as it would
+   * arrive. The store hears about it when the money does.
+   */
+  test('creating an order texts nobody, and paying for it texts the store', () => {
+    assert.equal(
+      renderSms(NOTIFICATION_EVENT.ORDER_SUBMITTED, AUDIENCE.VENDOR, { orderNumber: '007' }),
+      null
+    );
+    assert.equal(
+      renderSms(NOTIFICATION_EVENT.ORDER_SUBMITTED, AUDIENCE.CUSTOMER, { orderNumber: '007' }),
+      null
+    );
+
+    const vendor = renderSms(NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR, {
+      orderNumber: '007',
+      itemCount: 2,
+      isPickup: false,
+      appUrl: 'https://example.test',
+    });
+    assert.match(vendor, /PAID/);
+    assert.match(vendor, /007/);
+    assert.match(vendor, /https:\/\/example\.test\/vendor/, 'the store gets a way in');
+    assert.doesNotMatch(vendor, /accept|reject/i, 'there is nothing left to accept');
+  });
+
   test('READY copy differs for pickup and delivery', () => {
-    const base = { orderNumber: 'CD-1', vendorName: 'Kitchen', totalPesewas: 100 };
+    const base = { orderNumber: '007', vendorName: 'Kitchen', totalPesewas: 100 };
     const pickup = renderSms(NOTIFICATION_EVENT.ORDER_READY, AUDIENCE.CUSTOMER, {
       ...base,
       isPickup: true,
@@ -116,8 +139,11 @@ describe('order notifications', () => {
       ...base,
       isPickup: false,
     });
-    assert.match(pickup, /READY for pickup/);
-    assert.match(delivery, /finding a Partner/);
+    // A collection now ends with the customer typing in a code the store reads
+    // out, and the message that says the food is ready is the one place to
+    // explain that before they walk to a counter expecting to be handed it.
+    assert.match(pickup, /4-digit code/);
+    assert.match(delivery, /Partner is collecting/);
   });
 
   test('the vendor is never told a pickup code by SMS', () => {

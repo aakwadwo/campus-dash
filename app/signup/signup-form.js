@@ -119,7 +119,7 @@ function pickStep({ detailsState, codeState, resendState, completeState }) {
 /** Later states win, so a correction survives a failed round trip. */
 function mergeValues(states) {
   return states.reduce((acc, s) => {
-    for (const key of ['firstName', 'lastName', 'email', 'studentIdNumber', 'level', 'phoneRaw']) {
+    for (const key of ['firstName', 'lastName', 'email', 'level', 'phoneRaw']) {
       if (s?.[key] !== undefined && s[key] !== '') acc[key] = s[key];
     }
     return acc;
@@ -138,7 +138,6 @@ function Carried({ values, next }) {
       <input type="hidden" name="first_name" value={values.firstName ?? ''} />
       <input type="hidden" name="last_name" value={values.lastName ?? ''} />
       <input type="hidden" name="email" value={values.email ?? ''} />
-      <input type="hidden" name="student_id_number" value={values.studentIdNumber ?? ''} />
       <input type="hidden" name="level" value={values.level ?? ''} />
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
     </>
@@ -192,15 +191,6 @@ function DetailsStep({ values, next, action, pending, state, hasAccount }) {
           inputMode="email"
           placeholder="kwame.mensah@acity.edu.gh"
           defaultValue={values.email ?? ''}
-        />
-      </Field>
-
-      <Field label="Student ID number">
-        <Input
-          name="student_id_number"
-          required
-          defaultValue={values.studentIdNumber ?? ''}
-          placeholder="e.g. 20230123"
         />
       </Field>
 
@@ -379,10 +369,6 @@ function CompleteStep({ values, next, action, pending, state }) {
           />
         </Field>
       </div>
-
-      <Field label="Student ID number">
-        <Input name="student_id_number" required defaultValue={values.studentIdNumber ?? ''} />
-      </Field>
 
       <Field label="Level">
         <Select name="level" required defaultValue={values.level ?? ''}>

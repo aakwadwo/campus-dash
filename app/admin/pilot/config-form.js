@@ -39,6 +39,17 @@ export default function ConfigForm({ config }) {
         placeholder={String(config?.scan_service_fee_pesewas ?? 'not configured')}
         hint="A flat amount per errand, never a percentage: a scan order has no food value to take a percentage of. Clearing it stops scan ordering rather than making it free."
       />
+      {/* SCAN ORDERS ONLY. A normal food order arrives in the store's own
+          packaging and is charged nothing for it — the constraint on
+          orders.pack_fee_pesewas enforces that, so this cannot leak onto one. */}
+      <Field
+        label="Disposable pack fee (pesewas)"
+        name="scan_pack_fee_pesewas"
+        type="number"
+        min="0"
+        placeholder={String(config?.scan_pack_fee_pesewas ?? 0)}
+        hint="Charged on SCAN errands only, and shown to the customer as its own line. A normal food order comes in the store's packaging and is never charged this. 0 means Campus Dash absorbs it."
+      />
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Both order types</h3>
       <Field
@@ -47,13 +58,6 @@ export default function ConfigForm({ config }) {
         type="number"
         placeholder={String(config?.delivery_fee_pesewas ?? '')}
         hint="Charged on every delivery, food or scan. The Partner's share of it is set separately."
-      />
-      <Field
-        label="Vendor answer window (seconds)"
-        name="vendor_response_seconds"
-        type="number"
-        placeholder={String(config?.vendor_response_seconds ?? '')}
-        hint="How long a store has to accept before the order expires."
       />
       <Field
         label="Partner search window (seconds)"
@@ -74,7 +78,7 @@ export default function ConfigForm({ config }) {
         name="payment_pending_timeout_seconds"
         type="number"
         placeholder={String(config?.payment_pending_timeout_seconds ?? '')}
-        hint="After this a payment with no provider confirmation is failed so the customer can retry."
+        hint="Two jobs. A payment with no provider confirmation is failed after this so the customer can retry — and it is also the PAY-BY deadline: an order priced and never paid for is cancelled once it passes, with nothing charged."
       />
       <Field
         label="Minimum payout (pesewas)"
@@ -113,8 +117,28 @@ export default function ConfigForm({ config }) {
         hint="Default 2. Applies to the next acceptance. Raising it does not reassign anything; lowering it never takes an order off somebody already carrying it."
       />
 
+      {/* THE BIG SWITCH, and the sentence under it is the important part. It
+          governs CHECKOUT ONLY. An order somebody has already paid for is their
+          dinner and a Partner's GH₵5, and no setting reaches back into it. */}
+      <label className="border-line bg-surface-2 rounded-card flex items-start gap-3 border p-3.5 sm:col-span-2">
+        <input
+          type="checkbox"
+          name="partner_delivery_enabled"
+          defaultChecked={config?.partner_delivery_enabled !== false}
+          className="accent-brand-500 mt-0.5 size-4 shrink-0"
+        />
+        <span className="text-sm leading-relaxed">
+          <span className="font-semibold">Partner delivery is available</span>
+          <span className="text-muted block">
+            Unticking this removes delivery from the checkout: new customers can only collect.
+            Orders already paid for are untouched — nothing is cancelled, reassigned or refunded,
+            and Partners carrying deliveries finish them normally.
+          </span>
+        </span>
+      </label>
+
       <div className="sm:col-span-2">
-        <ReasonField placeholder="Vendors said 60 seconds was too short at lunchtime" />
+        <ReasonField placeholder="No Partners are online this evening" />
       </div>
       <div className="sm:col-span-2">
         <Button disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</Button>

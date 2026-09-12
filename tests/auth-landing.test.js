@@ -204,4 +204,48 @@ describe('the areas an account may enter', () => {
     assert.deepEqual(areasFor({ authenticated: false }), []);
     assert.deepEqual(areasFor(null), []);
   });
+
+  /**
+   * A VENDOR-ONLY ACCOUNT. Somebody who runs a store off campus and has never
+   * ordered anything has no order history and no Partner application, and
+   * should not be taught that Campus Dash has a capability model at all. Their
+   * whole product is the order board.
+   */
+  test('a vendor who is not a customer is offered the store and nothing else', () => {
+    const vendorOnly = {
+      ...base,
+      can_order: false,
+      is_partner: false,
+      partner_status: 'NOT_APPLIED',
+      vendor_ids: ['v'],
+      vendor_status: 'ACTIVE',
+    };
+
+    assert.equal(landingFor(vendorOnly), '/vendor');
+    assert.deepEqual(
+      areasFor(vendorOnly).map((a) => a.href),
+      ['/vendor', '/account'],
+      'no Order entry, and therefore no switcher inviting them into one'
+    );
+  });
+
+  test('a vendor who also orders keeps both, and lands on the store', () => {
+    const both = { ...base, vendor_ids: ['v'], vendor_status: 'ACTIVE' };
+    assert.equal(landingFor(both), '/vendor', 'there is money on that side');
+    assert.deepEqual(
+      areasFor(both).map((a) => a.href),
+      ['/vendor', '/order', '/account'],
+      'and ordering lunch is one tap away'
+    );
+  });
+
+  test('a Partner applicant is still a customer, and lands on ordering', () => {
+    const applicant = { ...base, partner_status: 'PENDING_REVIEW' };
+    assert.equal(landingFor(applicant), '/order');
+    assert.deepEqual(
+      areasFor(applicant).map((a) => a.href),
+      ['/order', '/account'],
+      'a pending application is not a Partner area yet'
+    );
+  });
 });

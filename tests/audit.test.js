@@ -47,7 +47,7 @@ describe('audit trail', () => {
     assert.equal(action.target_id, order.order_id, 'WHICH');
     assert.equal(action.reason, 'customer called: vendor closed early', 'WHY');
     assert.ok(action.created_at, 'WHEN');
-    assert.equal(action.before_state.order_status, 'SUBMITTED');
+    assert.equal(action.before_state.order_status, 'ACCEPTED');
     assert.equal(action.after_state.order_status, 'CANCELLED');
   });
 
@@ -218,17 +218,16 @@ describe('audit trail', () => {
     );
 
     assert.deepEqual(events, [
+      // The submission carries the fulfilment choice on it now, so there is no
+      // separate event for the decision — it is a detail of ORDER_SUBMITTED.
       'ORDER_SUBMITTED',
-      'VENDOR_ACCEPT',
-      // The customer's choice of pickup or delivery, which is what fixed the
-      // price — so it belongs in the reconstruction between the vendor's answer
-      // and the money.
-      'FULFILMENT_CHOSEN',
       'PAYMENT_INTENT_CREATED',
       'PAYMENT_CONFIRMED',
+      // Paying is what reaches the kitchen and what opens the search. Both are
+      // recorded, and both are SYSTEM: nobody pressed anything.
       'VENDOR_PREPARING',
-      'VENDOR_READY',
       'DISPATCH_OPENED',
+      'VENDOR_READY',
       'PARTNER_ACCEPT',
     ]);
   });

@@ -101,22 +101,29 @@ who performs the act.**
 
 All three are **exactly four digits**.
 
-| Code       | Read by                                | Typed in by                                  |
-| ---------- | -------------------------------------- | -------------------------------------------- |
-| Pickup     | the VENDOR, `vendor_pickup_code()`     | the PARTNER, `partner_confirm_pickup()`      |
-| Delivery   | the CUSTOMER, `get_my_delivery_code()` | the PARTNER, `partner_complete_delivery()`   |
-| Collection | the CUSTOMER, `get_my_pickup_code()`   | the VENDOR, `vendor_complete_pickup_order()` |
+| Code     | Read by                                | Typed in by                                |
+| -------- | -------------------------------------- | ------------------------------------------ |
+| Handoff  | the STORE, `vendor_handoff_code()`     | the PARTNER, `partner_confirm_pickup()`    |
+| Handoff  | the STORE, `vendor_handoff_code()`     | the CUSTOMER, `customer_complete_pickup()` |
+| Delivery | the CUSTOMER, `get_my_delivery_code()` | the PARTNER, `partner_complete_delivery()` |
 
-There is **no function that returns a pickup code to a Partner**, and the claim
-does not hand one back either. A Partner who could read it could confirm a
-collection that never happened, which is the entire point of the code — and
-symmetrically, a vendor who could read the delivery code could record a delivery
+**One function returns a handoff code, and it is behind `is_vendor_staff`.**
+There is none that returns it to a Partner or to a collecting customer, and the
+claim does not hand one back either. Whoever could read it could confirm a
+handoff that never happened, which is the entire point of the code —
+symmetrically, a store that could read the delivery code could record a delivery
 that never happened.
 
-`vendor_pickup_code()` additionally returns nothing unless a Partner is actually
-assigned and waiting, so the code is not sitting on a screen between jobs.
+`vendor_handoff_code()` additionally returns nothing unless somebody is actually
+due to collect — a Partner assigned to the order, or a collection whose food is
+made — so a code is never sitting on a screen between jobs.
 
-Codes come from pgcrypto's CSPRNG, never `random()`. A pickup code rotates on
+The COLLECTION handoff used to run the other way, with the customer holding a
+code and the vendor typing it. The invariant is identical; what changed is which
+side of the counter holds the secret, so the person walking away with the food
+is the one performing the act.
+
+Codes come from pgcrypto's CSPRNG, never `random()`. A handoff code rotates on
 every reassignment and on every cancellation, so a superseded code is gone
 rather than merely unused — `pickup_code_version` only moves forward.
 
@@ -218,8 +225,20 @@ storage with nothing left to find it by.
   `.env.example` carries names and never values, and `/api/health` reports
   whether each variable is present without echoing any of them.
 - Administrator passwords are never a command-line argument, never echoed, and
-  never stored anywhere in this repository — `scripts/create-admin.mjs` reads
-  one from a hidden prompt and hands it straight to Supabase Auth.
+  never stored anywhere in this repository — `scripts/create-admin.mjs` and
+  `scripts/reset-admin-password.mjs` each read one from a hidden prompt and hand
+  it straight to Supabase Auth.
+- Administrator password recovery never widens who may hold a password. The
+  in-app flow at `/login/admin/forgot` checks `is_admin` BEFORE Supabase is
+  asked to send anything, so only an administrator is ever emailed a link, and
+  it answers identically either way so the form cannot be used to discover which
+  addresses are administrators. The session the link produces is spent on the
+  password and signed out, so following a link never grants console access, and
+  `is_admin` is re-read from the database at every step rather than trusted from
+  the link or the session.
+- `scripts/reset-admin-password.mjs` is the same operation from a terminal, for
+  when the mailbox itself is unreachable. It sets a password and nothing else,
+  and refuses any address that is not already an administrator.
 
 ## Money
 

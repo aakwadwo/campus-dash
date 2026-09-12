@@ -174,13 +174,68 @@ is; the database decides what they may do.
 Failures return one message for every cause. Distinguishing "no such account"
 from "wrong password" would confirm which email addresses are administrators.
 
-There is no admin registration page and no self-service password reset. The
-first administrator is created out-of-band with `npm run admin:create`, which
-needs the service-role key and therefore a server — see
-[`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md). The account carries a phone number
-as well, because `public.users` is provisioned on phone confirmation and its
-`phone` column is unique and NOT NULL: the phone is the identity, the password
-is the credential.
+There is no admin registration page. The first administrator is created
+out-of-band with `npm run admin:create`, which needs the service-role key and
+therefore a server — see [`HOSTED-SUPABASE.md`](./HOSTED-SUPABASE.md). The
+account is created from a confirmed email address alone: `public.users` is
+provisioned on EITHER confirmation, so no phone number is asked for and none is
+attached.
+
+### Forgetting the password
+
+Administrators are the one account with a password, so they are the only one
+that can be locked out of a credential rather than a channel. There are two
+ways back in, and they are for different situations.
+
+**The everyday one — `/login/admin` → "Forgot your password?"**
+
+| Step                   | What happens                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `/login/admin/forgot`  | The address is checked against `is_admin` FIRST. Only an administrator is emailed anything.      |
+| the email              | A link, not a code — see `supabase/templates/reset-password.html` for why this one is different. |
+| `/login/admin/recover` | Spends the token, establishes a session, redirects. A route, not a page: the token is good once. |
+| `/login/admin/reset`   | The new password. `is_admin` is re-checked here and again in the action.                         |
+| back to `/login/admin` | The recovery session is SIGNED OUT. The new password still has to be proved.                     |
+
+Four things keep it from being a way in:
+
+1. **A link is only ever sent to an administrator.** The address is checked
+   against `public.users.is_admin` with the service-role client before Supabase
+   is asked for anything, so a customer or a vendor can never be handed a
+   password — a credential their account is not supposed to have at all.
+2. **The answer is the same either way.** One sentence whether a link was sent
+   or not, for the same reason `adminSignIn` returns one message for every
+   failure: telling them apart would confirm which addresses are administrators.
+3. **The recovery session is spent on the password and thrown away.** Following
+   a link never lands anybody in the console.
+4. **`is_admin` is re-derived from the database at every step** — never carried
+   in the link or trusted from the session.
+
+Supabase Auth issues and validates the recovery token. We never generate, store
+or check one, which keeps that surface in the same audited place as every other
+code.
+
+**The locked-out-of-everything one — `npm run admin:password`**
+
+Sets a password on an existing administrator from a terminal with the
+service-role key, and does nothing else: it cannot create an account, cannot
+promote one, and refuses outright if the address is not already an
+administrator. It is the answer when the mailbox itself is unreachable, and the
+way the first administrator's password is set. It is not the everyday path.
+
+**Two pieces of project configuration this depends on**, both of which fail
+quietly if they are wrong:
+
+- **Redirect URLs** must include this deployment's origin. GoTrue silently
+  DISCARDS a `redirectTo` that is not on the list and falls back to `site_url`,
+  which lands the recipient on the home page with a spent token.
+- **Site URL** must match `PUBLIC_APP_URL`. The session cookie the link sets
+  belongs to whichever origin served it, so a mismatch writes it on one origin
+  and reads it on another, and a perfectly good link reports itself expired.
+
+Locally both live in `supabase/config.toml`. On a hosted project they are under
+Authentication → URL Configuration, and the Reset Password template goes under
+Authentication → Email Templates.
 
 ## Local configuration
 

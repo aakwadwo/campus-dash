@@ -28,14 +28,14 @@ recreated, and nobody is paid twice.
 `/admin/orders` sorts by how much a human is needed. Problems first, oldest
 first within each group.
 
-| It says                   | What happened                           | What to do                                                                   |
-| ------------------------- | --------------------------------------- | ---------------------------------------------------------------------------- |
-| `DISPUTED`                | Customer reported a problem             | Read the order history, phone both sides, resolve with a reason              |
-| `CUSTOMER_ABSENT`         | Partner waited and gave up              | Decide what happens to the food. The Partner has already been paid           |
-| `NO_PARTNER`              | Nobody took it                          | The customer has been offered a choice. Chase a Partner, or let them collect |
-| `PAYMENT_FAILED`          | Provider declined or timed out          | Nothing was taken. The customer can retry from their order screen            |
-| `AWAITING_VENDOR` and old | The stall is not looking at their phone | Ring them. The order expires by itself                                       |
-| `REFUND_PENDING`          | An order was cancelled after payment    | Refund at the provider, then _Mark refunded_                                 |
+| It says                    | What happened                                  | What to do                                                                   |
+| -------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| `DISPUTED`                 | Customer reported a problem                    | Read the order history, phone both sides, resolve with a reason              |
+| `CUSTOMER_ABSENT`          | Partner waited and gave up                     | Decide what happens to the food. The Partner has already been paid           |
+| `NO_PARTNER`               | Nobody took it                                 | The customer has been offered a choice. Chase a Partner, or let them collect |
+| `PAYMENT_FAILED`           | Provider declined or timed out                 | Nothing was taken. The customer can retry from their order screen            |
+| `AWAITING_PAYMENT` and old | The customer got to the pay screen and stopped | Nothing to do. It is cancelled by itself, and nothing was charged            |
+| `REFUND_PENDING`           | An order was cancelled after payment           | Refund at the provider, then _Mark refunded_                                 |
 
 Every override needs a reason. It goes in `admin_actions` and cannot be edited
 or deleted afterwards — including by you.

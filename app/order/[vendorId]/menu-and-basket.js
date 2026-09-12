@@ -8,22 +8,31 @@ import { Card, Money, ErrorNote, EmptyState, Skeleton, ArrowLeftIcon, BagIcon } 
  * Menu, basket and checkout.
  *
  * The basket holds ids and quantities. It never holds a total: every figure
- * shown comes back from the server, priced by the same function that will
- * charge the customer. Nothing about that changed in the redesign — the quote
- * round-trip, the hidden inputs and the submit path are the originals.
+ * shown comes back from the server, priced by the same arithmetic that will
+ * charge the customer.
  *
- * WHAT DID CHANGE is the shape of the two steps. Choosing is a browsing task
- * and gets the full width; reviewing is a committing task and narrows to a
- * single column, which is the composition the references use as an order gets
- * closer to being paid for.
+ * PICKUP OR DELIVERY IS ASKED HERE, and that is the whole shape of the new
+ * order flow. There is no vendor to wait on any more, so there is nothing to
+ * decide it after — the customer chooses, sees the final price including the
+ * GH₵5 if they want it, and pays. A store only ever sees an order that has
+ * been paid for.
  *
- * PICKUP OR DELIVERY IS NOT ASKED HERE any more. It is asked after the vendor
- * has accepted, on the order screen, because until then there may be no order
- * to make the decision about — and it is the decision that costs GH₵5.
+ * Delivery can be switched off centrally. When it is, the option is visibly
+ * unavailable rather than absent: "no Partners right now" is information, and
+ * an option that silently vanishes reads as a bug.
  */
-export default function MenuAndBasket({ vendor, menu, gate = null }) {
+export default function MenuAndBasket({
+  vendor,
+  menu,
+  locations = [],
+  deliveryAvailable = true,
+  gate = null,
+}) {
   const [quantities, setQuantities] = useState({});
   const [step, setStep] = useState('menu');
+  const [fulfilment, setFulfilment] = useState('PICKUP');
+  const [destination, setDestination] = useState('');
+  const [note, setNote] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
   const [quoting, startQuoting] = useTransition();
@@ -39,13 +48,26 @@ export default function MenuAndBasket({ vendor, menu, gate = null }) {
   // basket; the checkout step becomes a link to whatever they are missing.
   const canOrder = vendor.is_accepting_orders && itemCount > 0 && !gate;
 
-  // Re-price whenever the basket changes.
+  // WHAT IS ACTUALLY BEING BOUGHT. Delivery can be switched off centrally, and
+  // when it is the choice collapses to collection here rather than being
+  // corrected after a round trip — the server refuses it too, but a screen that
+  // quotes GH₵5 for something it is about to be told it cannot have is a screen
+  // that lied.
+  const fulfilmentChoice = deliveryAvailable ? fulfilment : 'PICKUP';
+
+  // Re-price whenever the basket or the fulfilment changes. The delivery fee is
+  // part of the answer, so changing the choice re-asks the server rather than
+  // adding GH₵5 in the browser.
   useEffect(() => {
     if (step !== 'review' || items.length === 0) return;
 
     let cancelled = false;
     startQuoting(async () => {
-      const result = await quoteAction({ vendorId: vendor.vendor_id, items });
+      const result = await quoteAction({
+        vendorId: vendor.vendor_id,
+        items,
+        fulfilmentType: fulfilmentChoice,
+      });
       if (cancelled) return;
       if (result.ok) {
         setQuote(result.quote);
@@ -59,17 +81,36 @@ export default function MenuAndBasket({ vendor, menu, gate = null }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, JSON.stringify(items), vendor.vendor_id]);
+  }, [step, JSON.stringify(items), fulfilmentChoice, vendor.vendor_id]);
+
+  /**
+   * The provider's checkout is on another origin, so getting there is a full
+   * browser navigation rather than a client-side route change. Done in an
+   * effect so React has committed the pending state first — the button stays
+   * disabled while the page is on its way out.
+   */
+  useEffect(() => {
+    if (!submitState.ok) return;
+    window.location.href = submitState.redirectUrl || submitState.orderHref;
+  }, [submitState]);
 
   const setQuantity = (id, next) =>
     setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
 
   if (step === 'review' && !gate) {
     return (
-      <Review
+      <Checkout
         vendor={vendor}
         menu={menu}
         items={items}
+        locations={locations}
+        deliveryAvailable={deliveryAvailable}
+        fulfilment={fulfilmentChoice}
+        onFulfilment={setFulfilment}
+        destination={destination}
+        onDestination={setDestination}
+        note={note}
+        onNote={setNote}
         quote={quote}
         quoting={quoting}
         quoteError={quoteError}
@@ -133,7 +174,13 @@ export default function MenuAndBasket({ vendor, menu, gate = null }) {
                     label={item.name}
                   />
                 ) : (
-                  <p className="text-muted mt-3 text-sm font-medium">Unavailable today</p>
+                  /* SOLD OUT, SHOWN. A dish that vanishes when it runs out
+                     reads as a store that has stopped selling it; a dish marked
+                     sold out reads as a store that is busy. */
+                  <p className="text-muted mt-3 inline-flex items-center gap-1.5 text-sm font-semibold">
+                    <span className="bg-surface-3 size-1.5 rounded-full" aria-hidden />
+                    Sold out
+                  </p>
                 )}
               </Card>
             </li>
@@ -169,7 +216,7 @@ export default function MenuAndBasket({ vendor, menu, gate = null }) {
                 onClick={() => setStep('review')}
                 className="press bg-brand-700 hover:bg-brand-800 ml-auto rounded-full px-6 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
               >
-                Review order
+                Checkout
               </button>
             )}
           </div>
@@ -228,10 +275,24 @@ function Stepper({ value, onChange, label }) {
   );
 }
 
-function Review({
+/**
+ * One screen: what you ordered, how you want it, what it costs, pay.
+ *
+ * The Pay button is disabled while the quote is in flight, because the figure
+ * beside it would be the figure for a choice the customer has just changed.
+ */
+function Checkout({
   vendor,
   menu,
   items,
+  locations,
+  deliveryAvailable,
+  fulfilment,
+  onFulfilment,
+  destination,
+  onDestination,
+  note,
+  onNote,
   quote,
   quoting,
   quoteError,
@@ -246,6 +307,16 @@ function Review({
     price: menu.find((m) => m.id === item.menuItemId)?.price_pesewas ?? 0,
   }));
 
+  // The server's live answer wins over what the page was rendered with: the
+  // switch can be flipped while somebody is filling in a basket.
+  const canDeliver = quote ? quote.delivery_available !== false : deliveryAvailable;
+  const needsDestination = fulfilment === 'DELIVERY' && !destination;
+  // `leaving` keeps the button spent after the action resolves: the browser is
+  // on its way to the payment page and a button that springs back to "Pay"
+  // invites a second tap at the worst possible moment.
+  const leaving = Boolean(submitState.ok);
+  const busy = submitting || leaving;
+
   return (
     <form action={submit} className="mx-auto max-w-xl">
       <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
@@ -255,6 +326,9 @@ function Review({
         name="items"
         value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
       />
+      <input type="hidden" name="fulfilment_type" value={fulfilment} />
+      <input type="hidden" name="destination_location_id" value={destination} />
+      <input type="hidden" name="destination_note" value={note} />
 
       <button
         type="button"
@@ -265,7 +339,7 @@ function Review({
         Back to menu
       </button>
 
-      <h2 className="text-display text-2xl font-semibold sm:text-3xl">Review your order</h2>
+      <h2 className="text-display text-2xl font-semibold sm:text-3xl">Checkout</h2>
       <p className="text-muted mt-1.5">From {vendor.name}</p>
 
       {/* --- Items ------------------------------------------------------- */}
@@ -290,10 +364,68 @@ function Review({
         </ul>
       </Card>
 
-      {/* No fulfilment question here. It is asked after the vendor accepts,
-          on the order screen — see customer_choose_fulfilment(). Asking now
-          would be asking somebody to decide whether to pay GH₵5 for delivery
-          before knowing whether the kitchen is even going to cook. */}
+      {/* --- How you want it ---------------------------------------------- */}
+      <Card className="mt-4 p-5">
+        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
+          How you want it
+        </h3>
+
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          <Choice
+            selected={fulfilment === 'PICKUP'}
+            onSelect={() => onFulfilment('PICKUP')}
+            title="Collect it yourself"
+            detail={`Walk to ${vendor.name}. No delivery fee.`}
+            price={0}
+          />
+          <Choice
+            selected={fulfilment === 'DELIVERY'}
+            onSelect={() => onFulfilment('DELIVERY')}
+            disabled={!canDeliver}
+            title="Campus Dash Partner"
+            detail={
+              canDeliver
+                ? 'A verified student brings it to you.'
+                : 'No Partners are available right now.'
+            }
+            price={quote?.delivery_fee_pesewas ?? null}
+          />
+        </div>
+
+        {fulfilment === 'DELIVERY' && canDeliver ? (
+          <div className="mt-4 space-y-3">
+            <label className="block">
+              <span className="text-sm font-medium">Where should the Partner bring it?</span>
+              <select
+                required
+                value={destination}
+                onChange={(event) => onDestination(event.target.value)}
+                className="rounded-input bg-surface border-line-strong focus:border-brand-600 mt-1.5 h-12 w-full border px-3 text-base outline-none"
+              >
+                <option value="">Choose a place</option>
+                {locations.map((place) => (
+                  <option key={place.location_id ?? place.id} value={place.location_id ?? place.id}>
+                    {place.path ?? place.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium">
+                Anything that helps them find you{' '}
+                <span className="text-muted font-normal">(optional)</span>
+              </span>
+              <input
+                value={note}
+                onChange={(event) => onNote(event.target.value)}
+                maxLength={140}
+                placeholder="Green door at the end of the corridor"
+                className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-3 text-base outline-none"
+              />
+            </label>
+          </div>
+        ) : null}
+      </Card>
 
       {/* --- Money -------------------------------------------------------- */}
       <Card className="mt-4 p-5">
@@ -308,7 +440,7 @@ function Review({
             <Line label="Food" value={quote.subtotal_pesewas} />
             <Line label="Service fee" value={quote.service_fee_pesewas} />
             {quote.delivery_fee_pesewas > 0 ? (
-              <Line label="Delivery fee" value={quote.delivery_fee_pesewas} />
+              <Line label="Partner delivery" value={quote.delivery_fee_pesewas} />
             ) : null}
             <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
               <dt className="font-semibold">Total</dt>
@@ -327,8 +459,7 @@ function Review({
         )}
 
         <p className="text-muted mt-4 text-xs leading-relaxed">
-          You are not charged yet. Once {vendor.name} accepts, you choose whether to collect it or
-          have a Partner bring it. The delivery fee is added then, if you want one.
+          You pay once. {vendor.name} starts preparing as soon as the payment lands.
         </p>
       </Card>
 
@@ -338,19 +469,74 @@ function Review({
         <button
           type="button"
           onClick={onBack}
-          className="press border-line-strong hover:bg-surface-2 rounded-full border px-5 py-3.5 text-sm font-semibold transition-colors"
+          disabled={busy}
+          className="press border-line-strong hover:bg-surface-2 rounded-full border px-5 py-3.5 text-sm font-semibold transition-colors disabled:opacity-55"
         >
           Back
         </button>
         <button
           type="submit"
-          disabled={submitting || !quote || quoting}
+          disabled={busy || !quote || quoting || needsDestination}
           className="press bg-brand-700 hover:bg-brand-800 flex-1 rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
-          {submitting ? 'Sending…' : 'Send order to vendor'}
+          {busy ? (
+            <span className="inline-flex items-center justify-center gap-2">
+              <Spinner />
+              Taking you to pay…
+            </span>
+          ) : quote ? (
+            <>
+              Pay <Money pesewas={quote.total_pesewas} />
+            </>
+          ) : (
+            'Pay'
+          )}
         </button>
       </div>
+      {needsDestination ? (
+        <p className="text-muted mt-2.5 text-center text-xs">
+          Choose where the Partner should bring it.
+        </p>
+      ) : null}
     </form>
+  );
+}
+
+/** A fulfilment option. A whole-card target, because a radio dot is 12px. */
+function Choice({ selected, onSelect, title, detail, price, disabled = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={`rounded-card press w-full border p-3.5 text-left transition-colors ${
+        disabled
+          ? 'border-line bg-surface-2/60 cursor-not-allowed'
+          : selected
+            ? 'border-brand-600 bg-brand-50 ring-brand-600/25 ring-1'
+            : 'border-line-strong hover:bg-surface-2'
+      }`}
+    >
+      <span className="flex items-baseline justify-between gap-2">
+        <span className={`font-semibold ${disabled ? 'text-muted' : ''}`}>{title}</span>
+        {!disabled && price !== null ? (
+          <span className="shrink-0 text-sm font-semibold">
+            {price > 0 ? <Money pesewas={price} /> : 'Free'}
+          </span>
+        ) : null}
+      </span>
+      <span className="text-muted mt-1 block text-xs leading-relaxed">{detail}</span>
+    </button>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      className="inline-block size-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
+    />
   );
 }
 

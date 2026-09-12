@@ -217,9 +217,13 @@ the Standard Webhooks HMAC on the raw bytes and is unchanged.
 npm run admin:create
 ```
 
-It asks for an email address, a phone number, a name and a password (hidden,
-confirmed, minimum twelve characters), then creates the Supabase Auth user and
-sets `is_admin` on the profile.
+It asks for an email address, a name and a password (hidden, confirmed, minimum
+twelve characters), then creates the Supabase Auth user and sets `is_admin` on
+the profile. It does not ask for a phone number: an administrator has none, and
+attaching one would occupy a number a vendor could otherwise sign up with.
+
+Forgotten the password later? `npm run admin:password` sets a new one on an
+administrator that already exists, and can do nothing else.
 
 There is no in-app path to the first administrator, by design: `is_admin` is a
 column on `public.users`, `authenticated` holds SELECT and nothing else on that

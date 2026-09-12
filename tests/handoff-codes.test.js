@@ -17,7 +17,6 @@ import {
   getOrder,
   getSecrets,
   payOrder,
-  vendorPrepare,
   vendorReady,
   expectRejection,
 } from './helpers/flow.js';
@@ -64,7 +63,6 @@ describe('four-digit handoff codes', () => {
   async function readyPickupOrder() {
     const order = await acceptedOrder({ fulfilment: 'PICKUP' });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
     return order;
   }
@@ -114,31 +112,53 @@ describe('four-digit handoff codes', () => {
     assert.notEqual(secrets.pickup_code, secrets.delivery_code, 'two secrets, not one');
   });
 
-  test('a self-collection code is four digits, held by the customer', async () => {
+  test('a self-collection code is four digits, held by the STORE', async () => {
     const order = await readyPickupOrder();
 
     const code = await asUser(
-      ACTORS.customerAma,
+      ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.get_my_pickup_code($1) as c', [order.order_id])).rows[0].c
+        (await c.query('select public.vendor_handoff_code($1) as c', [order.order_id])).rows[0].c
     );
     assert.match(code, FOUR_DIGITS);
 
-    // And the VENDOR is the one who types it in.
+    // And the CUSTOMER is the one who types it in — the same rule as the
+    // Partner handoff, with the store on the holding side.
     const wrong = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1, $2)',
-      [order.order_id, '0000' === code ? '1111' : '0000']
+      ACTORS.customerAma,
+      'select public.customer_complete_pickup($1, $2)',
+      [order.order_id, code === '0000' ? '1111' : '0000']
     );
     assert.equal(wrong.success, false);
 
     const right = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1, $2)',
+      ACTORS.customerAma,
+      'select public.customer_complete_pickup($1, $2)',
       [order.order_id, code]
     );
     assert.equal(right.success, true);
     assert.equal((await getOrder(order.order_id)).order_status, 'COMPLETED');
+  });
+
+  test('the collector is never shown their own code, on either side', async () => {
+    const collection = await readyPickupOrder();
+
+    // A customer collecting has no function that returns the code they are
+    // about to be asked for. If they had one, the code would prove nothing.
+    const asCustomer = await expectRejection(
+      asUser(ACTORS.customerAma, (c) =>
+        c.query('select public.vendor_handoff_code($1)', [collection.order_id])
+      )
+    );
+    assert.match(asCustomer.message, /not authorised for this order/);
+
+    const view = await asUser(
+      ACTORS.customerAma,
+      async (c) =>
+        (await c.query('select * from public.customer_order_detail($1)', [collection.order_id]))
+          .rows[0]
+    );
+    assert.ok(!('pickup_code' in view), 'not in the read model either');
   });
 
   // =========================================================================
@@ -327,23 +347,33 @@ describe('four-digit handoff codes', () => {
     await setAttemptLimit(3);
     const order = await readyPickupOrder();
     const code = await asUser(
-      ACTORS.customerAma,
+      ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.get_my_pickup_code($1) as c', [order.order_id])).rows[0].c
+        (await c.query('select public.vendor_handoff_code($1) as c', [order.order_id])).rows[0].c
     );
     const wrong = (n) => String((Number(code) + n + 1) % 10000).padStart(4, '0');
 
     let last;
     for (let i = 0; i < 3; i += 1) {
       last = await tryTransition(
-        ACTORS.vendor1Staff,
-        'select public.vendor_complete_pickup_order($1, $2)',
+        ACTORS.customerAma,
+        'select public.customer_complete_pickup($1, $2)',
         [order.order_id, wrong(i)]
       );
       assert.equal(last.success, false);
     }
     assert.match(last.reason, /too many wrong codes/i);
     assert.equal((await getOrder(order.order_id)).order_status, 'READY', 'nothing completed');
+
+    // THE LOCKOUT REFUSES THE CORRECT CODE TOO. One that let it through would
+    // be an oracle telling an attacker they had finally guessed right.
+    const correct = await tryTransition(
+      ACTORS.customerAma,
+      'select public.customer_complete_pickup($1, $2)',
+      [order.order_id, code]
+    );
+    assert.equal(correct.success, false);
+    assert.match(correct.reason, /too many wrong codes/i);
   });
 
   // =========================================================================
@@ -392,21 +422,21 @@ describe('four-digit handoff codes', () => {
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
 
-    // get_my_pickup_code is the customer's self-collection code and refuses a
-    // Partner outright; the vendor's is behind is_vendor_staff.
-    const asPartner = await expectRejection(
-      asUser(ACTORS.partnerYaw, (c) =>
-        c.query('select public.get_my_pickup_code($1)', [order.order_id])
-      )
-    );
-    assert.match(asPartner.message, /no collection code available/i);
-
+    // The one function that returns a handoff code is the STORE'S, behind
+    // is_vendor_staff. A Partner asking for it is refused.
     const asVendorCode = await expectRejection(
       asUser(ACTORS.partnerYaw, (c) =>
-        c.query('select public.vendor_pickup_code($1)', [order.order_id])
+        c.query('select public.vendor_handoff_code($1)', [order.order_id])
       )
     );
     assert.match(asVendorCode.message, /not authorised|insufficient/i);
+
+    // And the read model a Partner DOES have carries no code at all.
+    const job = await asUser(
+      ACTORS.partnerYaw,
+      async (c) => (await c.query('select * from public.partner_active_delivery()')).rows[0]
+    );
+    assert.ok(!JSON.stringify(job).includes('code'), 'nothing code-shaped reaches a Partner');
   });
 
   test('a customer sees the delivery code only while a Partner is carrying it', async () => {

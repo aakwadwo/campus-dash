@@ -5,15 +5,14 @@ const CONTEXT = 'vendor action';
 import { actionFailure } from '@/lib/errors';
 
 import { revalidatePath } from 'next/cache';
+import { vendorMarkReady, vendorSetAcceptingOrders } from '@/lib/orders/transitions';
 import {
-  vendorAcceptOrder,
-  vendorRejectOrder,
-  vendorMarkPreparing,
-  vendorMarkReady,
-  vendorCompletePickupOrder,
-  vendorSetAcceptingOrders,
-} from '@/lib/orders/transitions';
-import { updateProfile, addImage, removeImage, setPayoutDestination } from '@/lib/vendor';
+  updateProfile,
+  addImage,
+  removeImage,
+  setPayoutDestination,
+  setMenuItemAvailable,
+} from '@/lib/vendor';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
 
@@ -24,9 +23,14 @@ import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documen
  * decided here: the database checks that the caller staffs this vendor, that the
  * order is in a state the move is legal from, and writes the transition log.
  *
+ * THERE IS NO ACCEPT AND NO REJECT. Orders arrive paid for, so the store's only
+ * order button is "Ready for pickup". The old transitions still exist in the
+ * database for the sake of orders placed before that changed, but no client
+ * role can execute them — see the migration.
+ *
  * A rejected transition comes back as { success: false, reason } — routine, not
- * exceptional. Losing a race with a colleague who tapped ACCEPT first is normal
- * in a busy kitchen, and the message says so plainly.
+ * exceptional. A colleague who marked the same order ready a second earlier is
+ * normal in a busy kitchen, and the message says so plainly.
  */
 function outcome(result, successMessage) {
   return result.success
@@ -60,51 +64,41 @@ const str = (formData, key) => {
   return trimmed === '' ? null : trimmed;
 };
 
-export async function acceptOrderAction(_prev, formData) {
-  return run(
-    () => vendorAcceptOrder(str(formData, 'order_id')),
-    'Order accepted.',
-    str(formData, 'vendor_id')
-  );
-}
-
-export async function rejectOrderAction(_prev, formData) {
-  return run(
-    () => vendorRejectOrder(str(formData, 'order_id'), str(formData, 'reason')),
-    'Order rejected. The customer has been told, and has not been charged.',
-    str(formData, 'vendor_id')
-  );
-}
-
-export async function markPreparingAction(_prev, formData) {
-  return run(
-    () => vendorMarkPreparing(str(formData, 'order_id')),
-    'Started preparing.',
-    str(formData, 'vendor_id')
-  );
-}
-
+/**
+ * "Ready for pickup" — the store's one button, and deliberately not called
+ * "Done". Done would be a lie: nobody has the food yet, and the handoff still
+ * has to be proved with a code.
+ */
 export async function markReadyAction(_prev, formData) {
   return run(
     () => vendorMarkReady(str(formData, 'order_id')),
-    'Marked ready.',
+    'Ready for pickup. Read the code out to whoever collects it.',
     str(formData, 'vendor_id')
   );
 }
 
 /**
- * The customer shows their collection code; the vendor types in what they see.
+ * Sold out, or back on today's menu.
  *
- * Self-pickup is still a handoff. The code is minted when the customer chooses
- * to collect and is on their own order screen — the vendor cannot read it, so
- * they cannot complete a collection that never happened.
+ * The customer keeps seeing the item — marked sold out — because a dish that
+ * vanishes reads as a store that stopped selling it. Every sold-out mark is
+ * cleared when the store next reopens, so nobody has to walk back through the
+ * menu in the morning.
  */
-export async function completePickupAction(_prev, formData) {
-  return run(
-    () => vendorCompletePickupOrder(str(formData, 'order_id'), str(formData, 'pickup_code')),
-    'Handed to the customer. Order complete.',
-    str(formData, 'vendor_id')
-  );
+export async function setMenuItemAvailableAction(_prev, formData) {
+  const available = formData.get('available') === 'true';
+  const name = str(formData, 'name') ?? 'That item';
+  try {
+    await setMenuItemAvailable(str(formData, 'menu_item_id'), available);
+  } catch (error) {
+    return fail(error);
+  }
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${str(formData, 'vendor_id')}`);
+  return {
+    ok: true,
+    message: available ? `${name} is back on the menu.` : `${name} is marked sold out.`,
+  };
 }
 
 // --- The store itself --------------------------------------------------------
@@ -189,9 +183,16 @@ export async function setAcceptingOrdersAction(_prev, formData) {
     return fail(error);
   }
   revalidatePath(`/vendor/${vendorId}`, 'layout');
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
   return {
     ok: true,
-    message: accepting ? 'You are open for orders.' : 'Closed. No new orders will arrive.',
+    // REOPENING CLEARS THE SOLD-OUT MARKS, and the message says so rather than
+    // leaving a vendor to discover it. Running out of jollof is a fact about a
+    // service, not a property of the dish.
+    message: accepting
+      ? 'Open for orders. Everything on your menu is available again.'
+      : 'Closed. No new orders will arrive. Orders already in your kitchen are unaffected.',
   };
 }
 

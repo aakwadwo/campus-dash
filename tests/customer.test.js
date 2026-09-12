@@ -15,9 +15,8 @@ import {
   submitOrder,
   acceptedOrder,
   chooseFulfilment,
-  vendorAccept,
+  partnerAccept,
   payOrder,
-  vendorPrepare,
   vendorReady,
   getOrder,
   expectRejection,
@@ -40,10 +39,21 @@ describe('customer ordering', () => {
   });
 
   /** A basket quote: a vendor and some items. Food plus the 5% fee. */
-  const quote = (userId, args) =>
+  /**
+   * A checkout quote. The fulfilment is part of the question now, because the
+   * customer answers it before paying and the delivery fee is part of the
+   * number they see above the Pay button.
+   */
+  const quote = (userId, args, fulfilment = null) =>
     asUser(
       userId,
-      async (c) => (await c.query('select * from public.quote_order($1, $2::jsonb)', args)).rows[0]
+      async (c) =>
+        (
+          await c.query('select * from public.quote_order($1, $2::jsonb, $3)', [
+            ...args,
+            fulfilment,
+          ])
+        ).rows[0]
     );
 
   const myOrders = (userId) =>
@@ -76,18 +86,25 @@ describe('customer ordering', () => {
     assert.equal(result.lines[0].unit_price_pesewas, 3500, 'the menu price, not the sent one');
   });
 
-  test('a basket quote carries no delivery fee, because none has been chosen', async () => {
-    // The quote cannot know: pickup or delivery is decided after the vendor
-    // accepts. A quote that guessed at a delivery fee would be showing a number
-    // the customer has not agreed to and may never owe.
-    const result = await quote(ACTORS.customerAma, [
-      VENDORS.one,
-      JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-    ]);
-    assert.ok(!('delivery_fee_pesewas' in result), 'not a zero — absent');
-    // GH₵35 food + 5% = GH₵36.75
-    assert.equal(result.service_fee_pesewas, 175);
-    assert.equal(result.total_pesewas, 3675);
+  test('a quote is the FINAL price, and the fulfilment is part of the question', async () => {
+    const basket = [VENDORS.one, JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }])];
+
+    // GH₵35 food + 5% = GH₵36.75, collected.
+    const collect = await quote(ACTORS.customerAma, basket, 'PICKUP');
+    assert.equal(collect.service_fee_pesewas, 175);
+    assert.equal(collect.delivery_fee_pesewas, 0);
+    assert.equal(collect.total_pesewas, 3675);
+
+    // The same basket, delivered: GH₵5 more, and the service fee does not move
+    // — it is a share of what the FOOD costs.
+    const delivered = await quote(ACTORS.customerAma, basket, 'DELIVERY');
+    assert.equal(delivered.service_fee_pesewas, 175);
+    assert.equal(delivered.delivery_fee_pesewas, 500);
+    assert.equal(delivered.total_pesewas, 4175);
+
+    // And the screen is told whether delivery is on offer at all, so it can
+    // grey the option out rather than quoting something submission would refuse.
+    assert.equal(delivered.delivery_available, true);
   });
 
   test('the quote and the submitted order always agree', async () => {
@@ -95,7 +112,11 @@ describe('customer ordering', () => {
       { menu_item_id: MENU.jollof, quantity: 2 },
       { menu_item_id: MENU.waakye, quantity: 1 },
     ];
-    const quoted = await quote(ACTORS.customerAma, [VENDORS.one, JSON.stringify(items)]);
+    const quoted = await quote(
+      ACTORS.customerAma,
+      [VENDORS.one, JSON.stringify(items)],
+      'DELIVERY'
+    );
     const order = await submitOrder({ items });
 
     assert.equal(order.total_pesewas, quoted.total_pesewas);
@@ -103,7 +124,7 @@ describe('customer ordering', () => {
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, quoted.subtotal_pesewas);
     assert.equal(stored.service_fee_pesewas, quoted.service_fee_pesewas);
-    assert.equal(stored.delivery_fee_pesewas, 0, 'nothing owed for a delivery nobody asked for');
+    assert.equal(stored.delivery_fee_pesewas, quoted.delivery_fee_pesewas);
   });
 
   test('a quote is refused for a closed vendor, an unavailable item or a bad destination', async () => {
@@ -138,19 +159,9 @@ describe('customer ordering', () => {
     );
     assert.match(wrongVendor.message, /unavailable/);
 
-    // A bad DESTINATION is no longer a quoting failure, because a quote does not
-    // take one. It is refused where the choice is actually made.
-    const order = await submitOrder();
-    await vendorAccept(order.order_id);
-    const badDestination = await expectRejection(
-      asUser(ACTORS.customerAma, (c) =>
-        c.query('select public.customer_choose_fulfilment($1, $2, $3, null)', [
-          order.order_id,
-          'DELIVERY',
-          LOCATIONS.floor2,
-        ])
-      )
-    );
+    // A bad DESTINATION is not a quoting failure, because a quote does not take
+    // one. It is refused at submission, where the choice is actually made.
+    const badDestination = await expectRejection(submitOrder({ destination: LOCATIONS.floor2 }));
     assert.match(badDestination.message, /not a valid delivery location/);
   });
 
@@ -193,9 +204,12 @@ describe('customer ordering', () => {
   // Price snapshots
   // =========================================================================
   test('a price change after submission never touches the placed order', async () => {
-    // 2 × GH₵35 = GH₵70 food + 5% (GH₵3.50). NO delivery fee: the customer has
-    // not been asked yet, so there is nothing to charge for one.
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    // 2 × GH₵35 = GH₵70 food + 5% (GH₵3.50), collected.
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
     assert.equal(order.total_pesewas, 7350);
 
     await asUser(
@@ -214,12 +228,20 @@ describe('customer ordering', () => {
     assert.equal(view.items[0].unit_price_pesewas, 3500);
 
     // GH₵100 food + 5% (GH₵5.00).
-    const later = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    const later = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
     assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
   });
 
-  test('an item disabled after submission does not break the placed order', async () => {
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] });
+  test('an item sold out after submission does not break the placed order', async () => {
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
     await asUser(
       ACTORS.vendor1Staff,
       (c) => c.query('select public.vendor_set_menu_item_available($1, false)', [MENU.jollof]),
@@ -228,7 +250,7 @@ describe('customer ordering', () => {
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.items[0].name, 'Jollof Rice with Chicken');
-    // GH₵35 food + 5% (GH₵1.75). The delivery fee lands when it is chosen.
+    // GH₵35 food + 5% (GH₵1.75), collected.
     assert.equal(view.total_pesewas, 3675);
   });
 
@@ -239,17 +261,12 @@ describe('customer ordering', () => {
     const order = await submitOrder();
     const stageNow = async () => (await myOrder(ACTORS.customerAma, order.order_id)).stage;
 
-    assert.equal(await stageNow(), 'AWAITING_VENDOR');
-    await vendorAccept(order.order_id);
-    // The new step, and the reason the whole flow was reordered: accepted, and
-    // the customer has still to say how they want it. Only then is there a
-    // price to pay.
-    assert.equal(await stageNow(), 'CHOOSE_FULFILMENT');
-    await chooseFulfilment(order.order_id);
+    // PRICED AND PAYABLE FROM THE FIRST MOMENT. There is no vendor window to
+    // wait out and no second screen asking how they want it: both were answered
+    // at the checkout, which is why this is the first stage there is.
     assert.equal(await stageNow(), 'PAYMENT_REQUIRED');
     await payOrder(order.order_id);
-    assert.equal(await stageNow(), 'PAID_AWAITING_KITCHEN');
-    await vendorPrepare(order.order_id);
+    // Paying is what puts it in a kitchen, so PREPARING is immediate.
     assert.equal(await stageNow(), 'PREPARING');
     await vendorReady(order.order_id);
     // A DELIVERY order at READY is not "ready" to the customer — it is waiting
@@ -257,10 +274,24 @@ describe('customer ordering', () => {
     assert.equal(await stageNow(), 'SEARCHING_PARTNER');
   });
 
+  test('a Partner can be found while the food is still cooking', async () => {
+    const order = await submitOrder();
+    await payOrder(order.order_id);
+
+    const accepted = await partnerAccept(order.order_id);
+    assert.equal(accepted.success, true, 'the offer pool opens at payment, not at READY');
+
+    // The customer is told somebody has it — the reassurance they are waiting
+    // for — while the order is still being made.
+    const view = await myOrder(ACTORS.customerAma, order.order_id);
+    assert.equal(view.stage, 'PREPARING_PARTNER_ASSIGNED');
+    assert.equal(view.order_status, 'PREPARING');
+    assert.equal(view.delivery_status, 'ASSIGNED');
+  });
+
   test('a pickup order reads READY, because there is nobody to wait for', async () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
@@ -268,21 +299,28 @@ describe('customer ordering', () => {
     assert.equal(view.delivery_status, 'NONE');
   });
 
-  test('a rejected order says so, and shows the reason, with no charge', async () => {
+  /**
+   * A store cannot turn an order down any more, because it never sees one it
+   * has not been paid for. The remaining way an order ends before a kitchen
+   * touches it is an administrator cancelling it — which is also the path for
+   * "we genuinely cannot make this", and it carries the reason.
+   */
+  test('a cancelled order says so, and shows the reason, with no charge', async () => {
     const order = await submitOrder();
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_reject_order($1, $2)', [
-      order.order_id,
-      'out of jollof',
-    ]);
+    await asUser(
+      ACTORS.admin,
+      (c) => c.query('select public.admin_cancel_order($1, $2)', [order.order_id, 'store ran out']),
+      { commit: true }
+    );
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.stage, 'REJECTED');
-    assert.equal(view.cancellation_reason, 'out of jollof');
+    assert.equal(view.stage, 'CANCELLED');
+    assert.equal(view.cancellation_reason, 'store ran out');
     assert.equal(view.payment_status, 'UNPAID');
     assert.equal(view.payment_id, null, 'no payment was ever created');
   });
 
-  test('an expired order says so, with no charge', async () => {
+  test('an order nobody paid for is swept, with no charge', async () => {
     const order = await submitOrder();
     await asService((c) =>
       c.query(
@@ -293,25 +331,37 @@ describe('customer ordering', () => {
     await asService((c) => c.query('select public.expire_stale_orders()'));
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.stage, 'EXPIRED');
+    assert.equal(view.stage, 'CANCELLED');
     assert.equal(view.payment_status, 'UNPAID');
   });
 
-  test('delivery records the destination but dispatches nobody yet', async () => {
+  test('delivery records the destination, and paying opens the search', async () => {
     const order = await acceptedOrder({ destination: LOCATIONS.room204 });
-    await payOrder(order.order_id);
 
-    const view = await myOrder(ACTORS.customerAma, order.order_id);
+    let view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.fulfilment_type, 'DELIVERY');
     assert.match(view.destination, /Room 204/, 'the customer sees their own full destination');
-    assert.equal(view.delivery_status, 'NONE', 'dispatch does not open until the vendor is READY');
+    assert.equal(view.delivery_status, 'NONE', 'nothing is dispatched for an unpaid order');
+
+    await payOrder(order.order_id);
+
+    // DISPATCH OPENS AT PAYMENT, not at READY. A Partner found while the food
+    // cooks is a Partner who is not standing at a counter waiting.
+    view = await myOrder(ACTORS.customerAma, order.order_id);
+    assert.equal(view.delivery_status, 'SEARCHING');
+    assert.equal(view.stage, 'PREPARING');
   });
 
   // =========================================================================
   // Payment
   // =========================================================================
-  test('payment cannot start before the vendor accepts', async () => {
+  test('payment cannot start on an order that has been cancelled', async () => {
     const order = await submitOrder();
+    await asUser(
+      ACTORS.admin,
+      (c) => c.query('select public.admin_cancel_order($1, $2)', [order.order_id, 'changed mind']),
+      { commit: true }
+    );
     const error = await expectRejection(payOrder(order.order_id));
     assert.match(error.message, /must be ACCEPTED before payment/);
   });
@@ -393,7 +443,8 @@ describe('customer ordering', () => {
 
     view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.payment_status, 'PAID');
-    assert.equal(view.stage, 'PAID_AWAITING_KITCHEN');
+    // Paying is what reaches the kitchen, so there is no waiting stage to sit in.
+    assert.equal(view.stage, 'PREPARING');
   });
 
   test('two simultaneous pay taps cannot create two live intents', async () => {
@@ -557,7 +608,7 @@ describe('customer ordering', () => {
     for (const sql of [
       'select * from public.customer_order_list()',
       'select * from public.quote_order($1, $2::jsonb)',
-      'select * from public.submit_order($1, $2::jsonb)',
+      "select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)",
     ]) {
       const params = sql.includes('$1')
         ? [VENDORS.one, JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }])]
@@ -585,24 +636,28 @@ describe('customer ordering', () => {
   test('a completed order keeps its history without exposing anything new', async () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
-    // The CUSTOMER holds the collection code and shows it; the vendor types in
-    // what they see. Reading it here stands in for that conversation.
+
+    // THE STORE HOLDS THE CODE and reads it out; the CUSTOMER types it in. It
+    // is never returned to the customer by any function — which is exactly why
+    // this test has to read it as the store.
+    const view = await myOrder(ACTORS.customerAma, order.order_id);
+    assert.ok(!('pickup_code' in view), 'the collector is never shown their own code');
+
     const collection = await asUser(
-      ACTORS.customerAma,
+      ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.get_my_pickup_code($1) as code', [order.order_id])).rows[0]
+        (await c.query('select public.vendor_handoff_code($1) as code', [order.order_id])).rows[0]
           .code
     );
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_complete_pickup_order($1, $2)', [
+    await tryTransition(ACTORS.customerAma, 'select public.customer_complete_pickup($1, $2)', [
       order.order_id,
       collection,
     ]);
 
-    const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.stage, 'COMPLETED');
-    assert.ok(view.completed_at);
-    assert.equal(view.items.length, 1);
+    const done = await myOrder(ACTORS.customerAma, order.order_id);
+    assert.equal(done.stage, 'COMPLETED');
+    assert.ok(done.completed_at);
+    assert.equal(done.items.length, 1);
   });
 });

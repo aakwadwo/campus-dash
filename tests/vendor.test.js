@@ -16,9 +16,7 @@ import {
   submitOrder,
   acceptedOrder,
   chooseFulfilment,
-  vendorAccept,
   payOrder,
-  vendorPrepare,
   vendorReady,
   getOrder,
   getSecrets,
@@ -26,14 +24,18 @@ import {
   tryTransition,
   orderReadyForDispatch,
   partnerAccept,
+  parseComposite,
 } from './helpers/flow.js';
 
 /**
  * The vendor module.
  *
- * The brief is narrow — a real vendor takes an order from arrival to READY — so
- * these check that path works, and that every way a vendor might reach past it
- * is refused by the database rather than by the screen.
+ * The brief is narrower than it was: a store receives an order that has ALREADY
+ * BEEN PAID FOR, makes it, and presses Ready. There is no accept, no reject and
+ * no separate "start preparing" — so these check that path works, that an
+ * unpaid order never reaches a counter at all, and that every way a vendor
+ * might reach past their part is refused by the database rather than by the
+ * screen.
  */
 describe('vendor module', () => {
   before(resetTransactionalState);
@@ -64,63 +66,89 @@ describe('vendor module', () => {
     );
 
   // =========================================================================
-  // The whole point: SUBMITTED -> ACCEPTED -> PREPARING -> READY
+  // The whole point: PAID -> PREPARING -> READY
   // =========================================================================
-  test('a vendor takes an order from arrival to READY', async () => {
+  test('an unpaid order never reaches the counter', async () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+
+    assert.deepEqual(
+      await board(ACTORS.vendor1Staff),
+      [],
+      'a basket abandoned at a checkout is not a ticket'
+    );
+    assert.equal(await detail(ACTORS.vendor1Staff, order.order_id), null);
+    assert.equal(await pendingCount(ACTORS.vendor1Staff), 0);
+  });
+
+  test('a vendor takes a paid order to READY', async () => {
+    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    await payOrder(order.order_id);
 
     let rows = await board(ACTORS.vendor1Staff);
     let card = rows.find((r) => r.order_id === order.order_id);
-    assert.equal(card.bucket, 'NEW', 'it lands in the group that needs an answer');
+    assert.equal(card.bucket, 'NEW', 'it lands in the group that needs making');
     assert.equal(card.item_count, 1);
-    // 2 × GH₵35 + 5%. No delivery fee: the customer chooses after acceptance.
-    assert.equal(card.total_pesewas, 7350);
-    assert.ok(card.seconds_to_deadline > 0 && card.seconds_to_deadline <= 60);
+    // 2 × GH₵35 + 5% + the GH₵5 delivery the customer chose at the checkout.
+    assert.equal(card.total_pesewas, 7850);
+    assert.equal(card.payment_status, 'PAID');
 
-    await vendorAccept(order.order_id);
-    rows = await board(ACTORS.vendor1Staff);
-    assert.equal(rows.find((r) => r.order_id === order.order_id).bucket, 'PREPARING');
+    // A QUEUE NUMBER, not a database key. It restarts at 1 each morning.
+    assert.ok(Number.isInteger(card.vendor_order_no) && card.vendor_order_no >= 1);
 
-    // The customer chooses how they want it before there is anything to charge.
-    await chooseFulfilment(order.order_id);
-    await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
+    // Paying is what put it in the kitchen, and it opened dispatch on the way.
+    let stored = await getOrder(order.order_id);
+    assert.equal(stored.order_status, 'PREPARING');
+    assert.equal(stored.delivery_status, 'SEARCHING');
+
     await vendorReady(order.order_id);
 
     rows = await board(ACTORS.vendor1Staff);
     card = rows.find((r) => r.order_id === order.order_id);
     assert.equal(card.bucket, 'READY');
 
-    const stored = await getOrder(order.order_id);
+    stored = await getOrder(order.order_id);
     assert.equal(stored.order_status, 'READY');
     assert.equal(stored.payment_status, 'PAID');
-    assert.equal(stored.delivery_status, 'SEARCHING', 'dispatch opens only at READY');
   });
 
   test('a pickup order runs the same path and completes without any Partner', async () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
+
+    // NO CODE EXISTS YET. One is minted when the food is, so a code can never
+    // be read out for something nobody has made.
+    assert.equal((await getSecrets(order.order_id)).pickup_code, null);
+
     await vendorReady(order.order_id);
 
     const beforeComplete = await getOrder(order.order_id);
     assert.equal(beforeComplete.delivery_status, 'NONE', 'dispatch never opens for pickup');
 
-    // The CUSTOMER holds the collection code and shows it at the counter; the
-    // vendor types in what they see. Reading it from order_secrets here stands
-    // in for that conversation — no client role can select that table.
-    const wrong = await tryTransition(
+    // THE STORE HOLDS THE CODE and reads it out; the CUSTOMER types it in. The
+    // rule is unchanged — the person who holds the secret is never the person
+    // who performs the act — and here that puts the store on the holding side,
+    // exactly as it is for a Partner handoff. Reading the value from
+    // order_secrets stands in for the conversation at the counter; no client
+    // role can select that table.
+    const code = await asUser(
       ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1, $2)',
+      async (c) =>
+        (await c.query('select public.vendor_handoff_code($1) as code', [order.order_id])).rows[0]
+          .code
+    );
+    assert.match(code, /^\d{4}$/);
+
+    const wrong = await tryTransition(
+      ACTORS.customerAma,
+      'select public.customer_complete_pickup($1, $2)',
       [order.order_id, '0000']
     );
     assert.equal(wrong.success, false, 'a made-up code completes nothing');
     assert.equal((await getOrder(order.order_id)).order_status, 'READY');
 
-    const code = (await getSecrets(order.order_id)).pickup_code;
     const result = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1, $2)',
+      ACTORS.customerAma,
+      'select public.customer_complete_pickup($1, $2)',
       [order.order_id, code]
     );
     assert.equal(result.success, true);
@@ -128,42 +156,118 @@ describe('vendor module', () => {
   });
 
   test('the board groups every state into exactly one bucket', async () => {
-    const submitted = await submitOrder();
-    const accepted = await acceptedOrder({ customer: ACTORS.customerKwesi });
+    const unpaid = await submitOrder();
+
+    const preparing = await acceptedOrder({ customer: ACTORS.customerKwesi });
+    await payOrder(preparing.order_id);
+
     const ready = await acceptedOrder({ customer: ACTORS.customerEfua });
     await payOrder(ready.order_id);
-    await vendorPrepare(ready.order_id);
     await vendorReady(ready.order_id);
-    const rejected = await submitOrder();
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_reject_order($1, $2)', [
-      rejected.order_id,
-      'out of stock',
+
+    const done = await acceptedOrder({
+      customer: ACTORS.customerAbena,
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    await payOrder(done.order_id);
+    await vendorReady(done.order_id);
+    await tryTransition(ACTORS.admin, 'select public.admin_complete_order($1, $2)', [
+      done.order_id,
+      'collected in person',
     ]);
 
     const rows = await board(ACTORS.vendor1Staff);
     const bucketOf = (id) => rows.find((r) => r.order_id === id)?.bucket;
 
-    assert.equal(bucketOf(submitted.order_id), 'NEW');
-    assert.equal(bucketOf(accepted.order_id), 'PREPARING');
+    assert.equal(bucketOf(unpaid.order_id), undefined, 'an unpaid order is not on the board');
+    assert.equal(bucketOf(preparing.order_id), 'NEW');
     assert.equal(bucketOf(ready.order_id), 'READY');
-    assert.equal(bucketOf(rejected.order_id), 'CLOSED');
+    assert.equal(bucketOf(done.order_id), 'CLOSED');
   });
 
-  test('live work is ordered oldest first, so the order nearest its deadline leads', async () => {
+  test('live work is ordered oldest first, so the order waiting longest leads', async () => {
     const first = await submitOrder();
+    await payOrder(first.order_id);
     const second = await submitOrder({ customer: ACTORS.customerKwesi });
+    await payOrder(second.order_id);
 
     const rows = (await board(ACTORS.vendor1Staff)).filter((r) => r.bucket === 'NEW');
     assert.equal(rows[0].order_id, first.order_id);
     assert.equal(rows[1].order_id, second.order_id);
   });
 
-  test('the pending count tracks orders still waiting for an answer', async () => {
+  test('the pending count tracks PAID orders still to be made', async () => {
     assert.equal(await pendingCount(ACTORS.vendor1Staff), 0);
+
     const order = await submitOrder();
+    assert.equal(await pendingCount(ACTORS.vendor1Staff), 0, 'unpaid is not pending work');
+
+    await payOrder(order.order_id);
     assert.equal(await pendingCount(ACTORS.vendor1Staff), 1);
-    await vendorAccept(order.order_id);
+
+    await vendorReady(order.order_id);
     assert.equal(await pendingCount(ACTORS.vendor1Staff), 0);
+  });
+
+  // =========================================================================
+  // Daily, per-store queue numbers
+  // =========================================================================
+  test('queue numbers start at 1 each day and are per store', async () => {
+    const first = await submitOrder();
+    const second = await submitOrder({ customer: ACTORS.customerKwesi });
+    const otherStore = await submitOrder({
+      vendorId: VENDORS.two,
+      customer: ACTORS.customerEfua,
+      items: [{ menu_item_id: MENU.shawarma, quantity: 1 }],
+    });
+
+    assert.equal(first.vendor_order_no, 1);
+    assert.equal(second.vendor_order_no, 2);
+    assert.equal(otherStore.vendor_order_no, 1, 'each store counts on its own');
+
+    // The internal reference still exists underneath, and is still unique
+    // across the whole platform — payments, allocations and payouts key off it.
+    assert.notEqual(first.order_number, otherStore.order_number);
+  });
+
+  test('yesterday does not carry into today', async () => {
+    const yesterday = await submitOrder();
+    assert.equal(yesterday.vendor_order_no, 1);
+
+    // Age the counter and the order it produced by a day, which is what a new
+    // morning looks like to next_vendor_order_no().
+    await asService(async (c) => {
+      await c.query(
+        'update public.vendor_order_counters set order_day = order_day - 1 where vendor_id = $1',
+        [VENDORS.one]
+      );
+      await c.query('update public.orders set order_day = order_day - 1 where id = $1', [
+        yesterday.order_id,
+      ]);
+    });
+
+    const today = await submitOrder({ customer: ACTORS.customerKwesi });
+    assert.equal(today.vendor_order_no, 1, 'a new day starts at 001 again');
+  });
+
+  test('simultaneous orders never share a queue number', async () => {
+    const customers = [ACTORS.customerAma, ACTORS.customerKwesi, ACTORS.customerEfua];
+    const clients = await Promise.all(customers.map((id) => dedicatedClient(id)));
+    try {
+      const results = await Promise.all(
+        clients.map((c) =>
+          c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
+            VENDORS.one,
+            JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
+          ])
+        )
+      );
+      const numbers = results.map((r) => r.rows[0].vendor_order_no).sort();
+      assert.deepEqual(numbers, [1, 2, 3], 'the counter row serialises the allocation');
+    } finally {
+      await Promise.all(clients.map((c) => c.end()));
+    }
   });
 
   // =========================================================================
@@ -171,11 +275,13 @@ describe('vendor module', () => {
   // =========================================================================
   test('a vendor sees only their own orders on the board', async () => {
     const mine = await submitOrder({ vendorId: VENDORS.one });
+    await payOrder(mine.order_id);
     const theirs = await submitOrder({
       vendorId: VENDORS.two,
       customer: ACTORS.customerKwesi,
       items: [{ menu_item_id: MENU.shawarma, quantity: 1 }],
     });
+    await payOrder(theirs.order_id);
 
     const rows = await board(ACTORS.vendor1Staff, VENDORS.one);
     assert.ok(rows.some((r) => r.order_id === mine.order_id));
@@ -198,25 +304,26 @@ describe('vendor module', () => {
       customer: ACTORS.customerKwesi,
       items: [{ menu_item_id: MENU.shawarma, quantity: 1 }],
     });
+    await payOrder(theirs.order_id);
     assert.equal(await detail(ACTORS.vendor1Staff, theirs.order_id), null);
     assert.ok(await detail(ACTORS.vendor2Staff, theirs.order_id), 'their own vendor can see it');
   });
 
   test('another vendor cannot act on an order that is not theirs', async () => {
     const mine = await submitOrder({ vendorId: VENDORS.one });
+    await payOrder(mine.order_id);
 
     for (const sql of [
-      'select public.vendor_accept_order($1)',
-      'select public.vendor_reject_order($1, $2)',
-      'select public.vendor_mark_preparing($1)',
       'select public.vendor_mark_ready($1)',
+      'select public.vendor_handoff_code($1)',
     ]) {
-      const params = sql.includes('$2') ? [mine.order_id, 'not mine'] : [mine.order_id];
-      const error = await expectRejection(asUser(ACTORS.vendor2Staff, (c) => c.query(sql, params)));
+      const error = await expectRejection(
+        asUser(ACTORS.vendor2Staff, (c) => c.query(sql, [mine.order_id]))
+      );
       assert.match(error.message, /not authorised for this order/);
     }
 
-    assert.equal((await getOrder(mine.order_id)).order_status, 'SUBMITTED', 'untouched');
+    assert.equal((await getOrder(mine.order_id)).order_status, 'PREPARING', 'untouched');
   });
 
   test('the pending count for a vendor you do not staff is zero', async () => {
@@ -248,6 +355,7 @@ describe('vendor module', () => {
   // the question that actually matters — losing the store cuts off the board.
   test('the owner sees the board, and nobody else does', async () => {
     const order = await submitOrder();
+    await payOrder(order.order_id);
 
     assert.ok((await board(ACTORS.vendor1Staff)).some((r) => r.order_id === order.order_id));
 
@@ -259,6 +367,7 @@ describe('vendor module', () => {
 
   test('losing the store cuts off the board immediately', async () => {
     const order = await submitOrder();
+    await payOrder(order.order_id);
     await asService((c) =>
       c.query('update public.vendors set owner_user_id = null where id = $1', [VENDORS.one])
     );
@@ -268,7 +377,7 @@ describe('vendor module', () => {
 
     const error = await expectRejection(
       asUser(ACTORS.vendor1Staff, (c) =>
-        c.query('select public.vendor_accept_order($1)', [order.order_id])
+        c.query('select public.vendor_mark_ready($1)', [order.order_id])
       )
     );
     assert.match(error.message, /not authorised/);
@@ -277,37 +386,36 @@ describe('vendor module', () => {
   // =========================================================================
   // Concurrency
   // =========================================================================
-  // ONE OWNER, TWO DEVICES. The old version of this test used two staff
-  // accounts; with one account per store the realistic race is a phone and a
-  // tablet on the same counter, which is the same race and the same guarantee.
-  test('the same owner accepting twice at once: one wins, the other is told plainly', async () => {
+  // ONE OWNER, TWO DEVICES. A phone and a tablet on the same counter, both
+  // pressing Ready. There is nothing to accept any more, so this is the only
+  // race a store can still have with itself — and it is the same guarantee:
+  // one conditional UPDATE wins, the loser is told plainly and logged.
+  test('the same owner marking ready twice at once: one wins, the other is told plainly', async () => {
     const order = await submitOrder();
+    await payOrder(order.order_id);
 
     const one = await dedicatedClient(ACTORS.vendor1Staff);
     const two = await dedicatedClient(ACTORS.vendor1Staff);
     try {
       const results = await Promise.all([
-        one.query('select * from public.vendor_accept_order($1)', [order.order_id]),
-        two.query('select * from public.vendor_accept_order($1)', [order.order_id]),
+        one.query('select public.vendor_mark_ready($1) as r', [order.order_id]),
+        two.query('select public.vendor_mark_ready($1) as r', [order.order_id]),
       ]);
-      const envelopes = results.map((r) => r.rows[0]);
-      const won = envelopes.filter((e) => e.success);
-      const lost = envelopes.filter((e) => !e.success);
-      assert.equal(won.length, 1, 'exactly one accept succeeds');
-      assert.equal(lost.length, 1);
-      assert.match(lost[0].reason, /someone else already accepted this order/);
+      const envelopes = results.map((res) => parseComposite(res.rows[0].r));
+      assert.equal(envelopes.filter((e) => e.success).length, 1, 'exactly one succeeds');
+      assert.equal(envelopes.filter((e) => !e.success).length, 1);
     } finally {
       await one.end();
       await two.end();
     }
 
-    assert.equal((await getOrder(order.order_id)).order_status, 'ACCEPTED');
+    assert.equal((await getOrder(order.order_id)).order_status, 'READY');
 
     const rejected = await asService(
       async (c) =>
         (
           await c.query(
-            "select * from public.order_events where order_id = $1 and event = 'VENDOR_ACCEPT' and not accepted",
+            "select * from public.order_events where order_id = $1 and event = 'VENDOR_READY' and not accepted",
             [order.order_id]
           )
         ).rows
@@ -315,112 +423,79 @@ describe('vendor module', () => {
     assert.equal(rejected.length, 1, 'the losing attempt is logged');
   });
 
-  test('accepting twice in sequence is refused the second time', async () => {
+  // =========================================================================
+  // Invalid transitions
+  // =========================================================================
+  test('a vendor cannot mark an unpaid order ready', async () => {
     const order = await submitOrder();
+
+    const result = await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_mark_ready($1)', [
+      order.order_id,
+    ]);
+    assert.equal(result.success, false);
+    assert.match(result.reason, /cannot be marked ready from state ACCEPTED/);
+
+    const stored = await getOrder(order.order_id);
+    assert.equal(stored.order_status, 'ACCEPTED');
+    assert.equal(stored.ready_at, null);
+  });
+
+  test('marking ready twice in sequence is refused the second time', async () => {
+    const order = await submitOrder();
+    await payOrder(order.order_id);
+
     assert.equal(
       (
-        await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_accept_order($1)', [
+        await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_mark_ready($1)', [
           order.order_id,
         ])
       ).success,
       true
     );
-    const second = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_accept_order($1)',
-      [order.order_id]
-    );
+    const second = await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_mark_ready($1)', [
+      order.order_id,
+    ]);
     assert.equal(second.success, false);
-    assert.match(second.reason, /someone else already accepted this order/);
-  });
-
-  // =========================================================================
-  // Invalid transitions
-  // =========================================================================
-  test('every out-of-order move is refused and changes nothing', async () => {
-    const order = await submitOrder();
-
-    for (const [sql, expected] of [
-      ['select public.vendor_mark_preparing($1)', /cannot start preparing from state SUBMITTED/],
-      ['select public.vendor_mark_ready($1)', /cannot be marked ready from state SUBMITTED/],
-    ]) {
-      const result = await tryTransition(ACTORS.vendor1Staff, sql, [order.order_id]);
-      assert.equal(result.success, false);
-      assert.match(result.reason, expected);
-    }
-
-    // Completing a collection takes a code as well, so it is checked separately.
-    const collection = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_complete_pickup_order($1, $2)',
-      [order.order_id, '0000']
-    );
-    assert.equal(collection.success, false);
-
-    const stored = await getOrder(order.order_id);
-    assert.equal(stored.order_status, 'SUBMITTED');
-    assert.equal(stored.preparing_at, null);
-    assert.equal(stored.ready_at, null);
-  });
-
-  test('a vendor cannot start cooking before the money is in', async () => {
-    const order = await acceptedOrder();
-
-    const result = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_mark_preparing($1)',
-      [order.order_id]
-    );
-    assert.equal(result.success, false);
-    assert.match(result.reason, /payment must be PAID/);
-    assert.equal((await getOrder(order.order_id)).order_status, 'ACCEPTED');
-  });
-
-  test('an order past its window says the window closed, not something nonsensical', async () => {
-    const order = await submitOrder();
-    await asService((c) =>
-      c.query(
-        "update public.orders set accept_deadline_at = now() - interval '1 second' where id = $1",
-        [order.order_id]
-      )
-    );
-    const result = await tryTransition(
-      ACTORS.vendor1Staff,
-      'select public.vendor_accept_order($1)',
-      [order.order_id]
-    );
-    assert.equal(result.success, false);
-    // The row is still SUBMITTED until the sweep runs, so a naive message would
-    // read "cannot be accepted from state SUBMITTED".
-    assert.match(result.reason, /60-second answer window has closed/);
+    assert.match(second.reason, /cannot be marked ready from state READY/);
   });
 
   test('an order that has vanished reports that, rather than a state', async () => {
-    const result = await tryTransition(ACTORS.admin, 'select public.vendor_accept_order($1)', [
+    const result = await tryTransition(ACTORS.admin, 'select public.vendor_mark_ready($1)', [
       '00000000-0000-0000-0000-000000000000',
     ]);
     assert.equal(result.success, false);
     assert.match(result.reason, /no longer exists/);
   });
 
-  test('a rejected order is closed and cannot be revived', async () => {
-    const order = await submitOrder();
-    await tryTransition(ACTORS.vendor1Staff, 'select public.vendor_reject_order($1, $2)', [
-      order.order_id,
-      'no ingredients',
-    ]);
-
-    const rows = await board(ACTORS.vendor1Staff);
-    const card = rows.find((r) => r.order_id === order.order_id);
-    assert.equal(card.bucket, 'CLOSED');
-    assert.equal(card.cancellation_reason, 'no ingredients');
-
-    const revive = await tryTransition(
-      ACTORS.vendor1Staff,
+  /**
+   * THERE IS NO ACCEPT AND NO REJECT ANY MORE, and the functions that performed
+   * them are unreachable rather than merely unused. They still exist, because
+   * order_events on real orders point at them, but a browser cannot call one.
+   */
+  test('the acceptance workflow is not reachable by any client', async () => {
+    for (const sql of [
       'select public.vendor_accept_order($1)',
-      [order.order_id]
+      'select public.vendor_mark_preparing($1)',
+      'select public.vendor_complete_pickup_order($1, $2)',
+      'select public.get_my_pickup_code($1)',
+      'select public.vendor_pickup_code($1)',
+    ]) {
+      const params = sql.includes('$2')
+        ? ['00000000-0000-0000-0000-000000000000', '0000']
+        : ['00000000-0000-0000-0000-000000000000'];
+      const error = await expectRejection(asUser(ACTORS.vendor1Staff, (c) => c.query(sql, params)));
+      assert.match(error.message, /permission denied/i, sql);
+    }
+
+    const reject = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.vendor_reject_order($1, $2)', [
+          '00000000-0000-0000-0000-000000000000',
+          'no',
+        ])
+      )
     );
-    assert.equal(revive.success, false);
+    assert.match(reject.message, /permission denied/i);
   });
 
   // =========================================================================
@@ -447,7 +522,11 @@ describe('vendor module', () => {
   });
 
   test('a vendor cannot change the price of an order already submitted', async () => {
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
 
     const onOrder = await expectRejection(
       asUser(ACTORS.vendor1Staff, (c) =>
@@ -469,7 +548,12 @@ describe('vendor module', () => {
   });
 
   test('repricing the MENU does not move an order already submitted', async () => {
-    const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    await payOrder(order.order_id);
 
     await asUser(
       ACTORS.admin,
@@ -564,7 +648,7 @@ describe('vendor module', () => {
     assert.equal((await getOrder(order.order_id)).partner_id, null);
   });
 
-  test('a vendor cannot read pickup or delivery codes', async () => {
+  test('a vendor reads the handoff code and nothing else', async () => {
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
 
@@ -575,21 +659,12 @@ describe('vendor module', () => {
     );
     assert.match(error.message, /permission denied/i);
 
-    // get_my_pickup_code() is the CUSTOMER's collection code, for an order they
-    // are picking up themselves. A vendor is not its holder and gets nothing.
-    const viaFunction = await expectRejection(
-      asUser(ACTORS.vendor1Staff, (c) =>
-        c.query('select public.get_my_pickup_code($1)', [order.order_id])
-      )
-    );
-    assert.match(viaFunction.message, /no collection code available/);
-
-    // What a vendor CAN read is the handoff code for a Partner standing at
-    // their counter — and only while one actually is.
+    // What a vendor CAN read is the code for whoever is standing at their
+    // counter — and only while somebody actually is.
     const handoff = await asUser(
       ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.vendor_pickup_code($1) as code', [order.order_id])).rows[0]
+        (await c.query('select public.vendor_handoff_code($1) as code', [order.order_id])).rows[0]
           .code
     );
     assert.match(handoff, /^\d{4}$/);
@@ -601,8 +676,21 @@ describe('vendor module', () => {
     );
   });
 
+  test('there is no handoff code before somebody is due to collect', async () => {
+    const order = await submitOrder();
+    await payOrder(order.order_id);
+
+    const tooEarly = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.vendor_handoff_code($1)', [order.order_id])
+      )
+    );
+    assert.match(tooEarly.message, /no handoff code on this order right now/);
+  });
+
   test('the board never carries the room number or the customer', async () => {
     const order = await acceptedOrder({ destination: LOCATIONS.room204 });
+    await payOrder(order.order_id);
     const card = (await board(ACTORS.vendor1Staff)).find((r) => r.order_id === order.order_id);
 
     assert.equal(card.destination_zone, 'Hostel Block A', 'the zone is useful context');
@@ -671,7 +759,6 @@ describe('vendor module', () => {
       { commit: true }
     );
 
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
     assert.equal(
       (await getOrder(order.order_id)).order_status,
@@ -784,7 +871,7 @@ describe('vendor module', () => {
   // Privacy: the customer's phone number
   // =========================================================================
   test('a vendor cannot read the customer behind a live order', async () => {
-    const order = await acceptedOrder({ customer: ACTORS.customerAma });
+    await acceptedOrder({ customer: ACTORS.customerAma });
 
     const rows = await asUser(
       ACTORS.vendor1Staff,
@@ -800,7 +887,6 @@ describe('vendor module', () => {
   test('the whole vendor journey is reconstructable from the event log', async () => {
     const order = await acceptedOrder();
     await payOrder(order.order_id);
-    await vendorPrepare(order.order_id);
     await vendorReady(order.order_id);
 
     const events = await asService(
@@ -816,17 +902,16 @@ describe('vendor module', () => {
       events.map((e) => e.event),
       [
         'ORDER_SUBMITTED',
-        'VENDOR_ACCEPT',
-        // The customer's choice is an event in its own right, between the
-        // vendor's answer and the money: it is what fixed the price.
-        'FULFILMENT_CHOSEN',
         'PAYMENT_INTENT_CREATED',
         'PAYMENT_CONFIRMED',
+        // Paying is what puts an order in a kitchen and what opens dispatch.
+        // Both are recorded as SYSTEM: nobody pressed anything.
         'VENDOR_PREPARING',
-        'VENDOR_READY',
         'DISPATCH_OPENED',
+        'VENDOR_READY',
       ]
     );
-    assert.equal(events.find((e) => e.event === 'VENDOR_ACCEPT').actor_role, 'VENDOR');
+    assert.equal(events.find((e) => e.event === 'VENDOR_PREPARING').actor_role, 'SYSTEM');
+    assert.equal(events.find((e) => e.event === 'VENDOR_READY').actor_role, 'VENDOR');
   });
 });

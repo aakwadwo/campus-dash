@@ -78,10 +78,19 @@ describe('row level security and authorisation', () => {
           unit_price_pesewas: 1,
         },
       ],
+      fulfilment: 'PICKUP',
+      destination: null,
     });
-    // 2 × GH₵35.00 = GH₵70.00, + 5% (GH₵3.50) = GH₵73.50. No delivery fee:
-    // that is added when the customer chooses, from the same snapshot.
+    // 2 × GH₵35.00 = GH₵70.00, + 5% (GH₵3.50) = GH₵73.50.
     assert.equal(order.total_pesewas, 7350, 'the server priced it, not the client');
+
+    // And the delivery fee is the server's too: the same basket, delivered, is
+    // exactly GH₵5 more — a number the client never sends.
+    const delivered = await submitOrder({
+      items: [{ menu_item_id: '30000000-0000-4000-8000-000000000001', quantity: 2 }],
+      customer: ACTORS.customerKwesi,
+    });
+    assert.equal(delivered.total_pesewas, 7850);
   });
 
   // --- 6 -------------------------------------------------------------------
@@ -97,7 +106,7 @@ describe('row level security and authorisation', () => {
 
     const error = await expectRejection(
       asUser(ACTORS.vendor2Staff, (c) =>
-        c.query('select public.vendor_accept_order($1)', [order.order_id])
+        c.query('select public.vendor_mark_ready($1)', [order.order_id])
       )
     );
     assert.match(error.message, /not authorised/);
@@ -107,7 +116,7 @@ describe('row level security and authorisation', () => {
         (await c.query('select order_status from public.orders where id = $1', [order.order_id]))
           .rows[0]
     );
-    assert.equal(stored.order_status, 'SUBMITTED', 'the order was untouched');
+    assert.equal(stored.order_status, 'ACCEPTED', 'the order was untouched');
   });
 
   test('a vendor CAN see and act on their own order', async () => {
@@ -279,10 +288,11 @@ describe('row level security and authorisation', () => {
     }
   });
 
-  test('the VENDOR gets the pickup code, and no Partner can reach it at all', async () => {
-    // THE HANDOFF, and the asymmetry that makes it mean anything. The vendor
-    // holds the code and reads it out; the Partner types in what they hear. A
-    // Partner who could read it could confirm a collection that never happened.
+  test('the STORE holds the handoff code, and nobody collecting can reach it', async () => {
+    // THE HANDOFF, and the asymmetry that makes it mean anything. The store
+    // holds the code and reads it out; whoever takes the food types in what
+    // they hear. Anyone who could read it could confirm a collection that
+    // never happened.
     const order = await orderReadyForDispatch();
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
 
@@ -290,14 +300,14 @@ describe('row level security and authorisation', () => {
     const theirs = await asUser(
       ACTORS.vendor1Staff,
       async (c) =>
-        (await c.query('select public.vendor_pickup_code($1) as code', [order.order_id])).rows[0]
+        (await c.query('select public.vendor_handoff_code($1) as code', [order.order_id])).rows[0]
           .code
     );
     assert.equal(theirs, stored.pickup_code);
 
     for (const partner of [ACTORS.partnerYaw, ACTORS.partnerAdjoa]) {
       const error = await expectRejection(
-        asUser(partner, (c) => c.query('select public.vendor_pickup_code($1)', [order.order_id]))
+        asUser(partner, (c) => c.query('select public.vendor_handoff_code($1)', [order.order_id]))
       );
       assert.match(error.message, /not authorised for this order/);
     }
@@ -305,22 +315,30 @@ describe('row level security and authorisation', () => {
     // A different store cannot read it either.
     const otherStore = await expectRejection(
       asUser(ACTORS.vendor2Staff, (c) =>
-        c.query('select public.vendor_pickup_code($1)', [order.order_id])
+        c.query('select public.vendor_handoff_code($1)', [order.order_id])
       )
     );
     assert.match(otherStore.message, /not authorised for this order/);
   });
 
-  test('the customer gets a COLLECTION code, and only for an order they collect', async () => {
-    // A different code from the delivery one, held by a different person: this
-    // is the one the customer shows at the counter for a self-pickup order.
-    const delivery = await orderReadyForDispatch();
+  test('the collecting customer cannot reach their own code either', async () => {
+    // The same rule from the other side. A customer who could read the code the
+    // store is about to read out could complete a collection they never made.
+    const collection = await orderReadyForDispatch({ fulfilment: 'PICKUP', destination: null });
     const notTheirs = await expectRejection(
       asUser(ACTORS.customerAma, (c) =>
-        c.query('select public.get_my_pickup_code($1)', [delivery.order_id])
+        c.query('select public.vendor_handoff_code($1)', [collection.order_id])
       )
     );
-    assert.match(notTheirs.message, /no collection code available/);
+    assert.match(notTheirs.message, /not authorised for this order/);
+
+    const view = await asUser(
+      ACTORS.customerAma,
+      async (c) =>
+        (await c.query('select * from public.customer_order_detail($1)', [collection.order_id]))
+          .rows[0]
+    );
+    assert.ok(!('pickup_code' in view), 'nor is it in the read model');
   });
 
   test('the customer gets their delivery code, and another customer cannot', async () => {

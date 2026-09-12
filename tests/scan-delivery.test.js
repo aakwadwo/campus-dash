@@ -463,7 +463,12 @@ describe('scan delivery', () => {
         (r) =>
           !(
             r.table_name === 'orders' &&
-            ['service_fee_pesewas', 'delivery_fee_pesewas'].includes(r.column_name)
+            // The pack fee is OURS as well: what Campus Dash charges for the
+            // container a scan meal is carried in. It is not a provider charge
+            // and nothing nets it off anybody's entitlement.
+            ['service_fee_pesewas', 'delivery_fee_pesewas', 'pack_fee_pesewas'].includes(
+              r.column_name
+            )
           )
       );
       assert.deepEqual(unexpected, [], 'no provider-fee column exists in the money tables');
@@ -540,31 +545,16 @@ describe('scan delivery', () => {
       const { rows } = await asUser(
         ACTORS.customerAma,
         async (c) =>
-          c.query('select * from public.submit_order($1, $2::jsonb)', [
+          c.query('select * from public.submit_order($1, $2::jsonb, $3, $4, null)', [
             VENDORS.one,
             JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
-          ]),
-        { commit: true }
-      );
-      const foodOrderId = rows[0].order_id;
-
-      await asUser(
-        ACTORS.vendor1Staff,
-        (c) => c.query('select public.vendor_accept_order($1)', [foodOrderId]),
-        { commit: true }
-      );
-      // A food order is only payable once the customer has said how they want
-      // it. A scan errand never asks, which is exactly the difference.
-      await asUser(
-        ACTORS.customerAma,
-        (c) =>
-          c.query('select public.customer_choose_fulfilment($1, $2, $3, null)', [
-            foodOrderId,
             'DELIVERY',
             LOCATIONS.room204,
           ]),
         { commit: true }
       );
+      const foodOrderId = rows[0].order_id;
+
       await asService(async (c) => {
         const intent = (
           await c.query("select * from public.create_payment_intent($1, 'fake', $2)", [
@@ -584,6 +574,10 @@ describe('scan delivery', () => {
       assert.equal(order.scan_status, null, 'a food order has no scan dimension');
       assert.equal(Number(order.subtotal_pesewas), 3500);
       assert.equal(Number(order.service_fee_pesewas), 175, 'still 5% of the food');
+      // NO PACK FEE ON A FOOD ORDER. It arrives in the store's own packaging,
+      // and the check constraint on orders makes that structural rather than a
+      // policy somebody could forget.
+      assert.equal(Number(order.pack_fee_pesewas), 0);
       assert.equal(Number(order.total_pesewas), 3500 + 175 + DELIVERY_FEE);
 
       const ledger = Object.fromEntries(
@@ -936,7 +930,7 @@ describe('scan delivery', () => {
       const { rows } = await asUser(
         ACTORS.customerAma,
         async (c) =>
-          c.query('select * from public.submit_order($1, $2::jsonb)', [
+          c.query("select * from public.submit_order($1, $2::jsonb, 'PICKUP', null, null)", [
             VENDORS.one,
             JSON.stringify([{ menu_item_id: '30000000-0000-4000-8000-000000000001', quantity: 1 }]),
           ]),
@@ -1070,7 +1064,12 @@ describe('scan delivery', () => {
 
     assert.ok(offer, 'the errand is offered');
     assert.equal(offer.order_type, 'SCAN');
-    assert.equal(offer.food_is_ready, false, 'nobody has cooked anything yet');
+    // `food_is_ready` means "there is nothing to wait for". A food order is
+    // often claimed while it cooks and this reads false until the store presses
+    // Ready; a scan errand has no kitchen in it at all, so it is true from the
+    // moment it is paid for. The Partner's screen branches on order_type first
+    // and says "Ready to run".
+    assert.equal(offer.food_is_ready, true, 'an errand has nothing to wait for');
     assert.equal(Number(offer.earnings_pesewas), DELIVERY_FEE);
     assert.equal(offer.vendor_name, 'Wafflemania (test)');
     // The offer carries no scan and no room number.

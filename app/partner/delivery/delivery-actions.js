@@ -1,6 +1,7 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   cancelDeliveryAction,
   completeDeliveryAction,
@@ -15,8 +16,14 @@ import {
  * Before handoff they may cancel freely — no penalty in V1, the order simply
  * goes back to the pool with a fresh pickup code. After handoff they are
  * carrying food, so the only ways out are delivering it or the absence process.
+ *
+ * THE CODE BOX ONLY APPEARS ONCE THE FOOD IS MADE. Offers open at payment, so a
+ * Partner routinely holds a job that is still cooking; a code box on screen then
+ * would be an invitation to walk to a counter early and an attempt counter to
+ * burn on nothing.
  */
 export default function DeliveryActions({ delivery, isScan = false }) {
+  const router = useRouter();
   const [cancelState, cancel, cancelling] = useActionState(cancelDeliveryAction, {});
   const [completeState, complete, completing] = useActionState(completeDeliveryAction, {});
   const [pickupState, confirmPickup, confirmingPickup] = useActionState(confirmPickupAction, {});
@@ -26,6 +33,16 @@ export default function DeliveryActions({ delivery, isScan = false }) {
 
   const hidden = <input type="hidden" name="order_id" value={delivery.order_id} />;
   const carrying = delivery.delivery_status === 'PICKED_UP';
+  const waitingForKitchen = !carrying && !isScan && !delivery.food_is_ready;
+
+  // Nothing on this screen can change except the kitchen, so it is polled only
+  // while that is what is being waited on.
+  useEffect(() => {
+    if (!waitingForKitchen) return;
+    const timer = setInterval(() => router.refresh(), 10000);
+    return () => clearInterval(timer);
+  }, [waitingForKitchen, router]);
+
   const result = [completeState, pickupState, reportState, confirmState, cancelState].find(
     (s) => s.message
   );
@@ -35,11 +52,21 @@ export default function DeliveryActions({ delivery, isScan = false }) {
       {/* THE PICKUP CODE, entered by the Partner. The vendor reads it out; the
           Partner types it in. A scan errand has no handover to prove, so it
           uses the redemption report instead — see ScanCollection. */}
-      {!carrying && !isScan ? (
+      {waitingForKitchen ? (
+        <p
+          role="status"
+          className="rounded-card bg-warn-bg text-warn px-4 py-4 text-sm font-medium"
+        >
+          Waiting for {delivery.vendor_name} to mark this ready. The code box appears here the
+          moment they do.
+        </p>
+      ) : null}
+
+      {!carrying && !isScan && delivery.food_is_ready ? (
         <form action={confirmPickup} className="rounded-card bg-surface ring-line p-4 ring-1">
           {hidden}
           <label className="block text-sm font-medium">
-            Pickup code from the vendor
+            Code from the store
             <input
               name="pickup_code"
               inputMode="numeric"
