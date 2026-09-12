@@ -12,14 +12,17 @@ export const dynamic = 'force-dynamic';
  *
  * WHAT THIS DELIBERATELY CANNOT DO: change anything. There is no form on this
  * page, because there is no admin function that edits a customer's identity —
- * name, student ID, class year and email are set by the person themselves at
+ * name, class year and email are set by the person themselves at
  * onboarding, and `complete_customer_onboarding` writes against auth.uid().
  * An admin screen that appeared to edit them would either be a lie or would
  * require a new write path into somebody else's identity, which is exactly the
  * kind of thing that should not exist because a support screen felt incomplete.
  *
- * The student ID document is reported as present or absent. The path is not
- * returned by admin_customer_detail() at all.
+ * THE STUDENT ID NUMBER IS GONE FROM THIS SCREEN. The verified @acity.edu.gh
+ * address is the school's own record of who somebody is; a number typed into a
+ * box at onboarding was a second copy nobody ever checked against anything.
+ * (A PARTNER application is different — a reviewer there checks a photographed
+ * ID card against the account, and that check is untouched.)
  *
  * THE ONE EXCEPTION to "no forms here" is suspension, and it is not an edit to
  * the customer's identity: it flips `users.is_suspended`, which is an account
@@ -61,10 +64,6 @@ export default async function AdminCustomerPage({ params }) {
           <Fact label="Name" value={c.full_name} />
           <Fact label="Phone" value={<span className="font-mono">{c.phone}</span>} />
           <Fact label="Email" value={c.email} />
-          <Fact
-            label="Student ID number"
-            value={<span className="font-mono">{c.student_id_number}</span>}
-          />
           <Fact label="Level" value={c.level} />
           <Fact label="Onboarded" value={when(c.onboarded_at)} />
           <Fact label="Account created" value={when(c.created_at)} />

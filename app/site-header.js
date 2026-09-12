@@ -77,20 +77,27 @@ export default async function SiteHeader({ active = null }) {
                 <span className="hidden sm:inline">Account</span>
               </Link>
             ) : (
-              // Sign UP is the primary action for a signed-out visitor, not
-              // sign in: most people arriving here do not have an account yet,
-              // and the sign-in page links back the other way. No admin link
-              // anywhere — /admin is typed, not advertised.
-              <div className="flex items-center gap-1.5">
+              // Sign UP is the PRIMARY action for a signed-out visitor — most
+              // people arriving have no account — but sign IN must always be
+              // visible, and on a phone it was not.
+              //
+              // THE BUG: this link was `hidden sm:inline-flex`, and the bottom
+              // bar below only renders when there is more than one destination,
+              // which a signed-out visitor never has. So on a phone the ONLY
+              // thing a returning customer could see was "Sign up", and the
+              // advice they acted on was to make a second account. It is a text
+              // link rather than a second button so the hierarchy is unchanged:
+              // one primary action, one quiet way back in.
+              <div className="flex items-center gap-0.5 sm:gap-1.5">
                 <Link
                   href="/login"
-                  className="press-sm text-muted hover:text-ink hidden min-h-11 items-center rounded-full px-3 text-sm font-semibold transition-colors sm:inline-flex"
+                  className="press-sm text-muted hover:text-ink inline-flex min-h-11 items-center rounded-full px-2.5 text-sm font-semibold transition-colors sm:px-3"
                 >
                   Sign in
                 </Link>
                 <Link
                   href="/signup"
-                  className="press bg-brand-700 hover:bg-brand-800 inline-flex min-h-11 items-center rounded-full px-5 text-sm font-semibold text-white transition-colors"
+                  className="press bg-brand-700 hover:bg-brand-800 inline-flex min-h-11 items-center rounded-full px-4 text-sm font-semibold whitespace-nowrap text-white transition-colors sm:px-5"
                 >
                   Sign up
                 </Link>

@@ -280,6 +280,7 @@ describe('schema invariants', () => {
       'admin_customer_rewards',
       'admin_customers',
       'admin_dashboard',
+      'admin_dashboard_totals',
       'admin_delete_location',
       'admin_delete_menu_item',
       'admin_exceptions',

@@ -1066,6 +1066,56 @@ $$;
 ALTER FUNCTION "public"."admin_dashboard"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_dashboard_totals"() RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select case when public.is_admin() then jsonb_build_object(
+    -- COUNTING ORDERS, not payments: a retried payment is still one order, and
+    -- counting payments would quietly inflate this.
+    'orders_total', (
+      select count(*) from public.orders where payment_status = 'PAID'
+    ),
+    'orders_active', (
+      select count(*) from public.orders
+       where payment_status = 'PAID'
+         and order_status not in ('COMPLETED', 'CANCELLED')
+    ),
+    'total_sales', (
+      select coalesce(sum(amount_pesewas), 0)
+        from public.payments where status = 'SUCCEEDED'
+    ),
+    'vendor_sales', (
+      select coalesce(sum(amount_pesewas), 0)
+        from public.allocations
+       where payee_type = 'VENDOR' and status <> 'CANCELLED'
+    ),
+    'partner_earnings', (
+      select coalesce(sum(amount_pesewas), 0)
+        from public.allocations
+       where payee_type = 'PARTNER' and status <> 'CANCELLED'
+    ),
+    'partner_payouts_pending', (
+      select coalesce(sum(amount_pesewas), 0)
+        from public.payouts
+       where payee_type = 'PARTNER' and status in ('PENDING', 'PROCESSING')
+    ),
+    'vendors_pending', (
+      select count(*) from public.vendors where status = 'PENDING_APPROVAL'
+    ),
+    'partners_pending', (
+      select count(*) from public.partner_profiles where status = 'PENDING_REVIEW'
+    )
+  ) end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_dashboard_totals"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_dashboard_totals"() IS 'Lifetime totals for the operations dashboard — orders, sales, the vendor and Partner shares, and the pending Partner payout — summed from the existing payments, allocations and payouts ledger. Returns NULL for a non-administrator. Administrator only.';
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -10114,6 +10164,11 @@ GRANT ALL ON FUNCTION "public"."admin_customers"("p_search" "text", "p_limit" in
 REVOKE ALL ON FUNCTION "public"."admin_dashboard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_dashboard"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_dashboard"() TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_dashboard_totals"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_dashboard_totals"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_dashboard_totals"() TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") FROM PUBLIC;

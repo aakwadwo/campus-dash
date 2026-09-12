@@ -36,7 +36,7 @@ export default async function AdminCustomersPage({ searchParams }) {
           <input
             name="q"
             defaultValue={search ?? ''}
-            placeholder="Name, phone, email or student ID"
+            placeholder="Name, phone or email"
             className="border-line-strong mt-1 block w-72 rounded border px-3 py-1.5 text-sm"
           />
         </label>
@@ -62,7 +62,7 @@ export default async function AdminCustomersPage({ searchParams }) {
           </Empty>
         ) : (
           <Table
-            head={['Name', 'Phone', 'Student ID', 'Class', 'Also', 'Orders', 'Last order', 'State']}
+            head={['Name', 'Email', 'Phone', 'Class', 'Also', 'Orders', 'Last order', 'State']}
             minWidth="56rem"
           >
             {rows.map((c) => (
@@ -75,8 +75,8 @@ export default async function AdminCustomersPage({ searchParams }) {
                     {c.full_name ?? '-'}
                   </Link>
                 </Cell>
+                <Cell muted>{c.email ?? '-'}</Cell>
                 <Cell mono>{c.phone}</Cell>
-                <Cell mono>{c.student_id_number}</Cell>
                 <Cell muted>{c.level}</Cell>
                 <Cell>
                   <span className="flex flex-wrap gap-1">

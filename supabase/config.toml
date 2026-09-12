@@ -324,6 +324,32 @@ template = "Campus Dash: your verification code is {{ .Code }}. Do not share it.
 # Controls the minimum amount of time that must pass before sending another sms otp.
 max_frequency = "5s"
 
+# SIX DIGITS AND TEN MINUTES, PINNED — because the default is neither the same
+# everywhere nor the same as the email code, and the difference is invisible
+# until a real vendor is standing there unable to sign up.
+#
+# THE BUG THIS FIXES. Neither of these was set, so each took whatever the
+# platform handed it. The CLI gives a local stack 6000 seconds; a HOSTED project
+# defaults SMS OTP expiry to SIXTY. An SMS through Arkesel takes ten to thirty
+# seconds to arrive, so a vendor who read the message and started typing had a
+# handful of seconds left — and the code was expired before they finished. It
+# never reproduced in development because development was on 6000.
+#
+# Ten minutes is the same order as the email code (an hour) and is long enough
+# for a slow delivery, a locked phone and a careful typist. It is still a
+# single-use code that a new request invalidates, so this is a usability fix and
+# not a weakening of the check.
+#
+# `otp_length` is pinned for the same reason: isOtpShape() accepts exactly six,
+# so a project quietly issuing eight would refuse every code. Note that the
+# `otp_length` further down under [auth.mfa.phone] is a DIFFERENT feature and
+# never governed this one — which is exactly how this went unnoticed.
+#
+# A hosted project needs the same under Authentication → Providers → Phone:
+# "SMS OTP Expiry" = 600 and "SMS OTP Length" = 6. See docs/AUTH.md.
+otp_length = 6
+otp_expiry = 600
+
 # Use pre-defined map of phone number to OTP for testing.
 # [auth.sms.test_otp]
 # 4152127777 = "123456"
