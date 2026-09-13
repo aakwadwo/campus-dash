@@ -66,6 +66,59 @@ describe('vendor module', () => {
     );
 
   // =========================================================================
+  // Daily totals: the vendor's own amount, by day
+  // =========================================================================
+  test('daily sales count paid orders and sum only the vendor amount', async () => {
+    const unpaid = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] });
+    const first = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 2 }] });
+    const second = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    await payOrder(first.order_id);
+    await payOrder(second.order_id);
+
+    const days = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_daily_sales($1, 7)', [VENDORS.one])).rows
+    );
+    assert.equal(days.length, 1, 'one day of trading');
+    assert.equal(days[0].order_count, 2, 'the unpaid basket is not a sale');
+    // 3 × GH₵35 of food. Neither the service fee nor the GH₵5 delivery is in it.
+    assert.equal(Number(days[0].sales_pesewas), 10500);
+
+    const orders = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (
+          await c.query('select * from public.vendor_orders_on_day($1, $2)', [
+            VENDORS.one,
+            days[0].order_day,
+          ])
+        ).rows
+    );
+    assert.deepEqual(
+      orders.map((o) => o.order_id).sort(),
+      [first.order_id, second.order_id].sort()
+    );
+    assert.ok(!orders.some((o) => o.order_id === unpaid.order_id));
+    assert.ok(orders.every((o) => !('total_pesewas' in o)));
+
+    // Another store's figures are not readable, and nor are anybody's to anon.
+    const otherStore = await asUser(
+      ACTORS.vendor2Staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_daily_sales($1, 7)', [VENDORS.one])).rows
+    );
+    assert.deepEqual(otherStore, []);
+    await expectRejection(
+      asAnon((c) => c.query('select * from public.vendor_daily_sales($1, 7)', [VENDORS.one]))
+    );
+  });
+
+  // =========================================================================
   // The whole point: PAID -> PREPARING -> READY
   // =========================================================================
   test('an unpaid order never reaches the counter', async () => {
@@ -88,8 +141,12 @@ describe('vendor module', () => {
     let card = rows.find((r) => r.order_id === order.order_id);
     assert.equal(card.bucket, 'NEW', 'it lands in the group that needs making');
     assert.equal(card.item_count, 1);
-    // 2 × GH₵35 + 5% + the GH₵5 delivery the customer chose at the checkout.
-    assert.equal(card.total_pesewas, 7987);
+    // THE VENDOR'S AMOUNT: 2 × GH₵35 of food. The customer's total, the service
+    // fee and the delivery fee are not the store's business and are not returned.
+    assert.equal(card.vendor_amount_pesewas, 7000);
+    for (const hidden of ['total_pesewas', 'service_fee_pesewas', 'delivery_fee_pesewas']) {
+      assert.ok(!(hidden in card), `the board must not return ${hidden}`);
+    }
     assert.equal(card.payment_status, 'PAID');
 
     // A QUEUE NUMBER, not a database key. It restarts at 1 each morning.
@@ -567,7 +624,15 @@ describe('vendor module', () => {
     );
 
     const view = await detail(ACTORS.vendor1Staff, order.order_id);
-    assert.equal(view.total_pesewas, 7487);
+    assert.equal(view.vendor_amount_pesewas, 7000, 'the food the customer agreed to');
+    for (const hidden of [
+      'total_pesewas',
+      'subtotal_pesewas',
+      'service_fee_pesewas',
+      'delivery_fee_pesewas',
+    ]) {
+      assert.ok(!(hidden in view), `the detail must not return ${hidden}`);
+    }
     assert.equal(
       view.items[0].unit_price_pesewas,
       3500,

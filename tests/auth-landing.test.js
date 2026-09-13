@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { areasFor, landingFor, safeNext } from '../lib/auth/landing.js';
+import { areasFor, landingFor, safeNext, vendorOnlyHome } from '../lib/auth/landing.js';
 
 /**
  * One sign-in form serves four kinds of person, so the destination is derived
@@ -247,5 +247,74 @@ describe('the areas an account may enter', () => {
       ['/order', '/account'],
       'a pending application is not a Partner area yet'
     );
+  });
+});
+
+describe('a vendor opening a customer page', () => {
+  const STORE = ['20000000-0000-4000-8000-000000000001'];
+  const vendorOnly = {
+    ...base,
+    can_order: false,
+    vendor_ids: STORE,
+    vendor_status: 'ACTIVE',
+  };
+
+  test('a non-student vendor is sent to their store', () => {
+    assert.equal(vendorOnlyHome(vendorOnly), '/vendor');
+  });
+
+  test('a student vendor browses, and sign-in still lands them on the store', () => {
+    const student = { ...vendorOnly, can_order: true };
+    assert.equal(vendorOnlyHome(student), null);
+    // Post-login routing is unchanged: vendor before customer.
+    assert.equal(landingFor(student), '/vendor');
+    assert.ok(areasFor(student).some((area) => area.href === '/vendor'));
+  });
+
+  test('a non-student applicant is sent to where their application stands', () => {
+    for (const status of ['PENDING_APPROVAL', 'REJECTED', 'DRAFT', 'SUSPENDED']) {
+      assert.equal(
+        vendorOnlyHome({ ...vendorOnly, vendor_ids: [], vendor_status: status }),
+        '/vendor/application',
+        status
+      );
+    }
+  });
+
+  test('nobody else is redirected', () => {
+    assert.equal(vendorOnlyHome(undefined), null);
+    assert.equal(vendorOnlyHome({ authenticated: false }), null, 'signed out');
+    assert.equal(vendorOnlyHome(base), null, 'a customer');
+    assert.equal(vendorOnlyHome({ ...base, can_order: false, vendor_status: 'NOT_APPLIED' }), null);
+    assert.equal(vendorOnlyHome({ ...base, can_order: false, is_admin: true }), null, 'an admin');
+    assert.equal(vendorOnlyHome({ ...vendorOnly, is_partner: true }), null, 'a Partner');
+    assert.equal(vendorOnlyHome({ ...vendorOnly, is_suspended: true }), null, 'suspended');
+  });
+
+  test('only ever answers with a vendor route, so it cannot loop back', () => {
+    const shapes = [];
+    for (const can_order of [true, false])
+      for (const is_partner of [true, false])
+        for (const is_suspended of [true, false])
+          for (const vendor_ids of [[], STORE])
+            for (const vendor_status of [
+              'NOT_APPLIED',
+              'ACTIVE',
+              'PENDING_APPROVAL',
+              'REJECTED',
+              undefined,
+            ])
+              shapes.push({
+                ...base,
+                can_order,
+                is_partner,
+                is_suspended,
+                vendor_ids,
+                vendor_status,
+              });
+
+    for (const shape of shapes) {
+      assert.ok([null, '/vendor', '/vendor/application'].includes(vendorOnlyHome(shape)));
+    }
   });
 });

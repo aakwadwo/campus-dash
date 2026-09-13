@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth/session';
 import AreaSwitcher from '@/app/area-switcher';
 import { UserIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
+import { VendorTabs, VendorBottomBar } from './vendor-nav';
 
 export const metadata = { title: 'Vendor · Campus Dash' };
 
@@ -19,39 +20,60 @@ export const metadata = { title: 'Vendor · Campus Dash' };
  * the database. /vendor/<someone else's id> still 404s, because getMyVendors()
  * and vendor_order_detail() both re-derive is_vendor_staff() server-side. This
  * layout was never the boundary — RLS and the SECURITY DEFINER functions are.
+ *
+ * THE NAVIGATION is only drawn for an account that has a store. An applicant
+ * has one screen, their application, and four tabs leading to pages that would
+ * each redirect back to it are four ways to feel lost.
+ *
+ * THE ACCOUNT ICON is only drawn for an account that has somewhere to go with
+ * it. A vendor-only account is redirected OUT of /account, so the icon used to
+ * be a link that led straight back here — and it was the only road to sign-out.
+ * Store owners now sign out from the Store tab.
  */
 export default async function VendorLayout({ children }) {
-  await requireUser('/vendor');
+  const me = await requireUser('/vendor');
+  const vendorId = me.vendor_ids?.[0] ?? null;
+  // The account area admits anybody who orders or delivers; everyone else is
+  // sent back here from it (see the account layout).
+  const hasAccountArea = Boolean(me.can_order || me.is_partner);
+
   return (
-    <div className="min-h-dvh">
+    <div className={`min-h-dvh ${vendorId ? 'pb-20 sm:pb-0' : ''}`}>
       <header className="border-line bg-canvas sticky top-0 z-40 border-b">
         <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-3 px-4 sm:px-6">
           <Link
-            href="/vendor"
-            className="press-sm flex items-center gap-2 font-semibold tracking-tight"
+            href={vendorId ? `/vendor/${vendorId}` : '/vendor'}
+            className="press-sm -ml-1 flex min-h-11 items-center gap-2 rounded-full pr-2 pl-1 font-semibold tracking-tight"
           >
             <CampusDashMark height={26} />
             <span className="text-[15px]">
-              Campus Dash <span className="text-muted font-normal">Vendor</span>
+              <span className="hidden min-[400px]:inline">Campus Dash </span>
+              <span className="text-muted font-normal">Vendor</span>
             </span>
           </Link>
-          {/* Owning a store does not consume the account. Someone who also
-              orders or delivers reaches those areas from here, not from memory. */}
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            <div className="hidden sm:block">
-              <AreaSwitcher current="/vendor" />
-            </div>
-            <Link
-              href="/account"
-              className="press-sm hover:bg-surface-2 text-muted grid size-9 place-items-center rounded-full transition-colors"
-              aria-label="Account"
-            >
-              <UserIcon className="size-[18px]" />
-            </Link>
+            {/* Owning a store does not consume the account. Someone who also
+                orders or delivers reaches those areas from here. */}
+            <AreaSwitcher current="/vendor" />
+            {hasAccountArea ? (
+              <Link
+                href="/account"
+                className="press-sm hover:bg-surface-2 text-muted grid size-11 place-items-center rounded-full transition-colors"
+                aria-label="Account"
+              >
+                <UserIcon className="size-5" />
+              </Link>
+            ) : null}
           </div>
         </div>
+        {vendorId ? (
+          <div className="mx-auto hidden w-full max-w-3xl px-4 sm:block sm:px-6">
+            <VendorTabs vendorId={vendorId} />
+          </div>
+        ) : null}
       </header>
       {children}
+      {vendorId ? <VendorBottomBar vendorId={vendorId} /> : null}
     </div>
   );
 }

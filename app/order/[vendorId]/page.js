@@ -6,8 +6,7 @@ import { getPlatformConfig } from '@/lib/platform-config';
 import SiteHeader from '../../site-header';
 import { OrderingGate } from '../page';
 import MenuAndBasket from './menu-and-basket';
-import { Container, ImagePlaceholder, Callout, ArrowLeftIcon } from '../../ui';
-import Link from 'next/link';
+import { Container, ImagePlaceholder, Callout, BackLink } from '../../ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,13 +54,9 @@ export default async function VendorMenuPage({ params }) {
           desktop, which is how the references handle a store header. */}
       <div className="border-line border-b">
         <Container size="wide" className="pt-4 pb-5 sm:pt-6 sm:pb-7">
-          <Link
-            href="/order"
-            className="text-muted hover:text-ink press-sm mb-3 -ml-1 inline-flex min-h-11 items-center gap-1.5 rounded-full pr-3 pl-1 text-sm font-medium transition-colors sm:mb-5"
-          >
-            <ArrowLeftIcon className="size-4" />
+          <BackLink href="/order" className="mb-3 sm:mb-5">
             All vendors
-          </Link>
+          </BackLink>
 
           <div className="flex items-center gap-4">
             {images[0] ? (
@@ -141,6 +136,9 @@ export default async function VendorMenuPage({ params }) {
             menu={menu}
             locations={locations}
             deliveryAvailable={platform.partner_delivery_enabled !== false}
+            // For the LABEL on the delivery option only. The figure that is
+            // charged always comes back from quote_order().
+            deliveryFeePesewas={Number(platform.delivery_fee_pesewas ?? 0)}
             gate={
               me.can_order
                 ? null

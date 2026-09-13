@@ -1,4 +1,6 @@
+import { Suspense } from 'react';
 import './globals.css';
+import NavigationProgress from './navigation-progress';
 
 export const metadata = {
   title: {
@@ -38,7 +40,14 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="min-h-dvh antialiased">{children}</body>
+      <body className="min-h-dvh antialiased">
+        {/* useSearchParams() needs a Suspense boundary of its own, or it would
+            opt every page into client rendering. */}
+        <Suspense fallback={null}>
+          <NavigationProgress />
+        </Suspense>
+        {children}
+      </body>
     </html>
   );
 }

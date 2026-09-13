@@ -9,6 +9,7 @@ import {
   reportAbsentAction,
   confirmAbsentAction,
 } from '../actions';
+import { Button, CodeInput, ErrorNote, SuccessNote, Callout, Field, Input } from '@/app/ui';
 
 /**
  * What a Partner can do with the job in their hands.
@@ -53,63 +54,42 @@ export default function DeliveryActions({ delivery, isScan = false }) {
           Partner types it in. A scan errand has no handover to prove, so it
           uses the redemption report instead — see ScanCollection. */}
       {waitingForKitchen ? (
-        <p
-          role="status"
-          className="rounded-card bg-warn-bg text-warn px-4 py-4 text-sm font-medium"
-        >
-          Waiting for {delivery.vendor_name} to mark this ready. The code box appears here the
-          moment they do.
-        </p>
+        <Callout tone="warn">
+          <p role="status" className="font-medium">
+            Waiting for {delivery.vendor_name} to mark this ready. The code box appears here the
+            moment they do.
+          </p>
+        </Callout>
       ) : null}
 
       {!carrying && !isScan && delivery.food_is_ready ? (
-        <form action={confirmPickup} className="rounded-card bg-surface ring-line p-4 ring-1">
+        <form action={confirmPickup} className="rounded-card bg-surface border-line border p-4">
           {hidden}
-          <label className="block text-sm font-medium">
+          <label className="mb-2 block font-semibold" htmlFor="pickup_code">
             Code from the store
-            <input
-              name="pickup_code"
-              inputMode="numeric"
-              required
-              pattern="\d{4}"
-              maxLength={4}
-              placeholder="1234"
-              className="border-line-strong mt-1 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
-            />
           </label>
-          <button
-            type="submit"
-            disabled={confirmingPickup}
-            className="press bg-brand-700 mt-3 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
-          >
+          <CodeInput name="pickup_code" label="Code from the store" disabled={confirmingPickup} />
+          <Button type="submit" size="lg" block disabled={confirmingPickup} className="mt-3">
             {confirmingPickup ? 'Checking…' : 'Confirm pickup'}
-          </button>
+          </Button>
         </form>
       ) : null}
 
       {carrying ? (
         <>
-          <form action={complete} className="rounded-card bg-surface ring-line p-4 ring-1">
+          <form action={complete} className="rounded-card bg-surface border-line border p-4">
             {hidden}
-            <label className="block text-sm font-medium">
-              Delivery code from the customer
-              <input
-                name="delivery_code"
-                inputMode="numeric"
-                required
-                pattern="\d{4}"
-                maxLength={4}
-                placeholder="1234"
-                className="border-line-strong mt-1 w-full rounded border px-3 py-3 text-center text-2xl tracking-[0.4em] tabular-nums"
-              />
+            <label className="mb-2 block font-semibold" htmlFor="delivery_code">
+              Delivery code from {delivery.customer_first_name ?? 'the customer'}
             </label>
-            <button
-              type="submit"
+            <CodeInput
+              name="delivery_code"
+              label="Delivery code from the customer"
               disabled={completing}
-              className="press bg-brand-700 mt-3 w-full rounded-full py-4 text-base font-semibold text-white transition-colors disabled:opacity-55"
-            >
+            />
+            <Button type="submit" size="lg" block disabled={completing} className="mt-3">
               {completing ? 'Confirming…' : 'Complete delivery'}
-            </button>
+            </Button>
           </form>
 
           <AbsenceFlow
@@ -122,58 +102,42 @@ export default function DeliveryActions({ delivery, isScan = false }) {
           />
         </>
       ) : showCancel ? (
-        <form action={cancel} className="rounded-card bg-surface ring-line p-4 ring-1">
+        <form action={cancel} className="rounded-card bg-surface border-line border p-4">
           {hidden}
-          <label className="block text-sm font-medium">
-            Why can you not do this one?
-            <input
-              name="reason"
-              required
-              minLength={3}
-              placeholder="Something came up"
-              className="border-line-strong mt-1 w-full rounded border px-3 py-2.5 text-base"
-            />
-          </label>
-          <p className="text-muted mt-2 text-xs">
-            No penalty. The order stays exactly as it is and goes back to other Partners, and the
-            vendor does not have to do anything.
+          <Field label="Why can you not do this one?">
+            <Input name="reason" required minLength={3} placeholder="Something came up" />
+          </Field>
+          <p className="text-muted mt-2 text-sm leading-relaxed">
+            No penalty. The order goes back to other Partners, and the store does not have to do
+            anything.
           </p>
-          <div className="mt-3 flex gap-2">
-            <button
-              type="submit"
-              disabled={cancelling}
-              className="press bg-surface text-bad ring-bad/30 flex-1 rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
-            >
-              {cancelling ? 'Cancelling…' : 'Confirm cancel'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCancel(false)}
-              className="press rounded-full px-4 py-3 text-sm font-semibold transition-colors"
-            >
+          <div className="mt-4 flex gap-2">
+            <Button type="button" variant="secondary" onClick={() => setShowCancel(false)}>
               Keep it
-            </button>
+            </Button>
+            <Button type="submit" variant="danger" disabled={cancelling} className="flex-1">
+              {cancelling ? 'Giving it back…' : 'Give this order back'}
+            </Button>
           </div>
         </form>
       ) : (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          block
           onClick={() => setShowCancel(true)}
-          className="press bg-surface text-bad ring-bad/30 w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors"
+          className="text-muted"
         >
           I cannot do this delivery
-        </button>
+        </Button>
       )}
 
       {result ? (
-        <p
-          role="status"
-          className={`rounded-lg px-4 py-3 text-sm font-medium ${
-            result.ok ? 'bg-brand-50 text-brand-700' : 'bg-bad-bg text-bad'
-          }`}
-        >
-          {result.message}
-        </p>
+        result.ok ? (
+          <SuccessNote>{result.message}</SuccessNote>
+        ) : (
+          <ErrorNote>{result.message}</ErrorNote>
+        )
       ) : null}
     </div>
   );
@@ -193,20 +157,16 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
     return (
       <form action={report}>
         {hidden}
-        <button
-          type="submit"
-          disabled={reporting}
-          className="press bg-surface ring-line-strong w-full rounded-full py-3 text-sm font-semibold ring-1 transition-colors disabled:opacity-55"
-        >
+        <Button type="submit" variant="secondary" block disabled={reporting}>
           {reporting ? 'Recording…' : 'Customer is not responding'}
-        </button>
+        </Button>
       </form>
     );
   }
 
   if (waitLeft > 0) {
     return (
-      <div className="rounded-card bg-warn-bg text-warn px-4 py-3 text-sm">
+      <div role="status" className="rounded-card bg-warn-bg text-warn px-4 py-3 text-sm">
         <p className="font-semibold">Waiting recorded.</p>
         <p className="mt-1">
           Keep trying to reach them. You can close this in{' '}
@@ -224,13 +184,9 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
         You have waited long enough. Closing this records your earning and hands the food question
         to Campus Dash support.
       </p>
-      <button
-        type="submit"
-        disabled={confirming}
-        className="press mt-3 w-full rounded-full bg-amber-800 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
-      >
+      <Button type="submit" variant="danger" block disabled={confirming} className="mt-3">
         {confirming ? 'Closing…' : 'Close as customer absent'}
-      </button>
+      </Button>
     </form>
   );
 }

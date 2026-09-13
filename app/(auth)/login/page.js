@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { config } from '@/lib/config';
 import Link from 'next/link';
 import LoginForm from './login-form';
 import { safeNext } from '@/lib/auth/landing';
@@ -72,10 +73,14 @@ export default async function LoginPage({ searchParams }) {
             </TextLink>
           </p>
 
-          <p className="text-faint mt-5 text-center text-xs leading-relaxed">
-            In development the verification email is delivered to Mailpit at{' '}
-            <code className="font-mono">127.0.0.1:54324</code>.
-          </p>
+          {/* A developer's note. It was shown to every visitor in production,
+              where "Mailpit" means nothing and reads like something broke. */}
+          {config.isProduction() ? null : (
+            <p className="text-faint mt-5 text-center text-xs leading-relaxed">
+              In development the verification email is delivered to Mailpit at{' '}
+              <code className="font-mono">127.0.0.1:54324</code>.
+            </p>
+          )}
         </div>
       </div>
     </main>

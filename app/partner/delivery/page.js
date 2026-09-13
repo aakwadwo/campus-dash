@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { redirect, notFound } from 'next/navigation';
+import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
 import { getActiveDeliveries } from '@/lib/partner';
 import { scanImageUrl, getPartnerScanBrief } from '@/lib/scan';
@@ -7,6 +7,7 @@ import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
 import DeliveryActions from './delivery-actions';
 import ScanCollection from './scan-collection';
+import { BackLink } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,13 +32,22 @@ export default async function PartnerDeliveryPage({ searchParams }) {
 
   const params = await searchParams;
   const deliveries = await getActiveDeliveries();
-  if (deliveries.length === 0) redirect('/partner');
-
   const requested = typeof params?.order === 'string' ? params.order : null;
   const delivery = requested
     ? (deliveries.find((d) => d.order_id === requested) ?? null)
-    : deliveries[0];
-  if (!delivery) notFound();
+    : (deliveries[0] ?? null);
+
+  // THE ORDER IS NO LONGER IN HAND. Almost always because the Partner has just
+  // finished it on this screen: the action revalidates this page, and the
+  // delivery is gone from partner_active_delivery(). That used to be a bare
+  // bounce to /partner — the "Delivered" message lost on the way — or, with a
+  // second delivery still active, a 404. Partner home says what happened.
+  //
+  // Nothing about the order is trusted from the URL: home looks the id up in
+  // this Partner's own history and says nothing if it is not there.
+  if (!delivery) {
+    redirect(requested ? `/partner?finished=${encodeURIComponent(requested)}` : '/partner');
+  }
 
   const collecting = delivery.delivery_status === 'ASSIGNED';
   const isScan = delivery.order_type === 'SCAN';
@@ -52,22 +62,56 @@ export default async function PartnerDeliveryPage({ searchParams }) {
   // opens on assignment and closes when the delivery does.
   const brief = isScan ? await getPartnerScanBrief(delivery.order_id) : null;
 
+  // WHERE IT IS GOING, and who to ring. Shown from assignment for both legs,
+  // but in the order the legs happen: while collecting it sits UNDER the
+  // collection, because the counter is the next thing, not the door.
+  const destinationCard = (
+    <section className="rounded-card bg-surface border-line border p-4">
+      <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
+        {collecting ? 'Then take it to' : 'Take it to'}
+      </h2>
+      {/* THE FIRST NAME, LARGE. It is what the Partner says out loud when
+          somebody opens the door, so it is the biggest thing on the card —
+          above the room, which they need second. */}
+      {delivery.customer_first_name ? (
+        <p className="mt-1 text-xl font-semibold">{delivery.customer_first_name}</p>
+      ) : null}
+      <p className="mt-0.5 text-lg">{delivery.destination}</p>
+      {delivery.destination_note ? (
+        <p className="text-muted mt-1 text-sm">“{delivery.destination_note}”</p>
+      ) : null}
+      {delivery.customer_phone ? (
+        <a
+          href={`tel:${delivery.customer_phone}`}
+          className={`press mt-3 inline-flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-semibold transition-colors ${
+            // The primary action only once the door is the next thing. While
+            // collecting, the counter is, and two orange buttons compete.
+            collecting
+              ? 'border-line-strong hover:bg-surface-2 border'
+              : 'bg-brand-700 hover:bg-brand-800 text-white'
+          }`}
+        >
+          Call {delivery.customer_first_name ?? 'the customer'} · {delivery.customer_phone}
+        </a>
+      ) : null}
+    </section>
+  );
+
   return (
-    <main className="mx-auto max-w-2xl px-4 pt-5 pb-16">
-      <Link href="/partner" className="text-muted text-sm underline underline-offset-4">
-        ← Partner
-      </Link>
+    <main className="mx-auto max-w-2xl px-4 pt-3 pb-16 sm:px-6 sm:pt-6">
+      <BackLink href="/partner">Partner home</BackLink>
 
       {deliveries.length > 1 ? (
-        <nav className="mt-3 flex gap-2" aria-label="Your active orders">
+        <nav className="mt-3 flex flex-wrap gap-2" aria-label="Orders you are carrying">
           {deliveries.map((d) => (
             <Link
               key={d.order_id}
               href={`/partner/delivery?order=${d.order_id}`}
-              className={`rounded-full border px-3.5 py-2 font-mono text-sm font-semibold ${
+              aria-current={d.order_id === delivery.order_id ? 'page' : undefined}
+              className={`press-sm inline-flex min-h-11 items-center rounded-full border px-4 text-sm font-semibold tabular-nums transition-colors ${
                 d.order_id === delivery.order_id
                   ? 'bg-brand-700 border-brand-700 text-white'
-                  : 'bg-surface border-line text-muted'
+                  : 'bg-surface border-line-strong text-ink hover:bg-surface-2'
               }`}
             >
               #{orderLabel(d)}
@@ -76,14 +120,17 @@ export default async function PartnerDeliveryPage({ searchParams }) {
         </nav>
       ) : null}
 
-      <header className="mt-3 mb-4">
-        <p className="text-muted text-sm tabular-nums">Order #{orderLabel(delivery)}</p>
-        {isScan ? (
-          <p className="text-brand-800 text-xs font-semibold tracking-[0.12em] uppercase">
-            Scan delivery
-          </p>
-        ) : null}
-        <h1 className="text-2xl font-semibold tracking-tight">
+      <header className="mt-3 mb-5">
+        {/* WHERE IN THE JOB. Two legs, and which one this is. */}
+        <ol className="mb-3 flex items-center gap-2 text-sm font-semibold" aria-label="Progress">
+          <li className={collecting ? 'text-brand-700' : 'text-good'}>
+            {collecting ? '1. Collect' : '✓ Collected'}
+          </li>
+          <li aria-hidden className="bg-line-strong h-px w-6" />
+          <li className={collecting ? 'text-faint' : 'text-brand-700'}>2. Deliver</li>
+        </ol>
+        {isScan ? <p className="text-brand-800 text-sm font-semibold">Scan delivery</p> : null}
+        <h1 className="text-display text-2xl font-semibold sm:text-3xl">
           {collecting
             ? isScan
               ? 'Redeem the scan'
@@ -92,37 +139,14 @@ export default async function PartnerDeliveryPage({ searchParams }) {
                 : 'Wait for the store'
             : 'Deliver the order'}
         </h1>
-        <p className="text-brand-800 mt-1 text-sm font-semibold">
-          You earn {formatPesewas(delivery.earnings_pesewas)}
+        <p className="text-muted mt-1.5 text-sm">
+          <span className="text-ink font-semibold tabular-nums">Order #{orderLabel(delivery)}</span>
+          {' · '}You earn{' '}
+          <span className="text-ink font-semibold">{formatPesewas(delivery.earnings_pesewas)}</span>
         </p>
       </header>
 
-      {/* WHERE IT IS GOING, and who to ring. Shown from assignment for both
-          legs of the journey: a Partner who cannot find a room needs to call
-          before they are holding food that is going cold, not after. */}
-      <section className="rounded-card bg-surface border-line border p-4">
-        <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
-          {collecting ? 'Then take it to' : 'Take it to'}
-        </h2>
-        {/* THE FIRST NAME, LARGE. It is what the Partner says out loud when
-            somebody opens the door, so it is the biggest thing on the card —
-            above the room, which they need second. */}
-        {delivery.customer_first_name ? (
-          <p className="mt-1 text-xl font-semibold">{delivery.customer_first_name}</p>
-        ) : null}
-        <p className="mt-0.5 text-lg">{delivery.destination}</p>
-        {delivery.destination_note ? (
-          <p className="text-muted mt-1 text-sm">“{delivery.destination_note}”</p>
-        ) : null}
-        {delivery.customer_phone ? (
-          <a
-            href={`tel:${delivery.customer_phone}`}
-            className="press bg-brand-700 hover:bg-brand-800 mt-3 inline-flex min-h-11 items-center gap-2 rounded-full px-5 text-sm font-semibold text-white"
-          >
-            Call {delivery.customer_first_name ?? 'the customer'} · {delivery.customer_phone}
-          </a>
-        ) : null}
-      </section>
+      {collecting ? null : destinationCard}
 
       {collecting && isScan ? (
         <>
@@ -158,12 +182,14 @@ export default async function PartnerDeliveryPage({ searchParams }) {
           </h2>
           <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
           <p className="text-muted text-sm">{delivery.vendor_location}</p>
-          <a
-            href={`tel:${delivery.vendor_phone}`}
-            className="text-brand-700 mt-2 inline-block text-sm underline underline-offset-4"
-          >
-            Call the store
-          </a>
+          {delivery.vendor_phone ? (
+            <a
+              href={`tel:${delivery.vendor_phone}`}
+              className="press border-line-strong hover:bg-surface-2 mt-3 inline-flex min-h-11 items-center rounded-full border px-4 text-sm font-semibold transition-colors"
+            >
+              Call the store
+            </a>
+          ) : null}
           {/* TAKEN EARLY, ON PURPOSE. The offer pool opens the moment a customer
               pays, so a Partner usually claims a job while it is still cooking.
               Saying so plainly is what stops somebody walking to a counter for
@@ -175,8 +201,8 @@ export default async function PartnerDeliveryPage({ searchParams }) {
             </p>
           ) : (
             <p className="text-warn mt-3 text-sm leading-relaxed font-medium">
-              This order is still being prepared. It is yours — wait until the store marks it ready,
-              then collect it. This page updates on its own.
+              This order is still being prepared. It is yours, so wait until the store marks it
+              ready. This page updates on its own.
             </p>
           )}
         </section>
@@ -188,9 +214,13 @@ export default async function PartnerDeliveryPage({ searchParams }) {
         </section>
       )}
 
+      {/* The code box follows the instruction that asks for it. While
+          collecting, where the food goes next comes after the step in hand. */}
       <div className="mt-4">
         <DeliveryActions delivery={delivery} isScan={isScan} />
       </div>
+
+      {collecting ? <div className="mt-4">{destinationCard}</div> : null}
     </main>
   );
 }

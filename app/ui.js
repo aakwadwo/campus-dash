@@ -71,13 +71,9 @@ export function PageHeader({ eyebrow, title, description, action, back, classNam
   return (
     <header className={`mb-7 ${className}`}>
       {back ? (
-        <Link
-          href={back.href}
-          className="text-muted hover:text-ink press-sm mb-4 -ml-1 inline-flex items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
-        >
-          <ArrowLeftIcon className="size-4" />
+        <BackLink href={back.href} className="mb-3">
           {back.label}
-        </Link>
+        </BackLink>
       ) : null}
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
@@ -171,14 +167,42 @@ export function ButtonLink({
   );
 }
 
-/** The quiet inline link: an accent mark, underlined on hover only. */
+/**
+ * The inline link: accent text with a light underline that is ALWAYS there.
+ *
+ * It used to underline on hover only, which on a phone means never — the text
+ * was orange and otherwise indistinguishable from a highlighted word. The rule
+ * is that anything which navigates must look like it does before it is
+ * touched, so the underline is present at rest, strengthens on hover, and the
+ * link takes a soft ground while pressed.
+ */
+export const TEXT_LINK_CLASS =
+  'text-brand-700 font-semibold underline decoration-brand-700/35 underline-offset-4 ' +
+  'transition-colors hover:decoration-brand-700 active:bg-brand-50 rounded-sm';
+
 export function TextLink({ href, className = '', children, ...rest }) {
+  return (
+    <Link href={href} className={`${TEXT_LINK_CLASS} ${className}`} {...rest}>
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * "Back to …" — one shape everywhere.
+ *
+ * Every screen with a parent used to draw its own: an arrow glyph in the text,
+ * an underlined grey word, an icon link. They all do the same thing, so they
+ * now look the same, and every one is a 44px target that shows a ground when
+ * pressed. The label names the destination, never just "Back".
+ */
+export function BackLink({ href, children, className = '' }) {
   return (
     <Link
       href={href}
-      className={`text-brand-700 font-semibold underline-offset-4 transition-colors hover:underline ${className}`}
-      {...rest}
+      className={`text-muted hover:text-ink hover:bg-surface-2 press-sm -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-full pr-3.5 pl-2 text-sm font-medium transition-colors ${className}`}
     >
+      <ArrowLeftIcon className="size-4" />
       {children}
     </Link>
   );
@@ -334,6 +358,101 @@ export function ErrorNote({ className = '', children }) {
     >
       {children}
     </p>
+  );
+}
+
+/** A completed action, in the same voice everywhere. The pair of ErrorNote. */
+export function SuccessNote({ className = '', children }) {
+  if (!children) return null;
+  return (
+    <p
+      role="status"
+      className={`bg-good-bg text-good rounded-input flex items-start gap-2.5 px-4 py-3 text-sm leading-relaxed font-medium ${className}`}
+    >
+      <CheckIcon className="mt-0.5 size-4 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/**
+ * The end of a journey: a tick, a headline, one line under it.
+ *
+ * Used where something that mattered has FINISHED — food collected, a delivery
+ * handed over, an application sent. The tick draws itself once (see cd-draw)
+ * and nothing else moves. It is the shape of a receipt, not a celebration.
+ */
+export function Completion({ title, children, action, className = '' }) {
+  return (
+    <div className={`animate-fade-up text-center ${className}`} role="status">
+      <span className="bg-good mx-auto grid size-14 place-items-center rounded-full">
+        <svg
+          aria-hidden
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          strokeWidth="2.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="size-7"
+        >
+          <path
+            d="m20 6-11 11-5-5"
+            className="motion-safe:animate-[cd-draw_380ms_ease-out_both]"
+            style={{ strokeDasharray: 32 }}
+          />
+        </svg>
+      </span>
+      <p className="text-display mt-4 text-2xl font-semibold sm:text-3xl">{title}</p>
+      {children ? (
+        <div className="text-muted mx-auto mt-2 max-w-sm leading-relaxed">{children}</div>
+      ) : null}
+      {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * A figure that answers a question at a glance: "Today's sales GH₵420.00".
+ *
+ * The label sits ABOVE the number in plain words, so a row of these reads as a
+ * sentence rather than as a set of numbers waiting to be decoded.
+ */
+export function Stat({ label, value, hint, className = '' }) {
+  return (
+    <div className={`bg-surface border-line rounded-card border px-4 py-3.5 ${className}`}>
+      <dt className="text-muted text-sm font-medium">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl">
+        {value}
+      </dd>
+      {hint ? <p className="text-muted mt-0.5 text-xs">{hint}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Four digits typed at a counter or a door.
+ *
+ * ONE INPUT FOR ALL THREE HANDOFFS, so a customer collecting, a Partner
+ * collecting and a Partner delivering meet the same box: large, numeric
+ * keypad, centred digits, and nothing else to aim at.
+ */
+export function CodeInput({ name, disabled = false, autoFocus = false, label }) {
+  return (
+    <input
+      id={name}
+      name={name}
+      inputMode="numeric"
+      autoComplete="one-time-code"
+      required
+      pattern="\d{4}"
+      maxLength={4}
+      placeholder="0000"
+      disabled={disabled}
+      autoFocus={autoFocus}
+      aria-label={label}
+      className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint/60 h-16 w-full border text-center text-3xl font-semibold tracking-[0.4em] tabular-nums outline-none disabled:opacity-60"
+    />
   );
 }
 

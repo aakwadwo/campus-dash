@@ -1,5 +1,4 @@
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
 import { requireVendorStaff } from '@/lib/auth/session';
 import {
   getMyVendors,
@@ -9,11 +8,12 @@ import {
   getPayoutDestination,
 } from '@/lib/vendor';
 import { vendorImageUrl } from '@/lib/verification/documents';
-import { Panel, PageHeader, Badge } from '@/app/ui';
+import { signOut } from '@/app/(auth)/login/actions';
+import { Panel, PageHeader, Badge, Button } from '@/app/ui';
 import { StoreDetailsForm, ImageForms, PayoutForm } from './profile-forms';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Store details · Campus Dash' };
+export const metadata = { title: 'Store · Campus Dash' };
 
 /**
  * Everything about the store that is not an order.
@@ -42,28 +42,25 @@ export default async function VendorProfilePage() {
   const gallery = images.map((image) => ({ ...image, url: vendorImageUrl(image.storage_path) }));
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-5 py-8">
+    <main className="mx-auto w-full max-w-3xl px-4 pt-5 pb-16 sm:px-6 sm:pt-8">
       <PageHeader
-        eyebrow="Vendor"
-        title="Store details"
-        description="What students see when they find you."
-        back={{ href: `/vendor/${vendor.vendor_id}`, label: 'Orders' }}
+        title="Store"
+        description="What students see when they find you, and how you get paid."
       />
 
-      <div className="mt-6 space-y-6">
-        <Panel
-          title="Status"
-          description="Approval is Campus Dash's decision. Opening and closing is yours."
-        >
+      <div className="space-y-6">
+        <Panel title="Status">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={vendor.status === 'ACTIVE' ? 'good' : 'warn'}>{vendor.status}</Badge>
+            <Badge tone={vendor.status === 'ACTIVE' ? 'good' : 'warn'}>
+              {vendor.status === 'ACTIVE' ? 'Approved' : 'Not approved'}
+            </Badge>
             <Badge tone={vendor.is_accepting_orders ? 'good' : 'neutral'}>
-              {vendor.is_accepting_orders ? 'Open' : 'Closed'}
+              {vendor.is_accepting_orders ? 'Open for orders' : 'Closed'}
             </Badge>
           </div>
           <p className="text-muted mt-3 text-sm leading-relaxed">
-            Closing the store stops NEW orders arriving. Orders already in your kitchen are
-            unaffected and still have to be finished.
+            Open and close the store from Orders. Closing stops new orders arriving; orders already
+            in your kitchen still need finishing.
           </p>
         </Panel>
 
@@ -75,28 +72,24 @@ export default async function VendorProfilePage() {
           <ImageForms vendorId={vendor.vendor_id} images={gallery} />
         </Panel>
 
-        <Panel
-          title="Getting paid"
-          description="The mobile money account your food money is sent to."
-        >
+        <Panel title="Getting paid" description="The mobile money account your sales are sent to.">
           <PayoutForm vendor={vendor} destination={payout} />
           {payout ? (
             <p className="text-muted mt-4 text-sm leading-relaxed">
               {payout.split_ready
-                ? 'Set up. When a customer pays, your share of the order goes straight to this account. Campus Dash keeps only the service fee and the delivery fee.'
-                : 'Saved, and being registered with our payment provider. Until that finishes, your share is held by Campus Dash and settled in the daily run.'}
+                ? 'Set up. When a customer pays, your amount for the food goes straight to this account.'
+                : 'Saved, and being registered with our payment provider. Until that finishes, Campus Dash holds your amount and settles it in the daily run.'}
             </p>
           ) : null}
         </Panel>
 
-        <Panel title="Menu" description="Items, prices and what is available today.">
-          <p className="text-muted text-sm leading-relaxed">
-            Menu items are managed from your order board.{' '}
-            <Link href={`/vendor/${vendor.vendor_id}`} className="text-brand-700 font-medium">
-              Go to orders
-            </Link>
-          </p>
-        </Panel>
+        {/* SIGN-OUT LIVES HERE. A store phone is often shared, and a vendor-only
+            account has no account area to find it in. */}
+        <form action={signOut} className="border-line border-t pt-6">
+          <Button type="submit" variant="danger" block>
+            Sign out
+          </Button>
+        </form>
       </div>
     </main>
   );

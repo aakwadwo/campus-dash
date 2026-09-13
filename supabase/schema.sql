@@ -8388,6 +8388,49 @@ $$;
 ALTER FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer DEFAULT 30) RETURNS TABLE("order_day" "date", "order_count" integer, "sales_pesewas" bigint)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  with day_orders as (
+    select o.id,
+           o.order_day,
+           -- A SALE IS A PAID ORDER THAT HAS NOT BEEN REFUNDED, with a live
+           -- VENDOR allocation. REFUND_PENDING and REFUNDED are not sales even
+           -- where the allocation is still SETTLED by a split.
+           (o.payment_status = 'PAID' and a.id is not null) as is_sale,
+           coalesce(a.amount_pesewas, 0) as amount_pesewas
+      from public.orders o
+      left join public.allocations a
+        on a.order_id = o.id
+       and a.payee_type = 'VENDOR'
+       and a.payee_id = o.vendor_id
+       and a.status <> 'CANCELLED'
+     where o.vendor_id = p_vendor_id
+       and o.order_type = 'FOOD'
+       and o.order_status <> 'DRAFT'
+       and o.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
+       and o.order_day >= (now() at time zone 'UTC')::date
+                          - (least(greatest(coalesce(p_days, 30), 1), 366) - 1)
+       and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
+  )
+  -- A day whose only orders were refunded is still returned, at zero, so the
+  -- refunded order stays reachable from History rather than vanishing.
+  select d.order_day,
+         (count(distinct d.id) filter (where d.is_sale))::integer,
+         (coalesce(sum(d.amount_pesewas) filter (where d.is_sale), 0))::bigint
+    from day_orders d
+   group by d.order_day
+   order by d.order_day desc;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) IS 'One row per day with sales for this vendor: orders with a live VENDOR allocation, and the sum of those allocations. The vendor''s own amount only. Staff or admin, enforced in the body.';
+
+
 CREATE OR REPLACE FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") RETURNS "text"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -8593,7 +8636,7 @@ $$;
 ALTER FUNCTION "public"."vendor_mark_ready"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "destination_zone" "text", "partner_assigned" boolean, "partner_waiting" boolean, "awaiting_collection" boolean, "cancellation_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "vendor_amount_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "destination_zone" "text", "partner_assigned" boolean, "partner_waiting" boolean, "awaiting_collection" boolean, "cancellation_reason" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -8605,9 +8648,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "
        and o.order_status <> 'DRAFT'
        -- A scan order asks nothing of the restaurant through Campus Dash.
        and o.order_type = 'FOOD'
-       -- PAID ONLY. A store is never shown an order somebody has not paid for:
-       -- there is nothing to do about it, and a basket abandoned at a checkout
-       -- is not a ticket.
+       -- PAID ONLY. A store is never shown an order somebody has not paid for.
        and o.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
   ),
   ranked as (
@@ -8628,7 +8669,8 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "
          r.delivery_status,
          r.fulfilment_type,
          (select count(*) from public.order_items oi where oi.order_id = r.id),
-         r.total_pesewas,
+         -- THE VENDOR'S AMOUNT. Never the total, never a fee.
+         r.subtotal_pesewas,
          r.submitted_at,
          extract(epoch from (now() - coalesce(r.submitted_at, r.created_at)))::integer,
          -- ZONE ONLY. The room number is deliberately not selected here.
@@ -8666,7 +8708,7 @@ $$;
 ALTER FUNCTION "public"."vendor_order_bucket"("p_order_status" "public"."order_status") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_id" "uuid", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "subtotal_pesewas" bigint, "service_fee_pesewas" bigint, "delivery_fee_pesewas" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "completed_at" timestamp with time zone, "destination_zone" "text", "partner_assigned" boolean, "partner_name" "text", "handoff_code_available" boolean, "customer_first_name" "text", "cancellation_reason" "text", "items" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_id" "uuid", "bucket" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "vendor_amount_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "completed_at" timestamp with time zone, "destination_zone" "text", "partner_assigned" boolean, "partner_name" "text", "handoff_code_available" boolean, "customer_first_name" "text", "cancellation_reason" "text", "items" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -8679,10 +8721,9 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") R
          o.payment_status,
          o.delivery_status,
          o.fulfilment_type,
+         -- THE VENDOR'S AMOUNT. The service fee, the delivery fee and the
+         -- customer's total are not selected.
          o.subtotal_pesewas,
-         o.service_fee_pesewas,
-         o.delivery_fee_pesewas,
-         o.total_pesewas,
          o.submitted_at,
          extract(epoch from (now() - coalesce(o.submitted_at, o.created_at)))::integer,
          o.accepted_at,
@@ -8699,9 +8740,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") R
          (o.payment_status = 'PAID' and (
             o.delivery_status = 'ASSIGNED'
             or (o.order_status = 'READY' and o.delivery_status = 'NONE'))),
-         -- The name the store calls out when the customer is collecting. First
-         -- name only, and only when nobody is bringing it — a delivery is met by
-         -- a Partner, so the customer's name is not the store's business.
+         -- First name only, and only when nobody is bringing it.
          case when o.delivery_status = 'NONE'
               then public.given_name(c.first_name, c.full_name) end,
          o.cancellation_reason,
@@ -8728,6 +8767,45 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") RETURNS TABLE("order_id" "uuid", "vendor_order_no" integer, "order_status" "public"."order_status", "payment_status" "public"."payment_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "vendor_amount_pesewas" bigint, "counts_as_sale" boolean, "submitted_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select o.id,
+         o.vendor_order_no,
+         o.order_status,
+         o.payment_status,
+         o.fulfilment_type,
+         (select count(*) from public.order_items oi where oi.order_id = o.id),
+         o.subtotal_pesewas,
+         -- The same rule vendor_daily_sales() sums by, so a day's list and its
+         -- History row always agree.
+         o.payment_status = 'PAID'
+         and exists (
+           select 1 from public.allocations a
+            where a.order_id = o.id
+              and a.payee_type = 'VENDOR'
+              and a.payee_id = o.vendor_id
+              and a.status <> 'CANCELLED'
+         ),
+         o.submitted_at
+    from public.orders o
+   where o.vendor_id = p_vendor_id
+     and o.order_day = p_day
+     and o.order_type = 'FOOD'
+     and o.order_status <> 'DRAFT'
+     and o.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
+     and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
+   order by o.vendor_order_no desc nulls last, o.created_at desc;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") IS 'The paid orders behind one vendor_daily_sales() row, newest queue number first, with the vendor''s own amount. Staff or admin, enforced in the body.';
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") RETURNS TABLE("user_id" "uuid", "phone" "text", "full_name" "text", "store_name" "text")
@@ -10039,7 +10117,7 @@ ALTER TABLE "public"."order_events" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "order_events_read" ON "public"."order_events" FOR SELECT TO "authenticated" USING (("public"."is_admin"() OR (EXISTS ( SELECT 1
    FROM "public"."orders" "o"
-  WHERE (("o"."id" = "order_events"."order_id") AND (("o"."customer_id" = "auth"."uid"()) OR ("o"."vendor_id" IN ( SELECT "public"."my_vendor_ids"() AS "my_vendor_ids"))))))));
+  WHERE (("o"."id" = "order_events"."order_id") AND ("o"."customer_id" = "auth"."uid"()))))));
 
 
 ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
@@ -10047,7 +10125,7 @@ ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "order_items_read" ON "public"."order_items" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."orders" "o"
-  WHERE (("o"."id" = "order_items"."order_id") AND (("o"."customer_id" = "auth"."uid"()) OR ("o"."partner_id" = "auth"."uid"()) OR ("o"."vendor_id" IN ( SELECT "public"."my_vendor_ids"() AS "my_vendor_ids")) OR "public"."is_admin"())))));
+  WHERE (("o"."id" = "order_items"."order_id") AND (("o"."customer_id" = "auth"."uid"()) OR ("o"."partner_id" = "auth"."uid"()) OR "public"."is_admin"())))));
 
 
 ALTER TABLE "public"."order_scans" ENABLE ROW LEVEL SECURITY;
@@ -10069,9 +10147,6 @@ CREATE POLICY "orders_read_assigned_partner" ON "public"."orders" FOR SELECT TO 
 
 
 CREATE POLICY "orders_read_customer" ON "public"."orders" FOR SELECT TO "authenticated" USING (("customer_id" = "auth"."uid"()));
-
-
-CREATE POLICY "orders_read_vendor" ON "public"."orders" FOR SELECT TO "authenticated" USING (("vendor_id" IN ( SELECT "public"."my_vendor_ids"() AS "my_vendor_ids")));
 
 
 ALTER TABLE "public"."partner_profiles" ENABLE ROW LEVEL SECURITY;
@@ -11181,6 +11256,11 @@ REVOKE ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uui
 GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_delete_image"("p_image_id" "uuid") TO "authenticated";
@@ -11218,6 +11298,11 @@ GRANT ALL ON FUNCTION "public"."vendor_order_bucket"("p_order_status" "public"."
 REVOKE ALL ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_owner_contact"("p_vendor_id" "uuid") FROM PUBLIC;

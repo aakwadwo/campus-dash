@@ -397,6 +397,8 @@ describe('schema invariants', () => {
       'vendor_order_board',
       'vendor_order_bucket',
       'vendor_order_detail',
+      'vendor_daily_sales',
+      'vendor_orders_on_day',
       'vendor_pending_count',
       'vendor_active_count',
       'vendor_set_accepting_orders',

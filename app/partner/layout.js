@@ -22,24 +22,23 @@ export default async function PartnerLayout({ children }) {
         <div className="mx-auto flex h-16 w-full max-w-2xl items-center gap-3 px-4 sm:px-6">
           <Link
             href="/partner"
-            className="press-sm flex items-center gap-2 font-semibold tracking-tight"
+            className="press-sm -ml-1 flex min-h-11 items-center gap-2 rounded-full pr-2 pl-1 font-semibold tracking-tight"
           >
             <CampusDashMark height={26} />
             <span className="text-[15px]">
-              Campus Dash <span className="text-muted font-normal">Partner</span>
+              <span className="hidden min-[400px]:inline">Campus Dash </span>
+              <span className="text-muted font-normal">Partner</span>
             </span>
           </Link>
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
             {/* A Partner is always also a Customer. Say so with a link. */}
-            <div className="hidden sm:block">
-              <AreaSwitcher current="/partner" />
-            </div>
+            <AreaSwitcher current="/partner" />
             <Link
               href="/account"
-              className="press-sm hover:bg-surface-2 text-muted grid size-9 place-items-center rounded-full transition-colors"
+              className="press-sm hover:bg-surface-2 text-muted grid size-11 place-items-center rounded-full transition-colors"
               aria-label="Account"
             >
-              <UserIcon className="size-[18px]" />
+              <UserIcon className="size-5" />
             </Link>
           </div>
         </div>

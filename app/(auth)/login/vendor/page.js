@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { config } from '@/lib/config';
 import { Suspense } from 'react';
 import VendorLoginForm from './vendor-login-form';
 import { safeNext } from '@/lib/auth/landing';
@@ -52,10 +53,14 @@ export default async function VendorLoginPage({ searchParams }) {
             </TextLink>
           </p>
 
-          <p className="text-faint mt-4 text-center text-xs leading-relaxed">
-            In development the code is printed to the server console by the fake SMS provider, and
-            shown at <code className="font-mono">/dev/inbox</code>.
-          </p>
+          {/* A developer's note, as on the other sign-in pages: meaningless to a
+              store owner in production, and reads like something broke. */}
+          {config.isProduction() ? null : (
+            <p className="text-faint mt-4 text-center text-xs leading-relaxed">
+              In development the code is printed to the server console by the fake SMS provider, and
+              shown at <code className="font-mono">/dev/inbox</code>.
+            </p>
+          )}
         </div>
       </div>
     </main>

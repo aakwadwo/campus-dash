@@ -11,6 +11,7 @@ import {
 } from './helpers/db.js';
 import {
   submitOrder,
+  payOrder,
   orderReadyForDispatch,
   partnerAccept,
   expectRejection,
@@ -119,14 +120,27 @@ describe('row level security and authorisation', () => {
     assert.equal(stored.order_status, 'ACCEPTED', 'the order was untouched');
   });
 
-  test('a vendor CAN see and act on their own order', async () => {
+  // A store reads its orders THROUGH THE VENDOR RPCs, never from the table: a
+  // row of public.orders carries the customer's total, the service fee, the
+  // delivery fee and the Partner's earnings, none of which is the store's.
+  // See 20260930000002 and tests/vendor-financial-visibility.test.js.
+  test('a vendor sees their own paid order through the board, and not through the table', async () => {
     const order = await submitOrder({ vendorId: VENDORS.one });
-    const visible = await asUser(
+    await payOrder(order.order_id);
+
+    const direct = await asUser(
       ACTORS.vendor1Staff,
       async (c) =>
         (await c.query('select * from public.orders where id = $1', [order.order_id])).rows
     );
-    assert.equal(visible.length, 1);
+    assert.equal(direct.length, 0, 'no direct row, and so no fees');
+
+    const board = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_order_board($1)', [VENDORS.one])).rows
+    );
+    assert.equal(board.filter((row) => row.order_id === order.order_id).length, 1);
   });
 
   test("a customer cannot read another customer's order", async () => {

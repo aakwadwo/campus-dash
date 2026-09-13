@@ -2,6 +2,7 @@ import Link from 'next/link';
 import SiteHeader from './site-header';
 import SiteFooter from './site-footer';
 import { listVendors } from '@/lib/customer';
+import { redirectVendorOnlyAccount } from '@/lib/auth/session';
 import { ButtonLink, Container, ImagePlaceholder, ChevronRightIcon } from './ui';
 
 export const metadata = {
@@ -36,6 +37,10 @@ const HOW_IT_WORKS = [
 ];
 
 export default async function Home() {
+  // A vendor who is not a customer is sent to their store. Everyone else,
+  // signed in or out, gets the homepage. See vendorOnlyHome() in landing.js.
+  await redirectVendorOnlyAccount();
+
   // Never let a slow or failing marketplace query take the landing page down.
   const vendors = await listVendors().catch(() => []);
   const open = (vendors ?? []).filter((v) => v.is_accepting_orders).slice(0, 4);

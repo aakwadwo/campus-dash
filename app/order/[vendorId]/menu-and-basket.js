@@ -26,9 +26,10 @@ export default function MenuAndBasket({
   menu,
   locations = [],
   deliveryAvailable = true,
+  deliveryFeePesewas = null,
   gate = null,
 }) {
-  const [quantities, setQuantities] = useState({});
+  const [quantities, setQuantities] = useBasket(vendor.vendor_id, menu);
   const [step, setStep] = useState('menu');
   const [fulfilment, setFulfilment] = useState('PICKUP');
   const [destination, setDestination] = useState('');
@@ -91,8 +92,15 @@ export default function MenuAndBasket({
    */
   useEffect(() => {
     if (!submitState.ok) return;
+    // The order exists now, so the basket that became it is spent. Coming back
+    // to this store should not offer to buy the same lunch twice.
+    try {
+      window.sessionStorage.removeItem(`campus-dash:basket:${vendor.vendor_id}`);
+    } catch {
+      // Storage unavailable: nothing was saved to clear.
+    }
     window.location.href = submitState.redirectUrl || submitState.orderHref;
-  }, [submitState]);
+  }, [submitState, vendor.vendor_id]);
 
   const setQuantity = (id, next) =>
     setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
@@ -105,6 +113,7 @@ export default function MenuAndBasket({
         items={items}
         locations={locations}
         deliveryAvailable={deliveryAvailable}
+        deliveryFeePesewas={deliveryFeePesewas}
         fulfilment={fulfilmentChoice}
         onFulfilment={setFulfilment}
         destination={destination}
@@ -192,15 +201,22 @@ export default function MenuAndBasket({
           exists once something is in the basket — an always-present empty bar
           is a permanent reminder that you have not done anything. */}
       {itemCount > 0 ? (
-        <div className="animate-sheet fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-6">
+        // ABOVE THE BOTTOM NAVIGATION, never on top of it. A signed-in customer
+        // (no `gate`) has the mobile bottom bar from SiteHeader: 56px of targets,
+        // a 1px rule and the safe area. Sitting over it made Browse, My orders
+        // and Account untappable while anything was in the basket. Signed out
+        // there is no bottom bar, so the basket keeps the bottom edge.
+        <div
+          className={`animate-sheet fixed inset-x-0 z-50 px-3 pb-3 sm:bottom-0 sm:px-6 sm:pb-6 ${
+            gate ? 'bottom-0' : 'bottom-[calc(57px+env(safe-area-inset-bottom))]'
+          }`}
+        >
           <div className="bg-surface border-line shadow-float mx-auto flex max-w-2xl items-center gap-3 rounded-full border p-2 pl-5">
             <span className="flex items-center gap-2 text-sm font-semibold">
               <span className="bg-brand-700 grid size-6 shrink-0 place-items-center rounded-full text-xs text-white tabular-nums">
                 {itemCount}
               </span>
-              <span className="hidden sm:inline">
-                {itemCount === 1 ? 'item' : 'items'} in basket
-              </span>
+              <span>{itemCount === 1 ? 'item' : 'items'}</span>
             </span>
             {gate ? (
               <a
@@ -216,7 +232,7 @@ export default function MenuAndBasket({
                 onClick={() => setStep('review')}
                 className="press bg-brand-700 hover:bg-brand-800 ml-auto rounded-full px-6 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-55"
               >
-                Checkout
+                Go to checkout
               </button>
             )}
           </div>
@@ -287,6 +303,7 @@ function Checkout({
   items,
   locations,
   deliveryAvailable,
+  deliveryFeePesewas,
   fulfilment,
   onFulfilment,
   destination,
@@ -333,7 +350,8 @@ function Checkout({
       <button
         type="button"
         onClick={onBack}
-        className="text-muted hover:text-ink press-sm mb-5 -ml-1 inline-flex items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
+        disabled={busy}
+        className="text-muted hover:text-ink hover:bg-surface-2 press-sm mb-4 -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-full pr-3.5 pl-2 text-sm font-medium transition-colors disabled:opacity-55"
       >
         <ArrowLeftIcon className="size-4" />
         Back to menu
@@ -388,7 +406,14 @@ function Checkout({
                 ? 'A verified student brings it to you.'
                 : 'No Partners are available right now.'
             }
-            price={quote?.delivery_fee_pesewas ?? null}
+            // THE PRICE OF THIS OPTION, not of the current choice. A quote for
+            // collection carries a delivery fee of 0, and that used to label
+            // the Partner option "Free" until it was tapped.
+            price={
+              quote && fulfilment === 'DELIVERY'
+                ? quote.delivery_fee_pesewas
+                : (deliveryFeePesewas ?? null)
+            }
           />
         </div>
 
@@ -465,19 +490,11 @@ function Checkout({
 
       {submitState.message ? <ErrorNote className="mt-4">{submitState.message}</ErrorNote> : null}
 
-      <div className="mt-6 flex gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          disabled={busy}
-          className="press border-line-strong hover:bg-surface-2 rounded-full border px-5 py-3.5 text-sm font-semibold transition-colors disabled:opacity-55"
-        >
-          Back
-        </button>
+      <div className="mt-6">
         <button
           type="submit"
           disabled={busy || !quote || quoting || needsDestination}
-          className="press bg-brand-700 hover:bg-brand-800 flex-1 rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
+          className="press bg-brand-700 hover:bg-brand-800 h-14 w-full rounded-full text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
           {busy ? (
             <span className="inline-flex items-center justify-center gap-2">
@@ -549,4 +566,53 @@ function Line({ label, value }) {
       </dd>
     </div>
   );
+}
+
+/**
+ * The basket, kept for the length of the browser session.
+ *
+ * WHY. It used to live only in component state, so a refresh, a tap on the
+ * header, or — worst — the trip to sign up and back emptied it, even though
+ * the page promised the order would be waiting. It is kept per store in
+ * sessionStorage: ids and quantities only, the same shape the server is sent,
+ * and never a price. Items no longer on the menu are dropped on the way back
+ * in, and anything unreadable is simply ignored.
+ */
+function useBasket(vendorId, menu) {
+  const key = `campus-dash:basket:${vendorId}`;
+  const [quantities, setQuantities] = useState({});
+  const [restored, setRestored] = useState(false);
+
+  useEffect(() => {
+    let saved = {};
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const onMenu = new Set(menu.filter((m) => m.is_available).map((m) => m.id));
+      saved = Object.fromEntries(
+        Object.entries(parsed).filter(
+          ([id, qty]) => onMenu.has(id) && Number.isInteger(qty) && qty > 0 && qty <= 50
+        )
+      );
+    } catch {
+      // Private mode or blocked storage: start empty, the basket still works.
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring browser-only state after hydration
+    setQuantities(saved);
+    setRestored(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  useEffect(() => {
+    if (!restored) return;
+    try {
+      const kept = Object.fromEntries(Object.entries(quantities).filter(([, q]) => q > 0));
+      if (Object.keys(kept).length) window.sessionStorage.setItem(key, JSON.stringify(kept));
+      else window.sessionStorage.removeItem(key);
+    } catch {
+      // Not being able to remember the basket is not worth interrupting anybody.
+    }
+  }, [key, quantities, restored]);
+
+  return [quantities, setQuantities];
 }

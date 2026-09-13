@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { config } from '@/lib/config';
 import { redirect } from 'next/navigation';
 import SignUpForm from './signup-form';
 import { getCapabilities } from '@/lib/auth/session';
@@ -47,10 +48,14 @@ export default async function SignUpPage({ searchParams }) {
             <SignUpForm next={next} hasAccount={me.authenticated} />
           </Card>
 
-          <p className="text-faint mt-5 text-center text-xs leading-relaxed">
-            In development the verification email is delivered to Mailpit at{' '}
-            <code className="font-mono">127.0.0.1:54324</code>.
-          </p>
+          {/* A developer's note. It was shown to every visitor in production,
+              where "Mailpit" means nothing and reads like something broke. */}
+          {config.isProduction() ? null : (
+            <p className="text-faint mt-5 text-center text-xs leading-relaxed">
+              In development the verification email is delivered to Mailpit at{' '}
+              <code className="font-mono">127.0.0.1:54324</code>.
+            </p>
+          )}
         </div>
       </div>
     </main>

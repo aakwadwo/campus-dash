@@ -62,9 +62,9 @@ export default async function SiteHeader({ active = null }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            <div className="hidden md:block">
-              <AreaSwitcher current="/order" />
-            </div>
+            {/* Every width. On a phone this is the only way a Partner, a store
+                owner or an administrator reaches their other areas from here. */}
+            <AreaSwitcher current="/order" />
             {me.authenticated ? (
               <Link
                 href="/account"
@@ -123,7 +123,7 @@ export default async function SiteHeader({ active = null }) {
                   key={link.href}
                   href={link.href}
                   aria-current={current ? 'page' : undefined}
-                  className={`flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${
+                  className={`press-sm flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors ${
                     current ? 'text-brand-700' : 'text-muted'
                   }`}
                 >
@@ -135,7 +135,7 @@ export default async function SiteHeader({ active = null }) {
             <Link
               href={me.authenticated ? '/account' : '/login'}
               aria-current={active === 'account' ? 'page' : undefined}
-              className={`flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${
+              className={`press-sm flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors ${
                 active === 'account' ? 'text-brand-700' : 'text-muted'
               }`}
             >

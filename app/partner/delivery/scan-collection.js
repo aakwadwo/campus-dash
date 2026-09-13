@@ -2,6 +2,7 @@
 
 import { useActionState } from 'react';
 import { reportScanRedeemedAction, reportScanRefusedAction } from '../actions';
+import { Button, ErrorNote, SuccessNote, TEXT_LINK_CLASS } from '@/app/ui';
 
 /**
  * Collecting a SCAN order.
@@ -34,9 +35,9 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
               href={scanUrl}
               target="_blank"
               rel="noreferrer"
-              className="text-brand-700 mt-3 inline-block text-sm font-semibold underline underline-offset-4"
+              className={`${TEXT_LINK_CLASS} mt-3 inline-flex min-h-11 items-center text-sm`}
             >
-              Open the scan (PDF) →
+              Open the scan (PDF)
             </a>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
@@ -59,13 +60,9 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
 
         <form action={redeem} className="mt-3">
           <input type="hidden" name="order_id" value={orderId} />
-          <button
-            type="submit"
-            disabled={busy}
-            className="press bg-brand-700 w-full rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
-          >
+          <Button type="submit" size="lg" block disabled={busy}>
             {redeeming ? 'Recording…' : 'They accepted it, I have the food'}
-          </button>
+          </Button>
         </form>
         <p className="text-muted mt-2 text-xs">
           Press this only once the food is actually in your hands. It is what releases the
@@ -79,15 +76,11 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
             name="reason"
             required
             placeholder="e.g. the counter said it was already used"
-            className="rounded-input border-line-strong mt-2 w-full border px-3 py-2.5 text-sm transition-colors"
+            className="rounded-input border-line-strong bg-surface focus:border-brand-600 mt-2 h-12 w-full border px-4 text-[15px] transition-colors outline-none"
           />
-          <button
-            type="submit"
-            disabled={busy}
-            className="press border-line-strong mt-2 w-full rounded-full border py-2.5 text-sm font-semibold transition-colors disabled:opacity-55"
-          >
+          <Button type="submit" variant="danger" block disabled={busy} className="mt-2">
             {refusing ? 'Recording…' : 'Report that the scan was refused'}
-          </button>
+          </Button>
         </form>
 
         <Result state={redeemState} />
@@ -99,13 +92,9 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
 
 function Result({ state }) {
   if (!state?.message) return null;
-  return (
-    <p
-      className={`mt-3 rounded-lg px-3 py-2 text-sm ${
-        state.ok ? 'bg-brand-50 text-ink' : 'bg-bad-bg text-bad'
-      }`}
-    >
-      {state.message}
-    </p>
+  return state.ok ? (
+    <SuccessNote className="mt-3">{state.message}</SuccessNote>
+  ) : (
+    <ErrorNote className="mt-3">{state.message}</ErrorNote>
   );
 }

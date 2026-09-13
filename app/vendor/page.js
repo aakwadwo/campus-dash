@@ -1,9 +1,17 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
+import { ButtonLink, TextLink } from '@/app/ui';
 import { getMyVendors } from '@/lib/vendor';
 import { getCapabilities, myLanding } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
+
+const HOME_LABEL = {
+  '/admin': 'Go to the admin console',
+  '/order': 'Order food instead',
+  '/partner': 'Go to Partner deliveries',
+  '/partner/apply': 'Apply to be a Partner',
+  '/signup': 'Finish signing up',
+};
 
 /**
  * One account, one store — so this is almost always a redirect.
@@ -27,22 +35,19 @@ export default async function VendorIndexPage() {
 
   const home = await myLanding();
   return (
-    <main className="mx-auto max-w-3xl px-5 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">No store on this account</h1>
-      <p className="text-muted mt-3 text-sm leading-relaxed">
-        This account does not run a store yet, so there is no order board to show. Registering one
-        takes a minute and does not affect anything else this account can do.
+    <main className="mx-auto max-w-2xl px-4 pt-8 pb-16 sm:px-6 sm:pt-12">
+      <h1 className="text-display text-2xl font-semibold sm:text-3xl">No store on this account</h1>
+      <p className="text-muted mt-3 leading-relaxed">
+        This account does not run a store yet, so there are no orders to show. Registering one takes
+        a minute and does not change anything else this account can do.
       </p>
-      <div className="mt-6 flex flex-wrap gap-3">
-        <Link
-          href="/vendor/signup"
-          className="bg-brand-700 rounded-full px-5 py-2.5 text-sm font-semibold text-white"
-        >
+      <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
+        <ButtonLink href="/vendor/signup" size="lg">
           Register a store
-        </Link>
-        <Link href={home} className="text-brand-700 py-2.5 text-sm font-medium">
-          Go to your own area →
-        </Link>
+        </ButtonLink>
+        <TextLink href={home} className="inline-flex min-h-11 items-center">
+          {HOME_LABEL[home] ?? 'Go to Campus Dash'}
+        </TextLink>
       </div>
     </main>
   );

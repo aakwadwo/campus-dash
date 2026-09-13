@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
 import { customerDetail } from '@/lib/admin';
 import { requireAdmin } from '@/lib/auth/session';
@@ -42,19 +43,20 @@ export default async function AdminCustomerPage({ params }) {
 
   return (
     <>
-      <p className="text-muted mb-2 text-sm">
-        <Link href="/admin/customers" className="underline underline-offset-4">
-          Customers
-        </Link>
-      </p>
+      <BackLink href="/admin/customers" className="mb-2">
+        Customers
+      </BackLink>
 
       <div className="mb-4 flex flex-wrap items-baseline gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">{c.full_name ?? c.phone}</h1>
         {c.is_suspended ? <Badge tone="bad">Suspended</Badge> : <Badge tone="good">Active</Badge>}
         {c.is_admin ? <Badge tone="warn">Admin</Badge> : null}
         {c.partner_status !== 'NOT_APPLIED' ? (
-          <Link href={`/admin/partners/${c.user_id}`} className="text-brand-700 text-sm underline">
-            Partner: {c.partner_status} →
+          <Link
+            href={`/admin/partners/${c.user_id}`}
+            className="text-brand-700 text-sm font-medium underline underline-offset-4"
+          >
+            Partner record ({String(c.partner_status).toLowerCase().replace(/_/g, ' ')})
           </Link>
         ) : null}
       </div>

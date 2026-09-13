@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { formatPesewas, cedisInputFromPesewas } from '@/lib/util/money';
@@ -40,11 +41,9 @@ export default async function VendorDetailPage({ params }) {
   if (vendorError) {
     return (
       <>
-        <p className="text-muted mb-2 text-sm">
-          <Link href="/admin/vendors" className="underline underline-offset-4">
-            Vendors
-          </Link>
-        </p>
+        <BackLink href="/admin/vendors" className="mb-2">
+          Vendors
+        </BackLink>
         <h1 className="mb-4 text-2xl font-semibold tracking-tight">Vendor</h1>
         <Unavailable>
           This vendor could not be loaded. That is not the same as it not existing, so do not create
@@ -89,11 +88,9 @@ export default async function VendorDetailPage({ params }) {
 
   return (
     <>
-      <p className="text-muted mb-2 text-sm">
-        <Link href="/admin/vendors" className="underline underline-offset-4">
-          Vendors
-        </Link>
-      </p>
+      <BackLink href="/admin/vendors" className="mb-2">
+        Vendors
+      </BackLink>
       <h1 className="mb-1 text-2xl font-semibold tracking-tight">{vendor.name}</h1>
       <p className="mb-6 flex items-center gap-2 text-sm">
         <Badge

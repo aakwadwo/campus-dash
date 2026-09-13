@@ -31,9 +31,12 @@ function withExtension(path) {
  * `next/headers` exists only inside a request, but is imported at module top
  * level by lib/supabase/server.js — so anything that transitively reaches it
  * cannot be imported outside Next at all. The stub throws if actually called.
+ * `next/navigation` is stubbed for lib/auth/session.js; see its stub.
  */
 const STUBS = {
   'next/headers': join(ROOT, 'tests', 'helpers', 'stubs', 'next-headers.mjs'),
+  // The client router behind the real module cannot load under react-server.
+  'next/navigation': join(ROOT, 'tests', 'helpers', 'stubs', 'next-navigation.mjs'),
 };
 
 export async function resolve(specifier, context, nextResolve) {

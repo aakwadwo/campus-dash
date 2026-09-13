@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
+import { vendorOnlyHome } from '@/lib/auth/landing';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import { Container } from '../ui';
@@ -20,10 +21,9 @@ import AccountNav from './account-nav';
 export default async function AccountLayout({ children }) {
   const me = await requireUser();
 
-  const ownsStore = Boolean(me.vendor_ids?.length);
-  if (!me.can_order && !me.is_partner && (ownsStore || me.vendor_status !== 'NOT_APPLIED')) {
-    redirect(ownsStore ? '/vendor' : '/vendor/application');
-  }
+  // The same rule the homepage and the marketplace apply, from one place.
+  const vendorHome = vendorOnlyHome(me);
+  if (vendorHome) redirect(vendorHome);
 
   return (
     <div className="min-h-dvh">
@@ -57,22 +57,27 @@ export default async function AccountLayout({ children }) {
  * rather than inside a switcher that implies you already have one.
  */
 function navFor(me) {
-  const items = [{ href: '/account', label: 'Customer', exact: true }];
+  const items = [{ href: '/account', label: 'Overview', exact: true }];
 
   if (me.is_partner) {
-    items.push({ href: '/partner', label: 'Partner' });
+    items.push({ href: '/partner', label: 'Partner deliveries' });
   } else if (me.partner_status === 'PENDING_REVIEW') {
-    items.push({ href: '/partner', label: 'Partner', note: 'Pending', tone: 'warn' });
+    items.push({ href: '/partner', label: 'Partner application', note: 'Pending', tone: 'warn' });
   } else {
-    items.push({ href: '/partner', label: 'Partner' });
+    items.push({ href: '/partner', label: 'Become a Partner' });
   }
 
   items.push({ href: '/account/settings', label: 'Settings' });
 
   if (me.vendor_ids?.length) {
-    items.push({ href: '/vendor', label: 'Your store' });
+    items.push({ href: '/vendor', label: 'Store dashboard' });
   } else if (me.vendor_status && me.vendor_status !== 'NOT_APPLIED') {
-    items.push({ href: '/vendor/application', label: 'Your store', note: 'Pending', tone: 'warn' });
+    items.push({
+      href: '/vendor/application',
+      label: 'Store application',
+      note: 'Pending',
+      tone: 'warn',
+    });
   } else {
     items.push({ href: '/vendor/signup', label: 'Become a Vendor' });
   }

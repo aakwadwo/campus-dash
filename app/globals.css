@@ -287,7 +287,47 @@ h3 {
   transform: scale(0.99);
 }
 
+/* IF IT BEHAVES LIKE A CONTROL, IT LOOKS LIKE ONE UNDER THE THUMB.
+   A phone has no hover, so a text link or a quiet row that only changes on
+   :hover gives no sign it was touched at all. `press-sm` is what the kit puts
+   on every quiet control — back links, header links, list rows, menu entries —
+   and it now shows a soft ground while pressed as well as the small scale.
+
+   In a layer, deliberately: a control that already paints its own ground (a
+   selected filter chip) keeps it, because utilities outrank components. */
+@layer components {
+  .press-sm:active:not(:disabled) {
+    background-color: var(--color-surface-2);
+  }
+  .tap-highlight-none {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* The navigation bar at the top of the screen while the next page is on its
+   way. Server-rendered pages on a campus connection can take a second, and a
+   tap that changes nothing for a second reads as a tap that missed. */
+@keyframes cd-nav-progress {
+  0% {
+    transform: scaleX(0);
+  }
+  60% {
+    transform: scaleX(0.7);
+  }
+  100% {
+    transform: scaleX(0.92);
+  }
+}
+.nav-progress {
+  transform-origin: left;
+  animation: cd-nav-progress 2.4s var(--ease-out-soft) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .nav-progress {
+    animation: none;
+    transform: scaleX(0.6);
+  }
   *,
   *::before,
   *::after {
