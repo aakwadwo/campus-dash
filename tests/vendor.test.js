@@ -89,7 +89,7 @@ describe('vendor module', () => {
     assert.equal(card.bucket, 'NEW', 'it lands in the group that needs making');
     assert.equal(card.item_count, 1);
     // 2 × GH₵35 + 5% + the GH₵5 delivery the customer chose at the checkout.
-    assert.equal(card.total_pesewas, 7850);
+    assert.equal(card.total_pesewas, 7987);
     assert.equal(card.payment_status, 'PAID');
 
     // A QUEUE NUMBER, not a database key. It restarts at 1 each morning.
@@ -544,7 +544,7 @@ describe('vendor module', () => {
     );
     assert.match(onLines.message, /permission denied/i);
 
-    assert.equal((await getOrder(order.order_id)).total_pesewas, 7350);
+    assert.equal((await getOrder(order.order_id)).total_pesewas, 7487);
   });
 
   test('repricing the MENU does not move an order already submitted', async () => {
@@ -567,7 +567,7 @@ describe('vendor module', () => {
     );
 
     const view = await detail(ACTORS.vendor1Staff, order.order_id);
-    assert.equal(view.total_pesewas, 7350);
+    assert.equal(view.total_pesewas, 7487);
     assert.equal(
       view.items[0].unit_price_pesewas,
       3500,

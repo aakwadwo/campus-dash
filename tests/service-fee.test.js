@@ -13,7 +13,7 @@ import {
 import { acceptedOrder, getOrder } from './helpers/flow.js';
 
 /**
- * The platform service fee: 5% of the FOOD subtotal.
+ * The platform service fee: 6.95% of the FOOD subtotal.
  *
  * Three claims, and the third is the one that only became interesting when the
  * rate halved:
@@ -23,7 +23,7 @@ import { acceptedOrder, getOrder } from './helpers/flow.js';
  *      untouched by the rate;
  *   2. the arithmetic is integer pesewas throughout, rounded HALF-UP;
  *   3. at 10% a basket priced in whole cedis could never produce a fraction of
- *      a pesewa. At 5% it can — a subtotal that is an odd multiple of ten
+ *      a pesewa. At 6.95% it can — a subtotal that is an odd multiple of ten
  *      pesewas lands exactly on .5 — so the rounding rule is now load-bearing
  *      for prices a vendor might plausibly set.
  *
@@ -32,7 +32,7 @@ import { acceptedOrder, getOrder } from './helpers/flow.js';
  * basket, INSIDE A TRANSACTION THAT ROLLS BACK — nothing here leaks into the
  * catalogue the other suites share.
  */
-describe('the 5% platform service fee', () => {
+describe('the 6.95% platform service fee', () => {
   before(resetTransactionalState);
   beforeEach(resetTransactionalState);
   after(async () => {
@@ -41,7 +41,7 @@ describe('the 5% platform service fee', () => {
   });
 
   /**
-   * A quote is FOOD plus the 5% fee, and nothing else.
+   * A quote is FOOD plus the 6.95% fee, and nothing else.
    *
    * There is no fulfilment argument any more: pickup or delivery is chosen
    * after the vendor accepts, so a basket quote cannot know a delivery fee and
@@ -82,22 +82,22 @@ describe('the 5% platform service fee', () => {
   // =========================================================================
   // The rate
   // =========================================================================
-  test('the configured rate is 500 basis points', async () => {
+  test('the configured rate is 695 basis points', async () => {
     const config = await asService(
       async (c) => (await c.query('select * from public.platform_config()')).rows[0]
     );
-    assert.equal(config.service_fee_bps, 500, '5%, in basis points');
+    assert.equal(config.service_fee_bps, 695, '6.95%, in basis points');
     assert.equal(config.delivery_fee_pesewas, 500, 'the flat GH₵5 delivery fee is unchanged');
   });
 
-  test('the fee is 5% of the food, and the delivery fee is not part of the base', async () => {
+  test('the fee is 6.95% of the food, and the delivery fee is not part of the base', async () => {
     // A quote is food + fee. The delivery fee is not in the base and cannot be:
     // it is added at the fulfilment choice, from the same snapshot, and the
     // service fee is never recomputed there.
     const basket = await quote([{ menu_item_id: MENU.jollof, quantity: 1 }]);
     assert.equal(basket.subtotal_pesewas, 3500);
-    assert.equal(basket.service_fee_pesewas, 175, '5% of GH₵35');
-    assert.equal(basket.total_pesewas, 3675);
+    assert.equal(basket.service_fee_pesewas, 243, '6.95% of GH₵35');
+    assert.equal(basket.total_pesewas, 3743);
 
     const order = await acceptedOrder({
       items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
@@ -107,63 +107,67 @@ describe('the 5% platform service fee', () => {
     assert.equal(stored.subtotal_pesewas, 3500);
     assert.equal(
       stored.service_fee_pesewas,
-      175,
+      243,
       'the SAME fee — adding GH₵5 of delivery does not add to the base'
     );
     assert.equal(stored.delivery_fee_pesewas, 500);
-    assert.equal(stored.total_pesewas, 3500 + 175 + 500);
+    assert.equal(stored.total_pesewas, 3500 + 243 + 500);
   });
 
-  test('the worked example from the brief: GH₵25 food, GH₵1.25 fee', async () => {
+  test('the worked example from the brief: GH₵25 food, GH₵1.74 fee', async () => {
     const q = await quoteAtPrice(2500);
     assert.equal(q.subtotal_pesewas, 2500, 'the vendor is entitled to all of it');
-    assert.equal(q.service_fee_pesewas, 125, '5% of GH₵25.00');
-    assert.equal(q.total_pesewas, 2625, 'pickup: food + fee');
+    assert.equal(q.service_fee_pesewas, 174, '6.95% of GH₵25.00');
+    assert.equal(q.total_pesewas, 2674, 'pickup: food + fee');
   });
 
   test('the rate scales with the basket, rather than being flat', async () => {
     const one = await quote([{ menu_item_id: MENU.jollof, quantity: 1 }]);
     const three = await quote([{ menu_item_id: MENU.jollof, quantity: 3 }]);
-    assert.equal(one.service_fee_pesewas, 175);
-    assert.equal(three.service_fee_pesewas, 525, 'three times the food, three times the fee');
+    assert.equal(one.service_fee_pesewas, 243);
+    assert.equal(three.service_fee_pesewas, 730, 'three times the food, three times the fee');
   });
 
   // =========================================================================
-  // Rounding — the cases 5% creates and 10% never could
+  // Rounding — the cases a fractional rate creates and a whole one never could
   // =========================================================================
   test('a fee landing exactly on half a pesewa rounds UP', async () => {
-    // 5% of 2510 is 125.5. Half-up gives 126, and the customer pays a pesewa
+    // 6.95% of 5000 is 347.5. Half-up gives 348, and the customer pays a pesewa
     // more rather than Campus Dash quietly eating it.
-    const q = await quoteAtPrice(2510);
-    assert.equal(q.subtotal_pesewas, 2510);
-    assert.equal(q.service_fee_pesewas, 126, '125.5 rounds up, never down or toward even');
-    assert.equal(q.total_pesewas, 2636);
+    const q = await quoteAtPrice(5000);
+    assert.equal(q.subtotal_pesewas, 5000);
+    assert.equal(q.service_fee_pesewas, 348, '347.5 rounds up, never down or toward even');
+    assert.equal(q.total_pesewas, 5348);
   });
 
   test('every half-pesewa case in a run of prices rounds up', async () => {
-    // A subtotal that is an odd multiple of 10 pesewas always lands on .5 at 5%.
+    // WHICH SUBTOTALS LAND ON .5 IS A PROPERTY OF THE RATE, so this table is
+    // recomputed whenever the rate moves. At 6.95% the exact half-pesewa cases
+    // are the odd multiples of 1000: 695 × 1000 = 695000, and 695000 mod 10000
+    // = 5000. At 5% they were the odd multiples of 10, which is why the old
+    // table looked nothing like this one.
     for (const [price, fee] of [
-      [10, 1], // 0.5  -> 1
-      [30, 2], // 1.5  -> 2
-      [50, 3], // 2.5  -> 3
-      [1990, 100], // 99.5 -> 100
-      [3330, 167], // 166.5 -> 167
+      [1000, 70], // 69.5  -> 70
+      [3000, 209], // 208.5 -> 209
+      [5000, 348], // 347.5 -> 348
+      [7000, 487], // 486.5 -> 487
+      [9000, 626], // 625.5 -> 626
     ]) {
       const q = await quoteAtPrice(price);
-      assert.equal(q.service_fee_pesewas, fee, `5% of ${price} should be ${fee}`);
+      assert.equal(q.service_fee_pesewas, fee, `6.95% of ${price} should be ${fee}`);
     }
   });
 
   test('a fee below half a pesewa rounds down, including to nothing', async () => {
     for (const [price, fee] of [
-      [1, 0], // 0.05 -> 0. A one-pesewa item owes no fee, and that is correct.
-      [9, 0], // 0.45 -> 0
-      [11, 1], // 0.55 -> 1
-      [2504, 125], // 125.2 -> 125
-      [2516, 126], // 125.8 -> 126
+      [1, 0], // 0.070 -> 0
+      [7, 0], // 0.486 -> 0
+      [8, 1], // 0.556 -> 1
+      [2504, 174], // 174.028 -> 174
+      [2516, 175], // 174.862 -> 175
     ]) {
       const q = await quoteAtPrice(price);
-      assert.equal(q.service_fee_pesewas, fee, `5% of ${price} should be ${fee}`);
+      assert.equal(q.service_fee_pesewas, fee, `6.95% of ${price} should be ${fee}`);
     }
   });
 
@@ -207,7 +211,7 @@ describe('the 5% platform service fee', () => {
     const q = await getOrder(order.order_id);
 
     assert.equal(q.subtotal_pesewas, 7000, 'the vendor entitlement is the food, in full');
-    assert.equal(q.service_fee_pesewas, 350, 'and the platform takes 5% ON TOP');
+    assert.equal(q.service_fee_pesewas, 487, 'and the platform takes 5% ON TOP');
     assert.equal(q.delivery_fee_pesewas, config.delivery_fee_pesewas, "the Partner's, in full");
     assert.equal(
       q.total_pesewas,

@@ -82,7 +82,7 @@ describe('row level security and authorisation', () => {
       destination: null,
     });
     // 2 × GH₵35.00 = GH₵70.00, + 5% (GH₵3.50) = GH₵73.50.
-    assert.equal(order.total_pesewas, 7350, 'the server priced it, not the client');
+    assert.equal(order.total_pesewas, 7487, 'the server priced it, not the client');
 
     // And the delivery fee is the server's too: the same basket, delivered, is
     // exactly GH₵5 more — a number the client never sends.
@@ -90,7 +90,7 @@ describe('row level security and authorisation', () => {
       items: [{ menu_item_id: '30000000-0000-4000-8000-000000000001', quantity: 2 }],
       customer: ACTORS.customerKwesi,
     });
-    assert.equal(delivered.total_pesewas, 7850);
+    assert.equal(delivered.total_pesewas, 7987);
   });
 
   // --- 6 -------------------------------------------------------------------

@@ -75,6 +75,7 @@ describe('order notifications', () => {
       [NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR],
       [NOTIFICATION_EVENT.ORDER_PREPARING, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_READY, AUDIENCE.CUSTOMER],
+      [NOTIFICATION_EVENT.ORDER_READY, AUDIENCE.PARTNER],
       [NOTIFICATION_EVENT.ORDER_CANCELLED, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_CANCELLED, AUDIENCE.VENDOR],
     ];
@@ -86,6 +87,7 @@ describe('order notifications', () => {
       vendorName: 'Test Kitchen One',
       totalPesewas: 9700,
       itemCount: 2,
+      orderSummary: 'Jollof Rice and 1 more item',
       appUrl: 'https://example.test',
       isPickup: false,
     };
@@ -93,7 +95,13 @@ describe('order notifications', () => {
     for (const [event, audience] of cases) {
       const message = renderSms(event, audience, context);
       assert.ok(message, `${event} -> ${audience} must have copy`);
-      assert.ok(message.includes('007'), 'every message names the order');
+      // EVERY MESSAGE SAYS WHICH ORDER IT IS ABOUT — but not all of them do it
+      // with the number. The payment confirmation names the FOOD, because a
+      // queue number on a lock screen is a thing to go and look up while
+      // "your Jollof Rice" is a thing you recognise. The number is still the
+      // identifier inside the app, where the store is calling it out.
+      const identifiesTheOrder = message.includes('007') || message.includes(context.orderSummary);
+      assert.ok(identifiesTheOrder, `${event} -> ${audience} does not identify the order`);
       assert.ok(!message.includes('undefined'), `${event} -> ${audience} rendered "undefined"`);
       assert.ok(
         message.length <= 320,

@@ -69,7 +69,7 @@ describe('paid-first ordering', () => {
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] });
 
     // 1. PRICED IN FULL AT THE CHECKOUT. GH₵35 + 5% + GH₵5.
-    assert.equal(order.total_pesewas, 4175);
+    assert.equal(order.total_pesewas, 4243);
     assert.equal((await getOrder(order.order_id)).order_status, 'ACCEPTED');
 
     // 2. Nobody has been offered anything: it has not been paid for.
@@ -128,7 +128,7 @@ describe('paid-first ordering', () => {
 
   test('a collection: pay, make it, and the customer types in the code', async () => {
     const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
-    assert.equal(order.total_pesewas, 3675, 'no delivery fee');
+    assert.equal(order.total_pesewas, 3743, 'no delivery fee');
 
     await payOrder(order.order_id);
     const paid = await getOrder(order.order_id);
@@ -308,7 +308,7 @@ describe('paid-first ordering', () => {
     assert.equal(row.vendor_name, 'Test Kitchen One');
     assert.equal(row.fulfilment_type, 'DELIVERY');
     assert.equal(row.item_count, 1);
-    assert.equal(Number(row.total_pesewas), 4175);
+    assert.equal(Number(row.total_pesewas), 4243);
     assert.ok(row.submitted_at);
     assert.equal(row.stage, 'PREPARING_PARTNER_ASSIGNED');
 

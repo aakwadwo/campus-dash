@@ -2113,6 +2113,74 @@ $$;
 ALTER FUNCTION "public"."admin_provider_transaction_ids"("p_provider" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[] DEFAULT '{}'::"uuid"[], "p_order_ids" "uuid"[] DEFAULT '{}'::"uuid"[], "p_reason" "text" DEFAULT NULL::"text") RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_users  uuid[] := coalesce(p_user_ids, '{}');
+  v_orders uuid[] := coalesce(p_order_ids, '{}');
+  v_reason text   := nullif(btrim(coalesce(p_reason, '')), '');
+  v_count  integer;
+  v_events integer := 0;
+begin
+  if not public.is_admin() then
+    raise exception 'administrator access required' using errcode = 'insufficient_privilege';
+  end if;
+
+  -- No ids is not "all rows". A purge has to name what it is forgetting.
+  if array_length(v_users, 1) is null and array_length(v_orders, 1) is null then
+    raise exception 'name the accounts or orders to purge' using errcode = 'check_violation';
+  end if;
+
+  if v_reason is null then
+    raise exception 'a reason is required — it is what the audit log shows'
+      using errcode = 'check_violation';
+  end if;
+
+  -- Transaction-local, and the only thing that opens the trigger's one door.
+  perform set_config('campus_dash.notification_purge', 'on', true);
+
+  delete from public.notification_events
+   where (user_id  = any(v_users))
+      or (order_id = any(v_orders));
+  get diagnostics v_count = row_count;
+
+  -- The order's own history, so the order itself can then be removed. Scoped to
+  -- the named orders; an account with no orders named clears nothing here.
+  delete from public.order_events where order_id = any(v_orders);
+  get diagnostics v_events = row_count;
+
+  -- Shut it again immediately. The flag would die with the transaction anyway;
+  -- closing it here means the rest of this transaction cannot delete more.
+  perform set_config('campus_dash.notification_purge', 'off', true);
+
+  perform public.log_admin_action(
+    'TEST_HISTORY_PURGED',
+    'notification_events',
+    null,
+    v_reason,
+    null,
+    null,
+    jsonb_build_object(
+      'notification_rows_deleted', v_count,
+      'order_event_rows_deleted', v_events,
+      'user_ids', to_jsonb(v_users),
+      'order_ids', to_jsonb(v_orders)
+    )
+  );
+
+  return v_count;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[], "p_order_ids" "uuid"[], "p_reason" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[], "p_order_ids" "uuid"[], "p_reason" "text") IS 'Deletes delivery-log and order-history rows for the named accounts and orders. Administrator only, re-checked in the body; refuses an empty target list and a missing reason; audited to admin_actions. The only thing that may delete from notification_events or order_events. admin_actions itself has no such escape.';
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_reassign_delivery"("p_order_id" "uuid", "p_reason" "text") RETURNS "public"."orders"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3089,7 +3157,7 @@ CREATE TABLE IF NOT EXISTS "public"."pricing_config" (
     "vendor_poll_seconds" integer DEFAULT 8 NOT NULL,
     "partner_poll_seconds" integer DEFAULT 10 NOT NULL,
     "customer_poll_seconds" integer DEFAULT 6 NOT NULL,
-    "service_fee_bps" integer DEFAULT 500 NOT NULL,
+    "service_fee_bps" integer DEFAULT 695 NOT NULL,
     "scan_service_fee_pesewas" bigint DEFAULT 200,
     "max_active_deliveries_per_partner" smallint DEFAULT 2 NOT NULL,
     "code_attempt_limit" integer DEFAULT 5 NOT NULL,
@@ -3128,7 +3196,7 @@ ALTER TABLE "public"."pricing_config" OWNER TO "postgres";
 COMMENT ON TABLE "public"."pricing_config" IS 'Platform configuration. Legacy name — holds timeouts and operational limits as well as fees. One row, id = true.';
 
 
-COMMENT ON COLUMN "public"."pricing_config"."service_fee_bps" IS 'Campus Dash service fee, in basis points of the food subtotal. 500 = 5%.';
+COMMENT ON COLUMN "public"."pricing_config"."service_fee_bps" IS 'Campus Dash service fee, in basis points of the food subtotal. 695 = 6.95%.';
 
 
 COMMENT ON COLUMN "public"."pricing_config"."scan_service_fee_pesewas" IS 'Flat Campus Dash fee for one scan delivery, in pesewas. Currently 200 (GH₵2.00). NULL means not configured, and scan ordering is refused until an administrator sets it. NULL is not the same as 0: 0 would mean the errand is deliberately free.';
@@ -5982,6 +6050,11 @@ CREATE OR REPLACE FUNCTION "public"."notification_events_append_only"() RETURNS 
     AS $$
 begin
   if tg_op = 'DELETE' then
+    -- The one permitted exception: an audited administrative purge, in progress
+    -- in THIS transaction. See admin_purge_notification_events().
+    if coalesce(current_setting('campus_dash.notification_purge', true), '') = 'on' then
+      return old;
+    end if;
     raise exception 'notification_events is append-only; DELETE is not permitted'
       using errcode = 'insufficient_privilege';
   end if;
@@ -6009,6 +6082,30 @@ $$;
 
 
 ALTER FUNCTION "public"."notification_events_append_only"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."notification_events_append_only"() IS 'Keeps notification_events append-only. DELETE is refused unless an audited administrative purge is in progress in the same transaction — a transaction-local flag only admin_purge_notification_events() sets. UPDATE remains limited to provider delivery fields, with no exception at all.';
+
+
+CREATE OR REPLACE FUNCTION "public"."order_events_append_only"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+begin
+  if tg_op = 'DELETE' then
+    if coalesce(current_setting('campus_dash.notification_purge', true), '') = 'on' then
+      return old;
+    end if;
+  end if;
+  raise exception '% is append-only; % is not permitted', tg_table_name, tg_op
+    using errcode = 'insufficient_privilege';
+end;
+$$;
+
+
+ALTER FUNCTION "public"."order_events_append_only"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."order_events_append_only"() IS 'Keeps order_events append-only. DELETE is refused unless an audited administrative purge is in progress in the same transaction. UPDATE and INSERT-over are refused unconditionally. admin_actions deliberately does NOT share this exception.';
 
 
 CREATE OR REPLACE FUNCTION "public"."orders_award_customer_reward"() RETURNS "trigger"
@@ -8160,6 +8257,25 @@ $$;
 ALTER FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") RETURNS integer
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  select count(*)::integer
+    from public.orders o
+   where o.vendor_id = p_vendor_id
+     and o.payment_status = 'PAID'
+     and o.order_status in ('ACCEPTED', 'PREPARING', 'READY')
+     and public.is_vendor_staff(p_vendor_id);
+$$;
+
+
+ALTER FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") IS 'Orders still on this vendor''s board: paid and ACCEPTED, PREPARING or READY. Unlike vendor_pending_count() this includes READY, so the board can tell when a handoff has taken an order off it. Staff-only, enforced by is_vendor_staff() in the body.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."vendor_images" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "vendor_id" "uuid" NOT NULL,
@@ -9629,7 +9745,7 @@ CREATE OR REPLACE TRIGGER "menu_items_set_updated_at" BEFORE UPDATE ON "public".
 CREATE OR REPLACE TRIGGER "notification_events_append_only" BEFORE DELETE OR UPDATE ON "public"."notification_events" FOR EACH ROW EXECUTE FUNCTION "public"."notification_events_append_only"();
 
 
-CREATE OR REPLACE TRIGGER "order_events_append_only" BEFORE DELETE OR UPDATE ON "public"."order_events" FOR EACH ROW EXECUTE FUNCTION "public"."forbid_mutation"();
+CREATE OR REPLACE TRIGGER "order_events_append_only" BEFORE DELETE OR UPDATE ON "public"."order_events" FOR EACH ROW EXECUTE FUNCTION "public"."order_events_append_only"();
 
 
 CREATE OR REPLACE TRIGGER "order_scans_set_updated_at" BEFORE UPDATE ON "public"."order_scans" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
@@ -10324,6 +10440,11 @@ GRANT ALL ON FUNCTION "public"."admin_provider_transaction_ids"("p_provider" "te
 GRANT ALL ON FUNCTION "public"."admin_provider_transaction_ids"("p_provider" "text") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[], "p_order_ids" "uuid"[], "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[], "p_order_ids" "uuid"[], "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_purge_test_history"("p_user_ids" "uuid"[], "p_order_ids" "uuid"[], "p_reason" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_reassign_delivery"("p_order_id" "uuid", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_reassign_delivery"("p_order_id" "uuid", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_reassign_delivery"("p_order_id" "uuid", "p_reason" "text") TO "authenticated";
@@ -10817,6 +10938,10 @@ REVOKE ALL ON FUNCTION "public"."notification_events_append_only"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notification_events_append_only"() TO "service_role";
 
 
+REVOKE ALL ON FUNCTION "public"."order_events_append_only"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."order_events_append_only"() TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."orders_award_customer_reward"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."orders_award_customer_reward"() TO "service_role";
 
@@ -11035,6 +11160,11 @@ GRANT ALL ON FUNCTION "public"."users_sync_full_name"() TO "service_role";
 
 REVOKE ALL ON FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_accept_order"("p_order_id" "uuid") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_active_count"("p_vendor_id" "uuid") TO "authenticated";
 
 
 GRANT ALL ON TABLE "public"."vendor_images" TO "service_role";

@@ -129,7 +129,7 @@ describe('end to end', () => {
     // 1–4. Customer picks a store, food, delivery and a room, and is quoted the
     // FINAL price: 2×GH₵35 + GH₵3 food, +5% (GH₵3.65), + GH₵5 delivery.
     const { quote, order } = await customerOrders();
-    assert.equal(quote.total_pesewas, 8165);
+    assert.equal(quote.total_pesewas, 8307);
     assert.equal(order.total_pesewas, quote.total_pesewas, 'quoted and submitted agree');
     assert.equal(order.vendor_order_no, 1, 'the number the store will call out');
 
@@ -286,8 +286,8 @@ describe('end to end', () => {
     );
     assert.equal(money.vendor_allocation, 7300, 'the food');
     assert.equal(money.partner_allocation, 500, 'the delivery fee');
-    assert.equal(money.platform_allocation, 365, 'the service fee');
-    assert.equal(money.allocated_pesewas, 8165);
+    assert.equal(money.platform_allocation, 507, 'the service fee');
+    assert.equal(money.allocated_pesewas, 8307);
     assert.equal(money.balances, true);
 
     // 25–26. Vendor daily, Partner weekly.
@@ -646,7 +646,7 @@ describe('end to end', () => {
     assert.equal(allocations.length, 2, 'the ledger is written once');
     assert.equal(
       allocations.reduce((sum, a) => sum + a.amount_pesewas, 0),
-      8165
+      8307
     );
   });
 

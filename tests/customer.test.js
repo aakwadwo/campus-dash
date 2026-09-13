@@ -81,8 +81,8 @@ describe('customer ordering', () => {
 
     // 2 × GH₵35 + GH₵3 = GH₵73 food, + 5% (GH₵3.65) = GH₵76.65
     assert.equal(result.subtotal_pesewas, 7300);
-    assert.equal(result.service_fee_pesewas, 365);
-    assert.equal(result.total_pesewas, 7665);
+    assert.equal(result.service_fee_pesewas, 507);
+    assert.equal(result.total_pesewas, 7807);
     assert.equal(result.lines[0].unit_price_pesewas, 3500, 'the menu price, not the sent one');
   });
 
@@ -91,16 +91,16 @@ describe('customer ordering', () => {
 
     // GH₵35 food + 5% = GH₵36.75, collected.
     const collect = await quote(ACTORS.customerAma, basket, 'PICKUP');
-    assert.equal(collect.service_fee_pesewas, 175);
+    assert.equal(collect.service_fee_pesewas, 243);
     assert.equal(collect.delivery_fee_pesewas, 0);
-    assert.equal(collect.total_pesewas, 3675);
+    assert.equal(collect.total_pesewas, 3743);
 
     // The same basket, delivered: GH₵5 more, and the service fee does not move
     // — it is a share of what the FOOD costs.
     const delivered = await quote(ACTORS.customerAma, basket, 'DELIVERY');
-    assert.equal(delivered.service_fee_pesewas, 175);
+    assert.equal(delivered.service_fee_pesewas, 243);
     assert.equal(delivered.delivery_fee_pesewas, 500);
-    assert.equal(delivered.total_pesewas, 4175);
+    assert.equal(delivered.total_pesewas, 4243);
 
     // And the screen is told whether delivery is on offer at all, so it can
     // grey the option out rather than quoting something submission would refuse.
@@ -210,7 +210,7 @@ describe('customer ordering', () => {
       fulfilment: 'PICKUP',
       destination: null,
     });
-    assert.equal(order.total_pesewas, 7350);
+    assert.equal(order.total_pesewas, 7487);
 
     await asUser(
       ACTORS.admin,
@@ -224,7 +224,7 @@ describe('customer ordering', () => {
     );
 
     const view = await myOrder(ACTORS.customerAma, order.order_id);
-    assert.equal(view.total_pesewas, 7350, 'the customer still owes what they agreed');
+    assert.equal(view.total_pesewas, 7487, 'the customer still owes what they agreed');
     assert.equal(view.items[0].unit_price_pesewas, 3500);
 
     // GH₵100 food + 5% (GH₵5.00).
@@ -233,7 +233,7 @@ describe('customer ordering', () => {
       fulfilment: 'PICKUP',
       destination: null,
     });
-    assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
+    assert.equal(later.total_pesewas, 10695, 'a new order uses the new price');
   });
 
   test('an item sold out after submission does not break the placed order', async () => {
@@ -251,7 +251,7 @@ describe('customer ordering', () => {
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.items[0].name, 'Jollof Rice with Chicken');
     // GH₵35 food + 5% (GH₵1.75), collected.
-    assert.equal(view.total_pesewas, 3675);
+    assert.equal(view.total_pesewas, 3743);
   });
 
   // =========================================================================

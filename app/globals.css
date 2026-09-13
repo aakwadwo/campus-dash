@@ -198,6 +198,19 @@ h3 {
    wholesale under prefers-reduced-motion — including the skeleton shimmer,
    which is the one people forget. */
 
+/* The tick on the vendor board's "collected" confirmation draws itself rather
+   than fading in — the difference between a thing that happened and a thing
+   that was always there. One use, on one screen; see CollectedToast. Disabled
+   wholesale under prefers-reduced-motion with everything else below. */
+@keyframes cd-draw {
+  from {
+    stroke-dashoffset: 32;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 @keyframes cd-fade-up {
   from {
     opacity: 0;

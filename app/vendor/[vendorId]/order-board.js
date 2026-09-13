@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useRef, useState } from 'react';
+import { useActionState, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { setAcceptingOrdersAction } from '../actions';
@@ -47,6 +47,11 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
   const router = useRouter();
   const [openState, toggleOpen, toggling] = useActionState(setAcceptingOrdersAction, {});
   const pending = buckets.NEW.length;
+  // Shown when a handoff takes an order off the board, then cleared. Held here
+  // rather than in the row, because by the time it fires the row is gone.
+  const [collected, setCollected] = useState(0);
+
+  const announceCompleted = useCallback((count) => setCollected(count), []);
 
   useNewOrderAlert({
     vendorId: vendor.vendor_id,
@@ -54,10 +59,12 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
     initialPending,
     pollMs,
     onChange: () => router.refresh(),
+    onCompleted: announceCompleted,
   });
 
   return (
     <main className="mx-auto max-w-2xl px-4 pt-4 pb-16">
+      <CollectedToast count={collected} onDone={() => setCollected(0)} />
       <header className="mb-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -224,8 +231,11 @@ function Age({ seconds }) {
  * number goes UP the page refreshes and a short tone plays, because a phone on
  * a counter is not being watched.
  */
-function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange }) {
+function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange, onCompleted }) {
   const previous = useRef(initialPending ?? pending);
+  // Starts unknown: the first poll establishes the baseline rather than
+  // reporting a completion that happened before this screen was open.
+  const previousActive = useRef(null);
 
   useEffect(() => {
     document.title =
@@ -239,14 +249,31 @@ function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange 
       try {
         const response = await fetch(`/api/vendor/${vendorId}/pending`, { cache: 'no-store' });
         if (!response.ok) return;
-        const { pending: latest } = await response.json();
+        const { pending: latest, active } = await response.json();
         if (cancelled) return;
 
+        // A NEW ORDER: chime, and pull the board.
         if (latest > previous.current) {
           beep();
           onChange();
+        } else if (latest !== previous.current) {
+          // IT WENT DOWN, which used to be ignored entirely — the old poll only
+          // refreshed on an increase, so an order that left the board stayed on
+          // screen until somebody reloaded. No chime: nothing needs doing.
+          onChange();
         }
         previous.current = latest;
+
+        // AN ORDER LEFT THE BOARD. Only `active` counts READY, so this is the
+        // only signal that moves when a handoff completes an order.
+        if (typeof active === 'number') {
+          const before = previousActive.current;
+          if (before !== null && active < before) {
+            onCompleted(before - active);
+            onChange();
+          }
+          previousActive.current = active;
+        }
       } catch {
         // Offline or a flaky counter connection: try again on the next tick.
       }
@@ -257,7 +284,64 @@ function useNewOrderAlert({ vendorId, pending, initialPending, pollMs, onChange 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [vendorId, pollMs, onChange]);
+  }, [vendorId, pollMs, onChange, onCompleted]);
+}
+
+/**
+ * "Collected" — the one flourish on this screen.
+ *
+ * It exists because a handoff is the only thing that happens to a vendor's
+ * board WITHOUT them touching it: the customer types the code at the counter
+ * and the row vanishes. Without a word, that reads as the app losing an order.
+ *
+ * Deliberately small. A tick that draws itself, a line of text, gone in two and
+ * a half seconds — the shape of a payment confirmation rather than a
+ * celebration. It does not block the board, cannot be clicked, and is announced
+ * politely to a screen reader instead of stealing focus from whatever the
+ * person was doing. Nothing else on this screen animates.
+ */
+function CollectedToast({ count, onDone }) {
+  useEffect(() => {
+    if (!count) return undefined;
+    const timer = setTimeout(onDone, 2500);
+    return () => clearTimeout(timer);
+  }, [count, onDone]);
+
+  if (!count) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none sticky top-2 z-30 mb-3 motion-safe:animate-[cd-fade-up_220ms_ease-out]"
+    >
+      <div className="border-good/30 bg-good/10 rounded-card flex items-center gap-3 border px-4 py-3 shadow-sm backdrop-blur">
+        <span className="bg-good grid size-7 shrink-0 place-items-center rounded-full">
+          <svg
+            aria-hidden
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="size-4"
+          >
+            {/* 32 is a little over the path length, so the dash draws the tick
+                on rather than fading a finished one in. */}
+            <path
+              d="m20 6-11 11-5-5"
+              className="motion-safe:animate-[cd-draw_320ms_ease-out_both]"
+              style={{ strokeDasharray: 32 }}
+            />
+          </svg>
+        </span>
+        <p className="text-sm font-semibold">
+          {count === 1 ? 'Order collected' : `${count} orders collected`}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 /** Two short tones via Web Audio — no asset to load, no permission to ask for. */

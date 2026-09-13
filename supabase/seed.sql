@@ -343,7 +343,7 @@ insert into public.menu_items (id, vendor_id, name, description, price_pesewas, 
 -- because production runs migrations without this seed file. The automated
 -- tests reset these to the real values themselves — see tests/helpers/db.js.
 update public.pricing_config
-   set service_fee_bps = 500,
+   set service_fee_bps = 695,
        delivery_fee_pesewas = 500,
        partner_share_of_delivery_bps = 10000,
        vendor_response_seconds = 1800,

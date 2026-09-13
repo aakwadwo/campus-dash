@@ -357,7 +357,7 @@ describe('state transitions', () => {
       destination: null,
     });
     // 2 × GH₵35 + 5%. Collection, so no delivery fee.
-    assert.equal(order.total_pesewas, 7350);
+    assert.equal(order.total_pesewas, 7487);
 
     // The vendor raises the price from GH₵35.00 to GH₵50.00.
     await asService((c) =>
@@ -366,7 +366,7 @@ describe('state transitions', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, 7000, 'the snapshot holds');
-    assert.equal(stored.total_pesewas, 7350);
+    assert.equal(stored.total_pesewas, 7487);
 
     const items = await asService(
       async (c) =>
@@ -383,7 +383,7 @@ describe('state transitions', () => {
       destination: null,
     });
     // 2 × GH₵50 + 5%.
-    assert.equal(later.total_pesewas, 10500, 'the new order uses the new price');
+    assert.equal(later.total_pesewas, 10695, 'the new order uses the new price');
   });
 
   test('an unavailable menu item cannot be ordered', async () => {
@@ -420,7 +420,7 @@ describe('state transitions', () => {
     const order = await acceptedOrder({ fulfilment: 'PICKUP', destination: null });
     assert.equal(
       (await getOrder(order.order_id)).total_pesewas,
-      3675,
+      3743,
       'no delivery fee on a pickup order'
     );
     await payOrder(order.order_id);

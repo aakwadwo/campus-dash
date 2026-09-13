@@ -132,7 +132,7 @@ describe('admin — menus and prices', () => {
       destination: null,
     });
     // 2 × GH₵35 + 5% (GH₵3.50). Collected, so no delivery fee.
-    assert.equal(order.total_pesewas, 7350);
+    assert.equal(order.total_pesewas, 7487);
 
     await admin('select * from public.admin_update_menu_item($1, $2, null, null, $3)', [
       MENU.jollof,
@@ -142,7 +142,7 @@ describe('admin — menus and prices', () => {
 
     const stored = await getOrder(order.order_id);
     assert.equal(stored.subtotal_pesewas, 7000, 'the snapshot holds');
-    assert.equal(stored.total_pesewas, 7350);
+    assert.equal(stored.total_pesewas, 7487);
 
     const items = await asService(
       async (c) =>
@@ -157,7 +157,7 @@ describe('admin — menus and prices', () => {
       destination: null,
     });
     // GH₵100 food + 5%.
-    assert.equal(later.total_pesewas, 10500, 'a new order uses the new price');
+    assert.equal(later.total_pesewas, 10695, 'a new order uses the new price');
   });
 
   test('a price change is audited distinctly, with before and after', async () => {

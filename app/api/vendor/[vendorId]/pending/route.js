@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getPendingCount } from '@/lib/vendor';
+import { getPendingCount, getActiveCount } from '@/lib/vendor';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,8 +14,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(_request, { params }) {
   const { vendorId } = await params;
   try {
-    const pending = await getPendingCount(vendorId);
-    return NextResponse.json({ pending: pending ?? 0 });
+    // Both counts in one round trip: `pending` drives the badge and the chime,
+    // `active` is the only one that moves when a handoff completes an order.
+    const [pending, active] = await Promise.all([
+      getPendingCount(vendorId),
+      getActiveCount(vendorId),
+    ]);
+    return NextResponse.json({ pending: pending ?? 0, active: active ?? 0 });
   } catch {
     return NextResponse.json({ pending: 0 }, { status: 200 });
   }
