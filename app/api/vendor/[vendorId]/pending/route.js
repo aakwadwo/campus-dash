@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPendingCount, getActiveCount } from '@/lib/vendor';
+import { startTiming } from '@/lib/observability/server-timing';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,14 +14,17 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(_request, { params }) {
   const { vendorId } = await params;
+  const timing = startTiming();
   try {
     // Both counts in one round trip: `pending` drives the badge and the chime,
     // `active` is the only one that moves when a handoff completes an order.
-    const [pending, active] = await Promise.all([
-      getPendingCount(vendorId),
-      getActiveCount(vendorId),
-    ]);
-    return NextResponse.json({ pending: pending ?? 0, active: active ?? 0 });
+    const [pending, active] = await timing.measure('db', () =>
+      Promise.all([getPendingCount(vendorId), getActiveCount(vendorId)])
+    );
+    return NextResponse.json(
+      { pending: pending ?? 0, active: active ?? 0 },
+      { headers: { 'Server-Timing': timing.header() } }
+    );
   } catch {
     return NextResponse.json({ pending: 0 }, { status: 200 });
   }

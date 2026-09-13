@@ -60,7 +60,7 @@ export default function ScanCollection({ orderId, scanUrl, restaurantName }) {
 
         <form action={redeem} className="mt-3">
           <input type="hidden" name="order_id" value={orderId} />
-          <Button type="submit" size="lg" block disabled={busy}>
+          <Button type="submit" size="lg" block pending={busy}>
             {redeeming ? 'Recording…' : 'They accepted it, I have the food'}
           </Button>
         </form>

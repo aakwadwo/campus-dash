@@ -25,30 +25,22 @@ export default function OfferList({ offers, pollMs = 10000 }) {
   // Which offer was pressed, so only THAT button says "Accepting…" — the others
   // are disabled while it is in flight, but they did not do anything.
   const [pressed, setPressed] = useState(null);
-  const [state, accept, accepting] = useActionState(async (previous, formData) => {
-    const result = await acceptDeliveryAction(previous, formData);
-    return { ...result, orderId: String(formData.get('order_id') ?? '') };
-  }, {});
-
-  // ACCEPTED MEANS GO. A successful accept used to leave the Partner on this
-  // list with the card silently gone, and the next step — where to walk — a
-  // back-tap and another tap away. The delivery screen is the next step.
-  useEffect(() => {
-    if (state.ok && state.orderId) router.push(`/partner/delivery?order=${state.orderId}`);
-  }, [state, router]);
-
-  const leaving = Boolean(state.ok && state.orderId);
+  // ACCEPTED MEANS GO. The action redirects to the delivery screen itself, so a
+  // win arrives as that screen, in the same response — it used to re-render this
+  // list first and then make a second trip with router.push. A loss comes back
+  // here as a message, and `accepting` stays true until one or the other lands.
+  const [state, accept, accepting] = useActionState(acceptDeliveryAction, {});
 
   // Offers go stale fast: somebody else is looking at this list too. Paused
-  // once one is accepted, so a refresh cannot pull the page out from under the
-  // navigation.
+  // while an accept is in flight, so a refresh cannot pull the page out from
+  // under the navigation it is about to become.
   useEffect(() => {
-    if (leaving) return undefined;
+    if (accepting) return undefined;
     const timer = setInterval(() => router.refresh(), pollMs);
     return () => clearInterval(timer);
-  }, [router, pollMs, leaving]);
+  }, [router, pollMs, accepting]);
 
-  if (offers.length === 0 && !leaving) {
+  if (offers.length === 0 && !accepting) {
     return (
       <div className="bg-surface border-line rounded-card mt-5 border">
         <EmptyState
@@ -122,12 +114,14 @@ export default function OfferList({ offers, pollMs = 10000 }) {
 
             <form action={accept} onSubmit={() => setPressed(offer.order_id)} className="mt-4">
               <input type="hidden" name="order_id" value={offer.order_id} />
-              <Button type="submit" size="lg" block disabled={accepting || leaving}>
-                {pressed === offer.order_id && (accepting || leaving)
-                  ? leaving
-                    ? 'Accepted. Opening…'
-                    : 'Accepting…'
-                  : 'Accept this order'}
+              <Button
+                type="submit"
+                size="lg"
+                block
+                disabled={accepting}
+                pending={accepting && pressed === offer.order_id}
+              >
+                {accepting && pressed === offer.order_id ? 'Accepting…' : 'Accept this order'}
               </Button>
             </form>
           </li>

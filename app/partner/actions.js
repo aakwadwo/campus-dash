@@ -5,6 +5,7 @@ const CONTEXT = 'partner action';
 import { actionFailure } from '@/lib/errors';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import * as partner from '@/lib/partner';
 import * as scan from '@/lib/scan';
 
@@ -30,6 +31,11 @@ function outcome(result, successMessage) {
     : { ok: false, message: result.reason ?? 'That is no longer possible.' };
 }
 
+/**
+ * `paths` are PAGES, not layouts. The Partner layout draws a header and an area
+ * switcher and nothing about a delivery, so invalidating it with every job
+ * (as `'layout'` on /partner did) re-derived nothing that could have changed.
+ */
 async function run(fn, successMessage, paths = ['/partner']) {
   let result;
   try {
@@ -37,7 +43,7 @@ async function run(fn, successMessage, paths = ['/partner']) {
   } catch (error) {
     return fail(error);
   }
-  paths.forEach((path) => revalidatePath(path, 'layout'));
+  paths.forEach((path) => revalidatePath(path));
   return outcome(result, successMessage);
 }
 
@@ -86,16 +92,34 @@ export async function setAvailabilityAction(formData) {
   } catch (error) {
     return fail(error);
   }
-  revalidatePath('/partner', 'layout');
+  // Home, where the switch is, and the offer list, which is empty while offline.
+  revalidatePath('/partner');
+  revalidatePath('/partner/offers');
   return { ok: true };
 }
 
+/**
+ * First valid acceptance wins, and that is decided in partner_accept_delivery()
+ * — atomically, with the slot index behind it. Nothing here changes that.
+ *
+ * A WIN REDIRECTS. The next thing a Partner needs is where to walk, so the
+ * delivery screen comes back as this action's response instead of the offer
+ * list being re-rendered first and then navigated away from. redirect() throws,
+ * so it sits outside the try; a loss or an error returns a message as before.
+ */
 export async function acceptDeliveryAction(_prev, formData) {
-  return run(
-    () => partner.acceptDelivery(String(formData.get('order_id') ?? '')),
-    'Delivery accepted. Head to the vendor.',
-    ['/partner', '/partner/offers', '/partner/delivery']
-  );
+  const orderId = String(formData.get('order_id') ?? '');
+  let result;
+  try {
+    result = await partner.acceptDelivery(orderId);
+  } catch (error) {
+    return fail(error);
+  }
+  if (!result.success) return outcome(result);
+
+  // Home lists what this Partner is carrying.
+  revalidatePath('/partner');
+  redirect(`/partner/delivery?order=${encodeURIComponent(orderId)}`);
 }
 
 export async function cancelDeliveryAction(_prev, formData) {

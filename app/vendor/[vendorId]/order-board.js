@@ -90,7 +90,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
           <input type="hidden" name="accepting" value={open ? 'false' : 'true'} />
           {/* OPENING is the primary action when closed; closing is a quiet one,
               because it is the button nobody should hit by accident. */}
-          <Button type="submit" variant={open ? 'secondary' : 'primary'} disabled={toggling}>
+          <Button type="submit" variant={open ? 'secondary' : 'primary'} pending={toggling}>
             {toggling ? (open ? 'Closing…' : 'Opening…') : open ? 'Close store' : 'Open store'}
           </Button>
         </form>

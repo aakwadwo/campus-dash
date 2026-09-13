@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { processPaymentWebhook } from '@/lib/payments/webhook';
+import { startTiming } from '@/lib/observability/server-timing';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,14 +23,23 @@ export async function POST(request, { params }) {
   const { provider } = await params;
   const rawBody = await request.text();
   const headers = Object.fromEntries(request.headers.entries());
+  const timing = startTiming();
 
+  // Verification, idempotency and the state change all happen inside here. The
+  // messages they trigger are scheduled for after the response — see
+  // lib/notifications/defer.js — so `app` is the time Paystack actually waits.
   const {
     status,
     body,
     headers: responseHeaders,
-  } = await processPaymentWebhook({ provider, rawBody, headers });
+  } = await timing.measure('app', () => processPaymentWebhook({ provider, rawBody, headers }));
+
+  console.log(`[timing] payment-webhook status=${status} ${timing.summary()}`);
 
   // Retry-After rides along on a throttled response, so a caller that is simply
   // misconfigured rather than hostile is told when to come back.
-  return NextResponse.json(body, { status, headers: responseHeaders });
+  return NextResponse.json(body, {
+    status,
+    headers: { ...responseHeaders, 'Server-Timing': timing.header() },
+  });
 }

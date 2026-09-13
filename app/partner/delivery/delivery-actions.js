@@ -69,7 +69,7 @@ export default function DeliveryActions({ delivery, isScan = false }) {
             Code from the store
           </label>
           <CodeInput name="pickup_code" label="Code from the store" disabled={confirmingPickup} />
-          <Button type="submit" size="lg" block disabled={confirmingPickup} className="mt-3">
+          <Button type="submit" size="lg" block pending={confirmingPickup} className="mt-3">
             {confirmingPickup ? 'Checking…' : 'Confirm pickup'}
           </Button>
         </form>
@@ -87,7 +87,7 @@ export default function DeliveryActions({ delivery, isScan = false }) {
               label="Delivery code from the customer"
               disabled={completing}
             />
-            <Button type="submit" size="lg" block disabled={completing} className="mt-3">
+            <Button type="submit" size="lg" block pending={completing} className="mt-3">
               {completing ? 'Confirming…' : 'Complete delivery'}
             </Button>
           </form>
@@ -115,7 +115,7 @@ export default function DeliveryActions({ delivery, isScan = false }) {
             <Button type="button" variant="secondary" onClick={() => setShowCancel(false)}>
               Keep it
             </Button>
-            <Button type="submit" variant="danger" disabled={cancelling} className="flex-1">
+            <Button type="submit" variant="danger" pending={cancelling} className="flex-1">
               {cancelling ? 'Giving it back…' : 'Give this order back'}
             </Button>
           </div>
@@ -157,7 +157,7 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
     return (
       <form action={report}>
         {hidden}
-        <Button type="submit" variant="secondary" block disabled={reporting}>
+        <Button type="submit" variant="secondary" block pending={reporting}>
           {reporting ? 'Recording…' : 'Customer is not responding'}
         </Button>
       </form>
@@ -184,7 +184,7 @@ function AbsenceFlow({ delivery, hidden, report, reporting, confirmAbsent, confi
         You have waited long enough. Closing this records your earning and hands the food question
         to Campus Dash support.
       </p>
-      <Button type="submit" variant="danger" block disabled={confirming} className="mt-3">
+      <Button type="submit" variant="danger" block pending={confirming} className="mt-3">
         {confirming ? 'Closing…' : 'Close as customer absent'}
       </Button>
     </form>

@@ -50,7 +50,8 @@ export default function AvailabilityToggle({ available, hasActive }) {
           type="submit"
           variant={available ? 'secondary' : 'primary'}
           size={available ? 'md' : 'lg'}
-          disabled={pending || hasActive}
+          pending={pending}
+          disabled={hasActive}
           className={available ? '' : 'w-full sm:w-auto'}
         >
           {pending

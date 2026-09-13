@@ -114,7 +114,7 @@ export default function OrderStatus({
               placeholder="you@example.com"
             />
           </Field>
-          <Button type="submit" size="lg" block disabled={savingEmail}>
+          <Button type="submit" size="lg" block pending={savingEmail}>
             {savingEmail ? 'Saving…' : 'Save and continue'}
           </Button>
           {emailState.message && !emailState.ok ? (
@@ -145,7 +145,7 @@ export default function OrderStatus({
       <div>
         <form action={pay}>
           <input type="hidden" name="order_id" value={order.order_id} />
-          <Button type="submit" size="lg" block disabled={paying || leaving}>
+          <Button type="submit" size="lg" block pending={paying || leaving}>
             {paying || leaving ? 'Opening payment…' : `Pay ${formatPesewas(order.total_pesewas)}`}
           </Button>
           {payState.message && !payState.ok ? (
@@ -205,7 +205,7 @@ export default function OrderStatus({
           them for the 4-digit code and enter it here to collect.
         </label>
         <CodeInput name="pickup_code" label="Code from the store" disabled={completing} />
-        <Button type="submit" size="lg" block disabled={completing}>
+        <Button type="submit" size="lg" block pending={completing}>
           {completing ? 'Checking…' : 'Confirm collection'}
         </Button>
         {pickupState.message ? (
@@ -250,13 +250,20 @@ export default function OrderStatus({
       <div className="space-y-2">
         <form action={keepWaiting}>
           <input type="hidden" name="order_id" value={order.order_id} />
-          <Button type="submit" size="lg" block disabled={waitingAgain}>
+          <Button type="submit" size="lg" block pending={waitingAgain} disabled={collecting}>
             {waitingAgain ? 'Looking…' : 'Keep looking for a Partner'}
           </Button>
         </form>
         <form action={collectInstead}>
           <input type="hidden" name="order_id" value={order.order_id} />
-          <Button type="submit" variant="secondary" size="lg" block disabled={collecting}>
+          <Button
+            type="submit"
+            variant="secondary"
+            size="lg"
+            block
+            pending={collecting}
+            disabled={waitingAgain}
+          >
             {collecting ? 'Updating…' : 'I will collect it myself'}
           </Button>
         </form>
@@ -344,7 +351,7 @@ function FulfilmentChoice({ order, options, locations, action, pending, state, o
         <Button type="button" variant="secondary" onClick={onCancel} disabled={pending}>
           Cancel
         </Button>
-        <Button type="submit" size="lg" className="flex-1" disabled={pending}>
+        <Button type="submit" size="lg" className="flex-1" pending={pending}>
           {pending ? 'Saving…' : 'Save'}
         </Button>
       </div>
