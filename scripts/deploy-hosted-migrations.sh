@@ -15,7 +15,9 @@ for m in \
   20260926000001_admin_dashboard_totals \
   20260927000001_phone_collision_safe_provisioning \
   20260928000001_service_fee_six_ninety_five \
-  20260928000002_vendor_active_count
+  20260928000002_vendor_active_count \
+  20260930000001_vendor_sees_only_their_amount \
+  20260930000002_vendor_reads_only_through_rpcs
 do
   echo "--> $m"
   psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q \
@@ -30,6 +32,13 @@ select 'admin_dashboard_totals   = ' || count(*) from pg_proc p join pg_namespac
   where n.nspname='public' and p.proname='admin_dashboard_totals';
 select 'vendor_active_count      = ' || count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.proname='vendor_active_count';
+select 'board returns vendor amt = ' || count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname='vendor_order_board'
+    and pg_get_function_result(p.oid) like '%vendor_amount_pesewas%';
+select 'vendor_daily_sales       = ' || count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname='vendor_daily_sales';
+select 'orders_read_vendor gone  = ' || (count(*) = 0) from pg_policy
+  where polrelid='public.orders'::regclass and polname='orders_read_vendor';
 select 'phone collision fix      = ' || count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.proname='handle_new_auth_user_for'
     and p.prosrc like '%already belongs to another identity%';"
