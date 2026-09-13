@@ -12,7 +12,6 @@ import {
   removeImage,
   setPayoutDestination,
   setMenuItemAvailable,
-  getOrderDetail,
 } from '@/lib/vendor';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
@@ -48,14 +47,14 @@ function fail(error) {
   return actionFailure(error, CONTEXT);
 }
 
-async function run(fn, successMessage, vendorId) {
+async function run(fn, successMessage, paths) {
   let result;
   try {
     result = await fn();
   } catch (error) {
     return fail(error);
   }
-  revalidatePath(`/vendor/${vendorId}`, 'layout');
+  paths.forEach((path) => revalidatePath(path));
   return outcome(result, successMessage);
 }
 
@@ -72,27 +71,19 @@ const str = (formData, key) => {
  */
 export async function markReadyAction(_prev, formData) {
   const orderId = str(formData, 'order_id');
-  const result = await run(
+  const vendorId = str(formData, 'vendor_id');
+  // The order screen this was pressed on, and the board it returns to. Nothing
+  // else a store sees changes when one order is made.
+  //
+  // NO READ-BACK. This used to fetch the order again only to choose between two
+  // wordings. The screen is re-rendered from the server in this same response,
+  // and it already says which case it is — the code to read out, or "Waiting for
+  // a Partner" — so the extra round trip bought a sentence the page now shows.
+  return run(
     () => vendorMarkReady(orderId),
     'Ready for pickup. Read the code out to whoever collects it.',
-    str(formData, 'vendor_id')
+    [`/vendor/${vendorId}`, `/vendor/${vendorId}/orders/${orderId}`]
   );
-  if (!result.ok) return result;
-
-  // A DELIVERY NOBODY HAS TAKEN YET has no one at the counter and no code to
-  // read out, so saying so would send the store looking for a Partner who does
-  // not exist. The wording is chosen from the order as it now stands; the
-  // transition itself is unchanged. If the order cannot be read back, the
-  // general message stands.
-  const order = await getOrderDetail(orderId).catch(() => null);
-  if (order?.fulfilment_type === 'DELIVERY' && !order.partner_assigned) {
-    return {
-      ok: true,
-      message:
-        'Ready for pickup. It is waiting for a Partner, and the code appears here when one arrives.',
-    };
-  }
-  return result;
 }
 
 /**
@@ -137,7 +128,9 @@ export async function updateProfileAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
-  revalidatePath(`/vendor/${vendorId}`, 'layout');
+  // The board's heading is the only place under /vendor/<id> a store's details
+  // appear, so the page — not the whole segment and its order screens.
+  revalidatePath(`/vendor/${vendorId}`);
   revalidatePath('/vendor/profile');
   return { ok: true, message: 'Store details saved.' };
 }
@@ -200,7 +193,9 @@ export async function setAcceptingOrdersAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
-  revalidatePath(`/vendor/${vendorId}`, 'layout');
+  // Open or closed shows on the board, and reopening clears sold-out marks on
+  // the menu and the storefront. No order screen under the board depends on it.
+  revalidatePath(`/vendor/${vendorId}`);
   revalidatePath('/vendor/menu');
   revalidatePath(`/order/${vendorId}`);
   return {

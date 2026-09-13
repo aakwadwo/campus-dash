@@ -58,7 +58,7 @@ export default function VendorReviewForm({ vendor }) {
           : 'This reason is shown to the applicant so they can correct it and resubmit. Write it for them, not for the log.'}
       </p>
 
-      <Button disabled={pending} variant={decision === 'APPROVE' ? 'primary' : 'danger'}>
+      <Button pending={pending} variant={decision === 'APPROVE' ? 'primary' : 'danger'}>
         {pending ? 'Saving…' : decision === 'APPROVE' ? 'Approve store' : 'Reject application'}
       </Button>
       <ActionResult state={state} />

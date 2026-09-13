@@ -135,18 +135,54 @@ export function buttonClass({ variant = 'primary', size = 'md', block = false, c
     .join(' ');
 }
 
+/**
+ * `pending` is the tap acknowledged. The button disables itself so a second tap
+ * cannot submit twice, says so to assistive technology with aria-busy, and
+ * draws a spinner beside its label — at FULL strength, because a button that is
+ * working is not a button that is unavailable, and on a phone the dimmed
+ * disabled look reads as "that did not take". It never implies the operation
+ * succeeded; the label the caller passes says what is happening.
+ */
 export function Button({
   variant = 'primary',
   size = 'md',
   block = false,
+  pending = false,
+  disabled = false,
   className = '',
   children,
   ...rest
 }) {
   return (
-    <button className={buttonClass({ variant, size, block, className })} {...rest}>
+    <button
+      className={buttonClass({
+        variant,
+        size,
+        block,
+        className: pending ? `${className} cursor-progress disabled:opacity-100!` : className,
+      })}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
+      {...rest}
+    >
+      {pending ? <Spinner /> : null}
       {children}
     </button>
+  );
+}
+
+/** The in-flight mark. Inherits the button's text colour; still under reduced motion. */
+export function Spinner({ className = 'size-[1.1em]' }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+      className={`shrink-0 animate-spin motion-reduce:animate-none ${className}`}
+    >
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
   );
 }
 

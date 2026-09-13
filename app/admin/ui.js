@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Spinner } from '@/app/ui';
 
 /**
  * Shared admin building blocks.
@@ -94,18 +95,28 @@ export function ReasonField({ placeholder = 'Why are you doing this?' }) {
   );
 }
 
-export function Button({ children, variant = 'primary', ...rest }) {
+export function Button({
+  children,
+  variant = 'primary',
+  pending = false,
+  disabled = false,
+  ...rest
+}) {
   const styles = {
     primary: 'bg-brand-700 text-white hover:bg-brand-800',
     secondary: 'bg-surface text-ink ring-1 ring-line-strong hover:bg-surface-2',
     danger: 'bg-surface text-bad ring-1 ring-bad/30 hover:bg-bad-bg',
   };
+  // `pending`: the same acknowledgement as the main kit — see app/ui.js Button.
   return (
     <button
       type="submit"
-      className={`press rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-55 ${styles[variant]}`}
+      className={`press inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-55 ${pending ? 'cursor-progress disabled:opacity-100!' : ''} ${styles[variant]}`}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
       {...rest}
     >
+      {pending ? <Spinner /> : null}
       {children}
     </button>
   );

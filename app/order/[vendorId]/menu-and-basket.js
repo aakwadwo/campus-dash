@@ -494,6 +494,7 @@ function Checkout({
         <button
           type="submit"
           disabled={busy || !quote || quoting || needsDestination}
+          aria-busy={busy || undefined}
           className="press bg-brand-700 hover:bg-brand-800 h-14 w-full rounded-full text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
           {busy ? (

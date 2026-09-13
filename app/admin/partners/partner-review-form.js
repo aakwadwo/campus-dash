@@ -26,7 +26,7 @@ export default function PartnerReviewForm({ userId, current }) {
       </div>
       <Field label="Notes (optional)" name="notes" placeholder="Verified in person" />
       <div className="sm:col-span-4">
-        <Button disabled={pending}>{pending ? 'Recording…' : 'Record decision'}</Button>
+        <Button pending={pending}>{pending ? 'Recording…' : 'Record decision'}</Button>
         <ActionResult state={state} />
       </div>
     </form>
