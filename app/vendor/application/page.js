@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getMyApplication } from '@/lib/vendor';
-import { Badge, ButtonLink, Callout, Card, Facts, Fact, PageHeader } from '@/app/ui';
+import { signOut } from '@/app/(auth)/login/actions';
+import { Badge, Button, ButtonLink, Callout, Card, Facts, Fact, PageHeader } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Your application · Campus Dash' };
@@ -25,9 +26,8 @@ export default async function VendorApplicationPage() {
   const suspended = application.status === 'SUSPENDED';
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-5 py-8">
+    <main className="mx-auto w-full max-w-2xl px-4 pt-6 pb-16 sm:px-6 sm:pt-10">
       <PageHeader
-        eyebrow="Vendor"
         title={application.name}
         description={
           rejected
@@ -86,10 +86,16 @@ export default async function VendorApplicationPage() {
 
       {suspended ? (
         <p className="text-muted mt-5 text-sm leading-relaxed">
-          Contact Campus Dash support. A suspension is a decision an administrator has to reverse;
-          there is nothing to resubmit.
+          Contact Campus Dash support. A suspension is a decision an administrator has to reverse,
+          so there is nothing to resubmit.
         </p>
       ) : null}
+
+      <form action={signOut} className="mt-8 text-center">
+        <Button type="submit" variant="ghost">
+          Sign out
+        </Button>
+      </form>
     </main>
   );
 }

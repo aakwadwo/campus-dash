@@ -56,7 +56,7 @@ export default function ScanViewer({ orderId, hasScan }) {
               rel="noreferrer"
               className="text-brand-700 text-sm font-semibold underline underline-offset-4"
             >
-              Open the scan (PDF) →
+              Open the scan (PDF)
             </a>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element

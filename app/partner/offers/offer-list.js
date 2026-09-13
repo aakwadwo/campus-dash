@@ -1,10 +1,11 @@
 'use client';
 
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { acceptDeliveryAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
+import { Button, ErrorNote, EmptyState, BikeIcon } from '@/app/ui';
 
 /**
  * Offers, with everything needed to say yes.
@@ -21,33 +22,54 @@ import { orderLabel } from '@/lib/orders/state';
  */
 export default function OfferList({ offers, pollMs = 10000 }) {
   const router = useRouter();
-  const [state, accept, accepting] = useActionState(acceptDeliveryAction, {});
+  // Which offer was pressed, so only THAT button says "Accepting…" — the others
+  // are disabled while it is in flight, but they did not do anything.
+  const [pressed, setPressed] = useState(null);
+  const [state, accept, accepting] = useActionState(async (previous, formData) => {
+    const result = await acceptDeliveryAction(previous, formData);
+    return { ...result, orderId: String(formData.get('order_id') ?? '') };
+  }, {});
 
-  // Offers go stale fast: somebody else is looking at this list too.
+  // ACCEPTED MEANS GO. A successful accept used to leave the Partner on this
+  // list with the card silently gone, and the next step — where to walk — a
+  // back-tap and another tap away. The delivery screen is the next step.
   useEffect(() => {
+    if (state.ok && state.orderId) router.push(`/partner/delivery?order=${state.orderId}`);
+  }, [state, router]);
+
+  const leaving = Boolean(state.ok && state.orderId);
+
+  // Offers go stale fast: somebody else is looking at this list too. Paused
+  // once one is accepted, so a refresh cannot pull the page out from under the
+  // navigation.
+  useEffect(() => {
+    if (leaving) return undefined;
     const timer = setInterval(() => router.refresh(), pollMs);
     return () => clearInterval(timer);
-  }, [router, pollMs]);
+  }, [router, pollMs, leaving]);
 
-  if (offers.length === 0) {
+  if (offers.length === 0 && !leaving) {
     return (
-      <p className="text-muted rounded-input border-line-strong mt-4 border border-dashed px-4 py-8 text-center text-sm transition-colors">
-        Nothing waiting right now. This updates on its own.
-      </p>
+      <div className="bg-surface border-line rounded-card mt-5 border">
+        <EmptyState
+          icon={<BikeIcon className="size-6" />}
+          title="No orders waiting right now"
+          description="This list updates on its own. Keep it open and new orders appear here."
+        />
+      </div>
     );
   }
 
   return (
     <>
-      {state.message && !state.ok ? (
-        <p role="alert" className="rounded-card bg-bad-bg text-bad mt-4 px-4 py-3 text-sm">
-          {state.message}
-        </p>
-      ) : null}
+      {state.message && !state.ok ? <ErrorNote className="mt-4">{state.message}</ErrorNote> : null}
 
-      <ul className="mt-4 space-y-3">
+      <ul className="mt-5 space-y-3">
         {offers.map((offer) => (
-          <li key={offer.order_id} className="rounded-card bg-surface border-line border p-4">
+          <li
+            key={offer.order_id}
+            className="rounded-card bg-surface border-line border p-4 sm:p-5"
+          >
             {/* A scan errand is a different job and must not be mistaken for a
                 collection: you carry the customer's prepaid scan, redeem it at
                 the counter yourself, and the food is not waiting for you. */}
@@ -85,32 +107,28 @@ export default function OfferList({ offers, pollMs = 10000 }) {
                   : 'Still being prepared'}
             </p>
 
-            <dl className="text-muted mt-2 space-y-0.5 text-sm">
+            <dl className="text-muted border-line mt-3 space-y-1 border-t pt-3 text-sm">
               <Row label="Deliver to" value={offer.destination_zone} />
               <Row
                 label="Walk"
-                value={
-                  offer.walk_minutes == null ? 'not measured' : `about ${offer.walk_minutes} min`
-                }
+                value={offer.walk_minutes == null ? 'Not known' : `About ${offer.walk_minutes} min`}
               />
               {offer.order_type === 'SCAN' ? (
-                <Row label="You do" value="redeem the scan, then take it over" />
+                <Row label="You do" value="Redeem the scan, then take it over" />
               ) : (
-                <>
-                  <Row label="Items" value={`${offer.item_count}`} />
-                </>
+                <Row label="Items" value={`${offer.item_count}`} />
               )}
             </dl>
 
-            <form action={accept} className="mt-3">
+            <form action={accept} onSubmit={() => setPressed(offer.order_id)} className="mt-4">
               <input type="hidden" name="order_id" value={offer.order_id} />
-              <button
-                type="submit"
-                disabled={accepting}
-                className="press bg-brand-700 hover:bg-brand-800 w-full rounded-full py-3.5 text-base font-semibold text-white transition-colors disabled:opacity-55"
-              >
-                {accepting ? 'Accepting…' : 'Accept this order'}
-              </button>
+              <Button type="submit" size="lg" block disabled={accepting || leaving}>
+                {pressed === offer.order_id && (accepting || leaving)
+                  ? leaving
+                    ? 'Accepted. Opening…'
+                    : 'Accepting…'
+                  : 'Accept this order'}
+              </Button>
             </form>
           </li>
         ))}

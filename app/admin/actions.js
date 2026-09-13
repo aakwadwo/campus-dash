@@ -3,6 +3,7 @@
 const CONTEXT = 'admin action';
 
 import { actionFailure } from '@/lib/errors';
+import { authoriseAdminAction } from '@/lib/auth/session';
 
 import { revalidatePath } from 'next/cache';
 import * as admin from '@/lib/admin';
@@ -15,9 +16,18 @@ import { normaliseGhanaPhone } from '@/lib/sms';
 /**
  * Server actions for the admin module.
  *
- * Each one is a thin translation from FormData to a database call. No decision
- * is made here: the database re-checks is_admin(), validates, and writes the
- * audit row in the same transaction as the change.
+ * Each one is a thin translation from FormData to a database call. The database
+ * re-checks is_admin(), validates, and writes the audit row in the same
+ * transaction as the change.
+ *
+ * EVERY EXPORT STARTS WITH authoriseAdminAction(), and that is not a
+ * duplicate of the database check. A server action is a public POST endpoint:
+ * the admin layout never runs in front of it. Settlement and payout retries go
+ * through the service-role client, which bypasses is_admin() entirely, so for
+ * those the guard is the only thing standing between a stranger and a payout
+ * run. It also enforces what the database cannot see: that the session is a
+ * password sign-in inside the admin time limit. tests/admin-action-auth.test.js
+ * fails if an export is added without it.
  *
  * Errors are returned rather than thrown so the form can show what went wrong
  * — an admin needs to read "3 order lines reference this item", not a stack.
@@ -67,6 +77,9 @@ const num = (formData, key) => {
  * The row has no owner, so nobody can sign in as it.
  */
 export async function createVendorAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.createVendor({
@@ -84,6 +97,9 @@ export async function createVendorAction(_prev, formData) {
 }
 
 export async function updateVendorAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.updateVendor({
@@ -111,6 +127,9 @@ export async function updateVendorAction(_prev, formData) {
  * by SMS; a failed message never un-does the decision.
  */
 export async function reviewVendorAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const approved = str(formData, 'decision') === 'APPROVE';
   return run(
     () =>
@@ -127,6 +146,9 @@ export async function reviewVendorAction(_prev, formData) {
 }
 
 export async function setVendorStatusAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.setVendorStatus({
@@ -147,6 +169,9 @@ export async function setVendorStatusAction(_prev, formData) {
  * wrong about that costs the Partner a walk and the customer their lunch.
  */
 export async function setVendorScansAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.setVendorScans({
@@ -165,6 +190,9 @@ export async function setVendorScansAction(_prev, formData) {
 // --- Vendor categories --------------------------------------------------------
 
 export async function createVendorCategoryAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.createVendorCategory({
@@ -187,6 +215,9 @@ export async function createVendorCategoryAction(_prev, formData) {
  * placed under.
  */
 export async function updateVendorCategoryAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const active = formData.get('is_active');
   return run(
     () =>
@@ -205,6 +236,9 @@ export async function updateVendorCategoryAction(_prev, formData) {
 // --- Vendor images ------------------------------------------------------------
 
 export async function addVendorImageAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const vendorId = str(formData, 'vendor_id');
   const file = formData.get('image');
   if (!file || typeof file === 'string' || file.size === 0) {
@@ -239,6 +273,9 @@ export async function addVendorImageAction(_prev, formData) {
 }
 
 export async function deleteVendorImageAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const vendorId = str(formData, 'vendor_id');
   try {
     const { deleteVendorImage } = await import('@/lib/verification/documents');
@@ -257,6 +294,9 @@ export async function deleteVendorImageAction(_prev, formData) {
 // --- Menu items -------------------------------------------------------------
 
 export async function createMenuItemAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () => {
       const price = pesewasFromCedisInput(formData.get('price_cedis'));
@@ -275,6 +315,9 @@ export async function createMenuItemAction(_prev, formData) {
 }
 
 export async function updateMenuItemAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () => {
       const raw = formData.get('price_cedis');
@@ -294,6 +337,9 @@ export async function updateMenuItemAction(_prev, formData) {
 }
 
 export async function setMenuItemAvailableAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.setMenuItemAvailable({
@@ -307,6 +353,9 @@ export async function setMenuItemAvailableAction(_prev, formData) {
 }
 
 export async function deleteMenuItemAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.deleteMenuItem({
@@ -321,6 +370,9 @@ export async function deleteMenuItemAction(_prev, formData) {
 // --- Locations --------------------------------------------------------------
 
 export async function createLocationAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.createLocation({
@@ -338,6 +390,9 @@ export async function createLocationAction(_prev, formData) {
 }
 
 export async function updateLocationAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.updateLocation({
@@ -356,6 +411,9 @@ export async function updateLocationAction(_prev, formData) {
 }
 
 export async function setLocationActiveAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.setLocationActive({
@@ -372,6 +430,9 @@ export async function setLocationActiveAction(_prev, formData) {
 }
 
 export async function deleteLocationAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.deleteLocation({
@@ -386,6 +447,9 @@ export async function deleteLocationAction(_prev, formData) {
 // --- Partners ---------------------------------------------------------------
 
 export async function reviewPartnerAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.reviewPartner({
@@ -405,6 +469,9 @@ export async function reviewPartnerAction(_prev, formData) {
  * re-derives the allowed paths itself and ignores anything else.
  */
 export async function purgePartnerDocumentsAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       purgePartnerDocuments({
@@ -433,6 +500,9 @@ export async function purgePartnerDocumentsAction(_prev, formData) {
  * `p_user_id = auth.uid()` itself. Nothing here is a substitute for that.
  */
 export async function setUserSuspendedAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const suspend = str(formData, 'suspend');
   if (suspend !== 'true' && suspend !== 'false') {
     return { ok: false, message: 'Say explicitly whether this account is being suspended.' };
@@ -456,6 +526,9 @@ export async function setUserSuspendedAction(_prev, formData) {
 // --- Order overrides ---------------------------------------------------------
 
 export async function cancelOrderAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.cancelOrder({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
@@ -465,6 +538,9 @@ export async function cancelOrderAction(_prev, formData) {
 }
 
 export async function completeOrderAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.completeOrder({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
@@ -474,6 +550,9 @@ export async function completeOrderAction(_prev, formData) {
 }
 
 export async function reassignDeliveryAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.reassignDelivery({
@@ -486,6 +565,9 @@ export async function reassignDeliveryAction(_prev, formData) {
 }
 
 export async function markRefundedAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.markRefunded({ orderId: str(formData, 'order_id'), reason: str(formData, 'reason') }),
@@ -495,6 +577,9 @@ export async function markRefundedAction(_prev, formData) {
 }
 
 export async function resolveDisputeAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.resolveDispute({
@@ -518,6 +603,9 @@ export async function resolveDisputeAction(_prev, formData) {
  * the transfer event arrives — see hard rule 11.
  */
 export async function runSettlementAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const payeeType = str(formData, 'payee_type');
   try {
     const { periodStart, periodEnd } = periodFor(payeeType);
@@ -556,6 +644,9 @@ export async function runSettlementAction(_prev, formData) {
  * the provider's recipient code, so the next transfer cannot go to the old one.
  */
 export async function setPayoutDestinationAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.setPayoutDestination({
@@ -572,6 +663,9 @@ export async function setPayoutDestinationAction(_prev, formData) {
 }
 
 export async function retryPayoutsAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   try {
     const results = await retryFailedPayouts(str(formData, 'run_id'));
     revalidatePath('/admin/settlements', 'layout');
@@ -595,6 +689,9 @@ export async function retryPayoutsAction(_prev, formData) {
  */
 /** Records that a customer's reward was honoured, and what it was. */
 export async function settleCustomerRewardAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.settleCustomerReward({
@@ -607,6 +704,9 @@ export async function settleCustomerRewardAction(_prev, formData) {
 }
 
 export async function syncPayoutDestinationAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const payeeType = str(formData, 'payee_type');
   const payeeId = str(formData, 'payee_id');
 
@@ -626,6 +726,9 @@ export async function syncPayoutDestinationAction(_prev, formData) {
 }
 
 export async function updateConfigAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   return run(
     () =>
       admin.updateConfig({
@@ -668,6 +771,9 @@ export async function updateConfigAction(_prev, formData) {
  * expires on its own so a copied URL is dead by the time it is shared.
  */
 export async function viewScanAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
   const orderId = str(formData, 'order_id');
   if (!orderId) return { ok: false, message: 'No order was named.' };
 

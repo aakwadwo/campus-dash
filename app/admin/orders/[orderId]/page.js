@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
 import { orderMoney } from '@/lib/admin';
 import { adminScanOrder } from '@/lib/scan';
@@ -69,11 +70,9 @@ export default async function AdminOrderPage({ params }) {
 
   return (
     <>
-      <p className="text-muted mb-2 text-sm">
-        <Link href="/admin/orders" className="underline underline-offset-4">
-          Orders
-        </Link>
-      </p>
+      <BackLink href="/admin/orders" className="mb-2">
+        Orders
+      </BackLink>
 
       <div className="mb-1 flex flex-wrap items-baseline gap-3">
         <h1 className="font-mono text-2xl font-semibold">{money.order_number}</h1>

@@ -26,7 +26,11 @@ export default function AccountNav({ items }) {
     item.exact ? pathname === item.href : pathname.startsWith(item.href);
 
   return (
-    <nav aria-label="Account" className="lg:sticky lg:top-24">
+    // min-w-0: this nav is a grid item, and a grid item's minimum width is
+    // its content's. The tab strip is a nowrap row wider than a phone, so
+    // without it the column grew past the viewport and the whole of /account
+    // scrolled sideways. Now the strip scrolls inside itself instead.
+    <nav aria-label="Account" className="min-w-0 lg:sticky lg:top-24">
       <ul className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:-mx-6 sm:px-6 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
         {items.map((item) => {
           const current = isCurrent(item);

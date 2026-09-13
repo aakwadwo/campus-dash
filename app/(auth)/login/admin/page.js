@@ -4,6 +4,12 @@ import AdminLoginForm from './admin-login-form';
 
 export const metadata = { title: 'Administrator sign-in · Campus Dash' };
 
+/** Why requireAdmin() sent somebody back here, in words. */
+const SESSION_NOTICES = {
+  expired: 'Your administrator session has ended. Sign in again to carry on.',
+  password: 'The admin console needs your password, even if you are already signed in another way.',
+};
+
 /**
  * Deliberately not linked from the landing page. It is not a secret — the
  * security is the password and the is_admin check behind it — but the public
@@ -17,6 +23,9 @@ export default async function AdminLoginPage({ searchParams }) {
   // Arrived back from the reset form, which signs the recovery session out on
   // purpose: the new password still has to be proved here.
   const justReset = params?.reset === 'done';
+  // Sent back by requireAdmin(). The console needs a password sign-in that is
+  // under eight hours old; any other session, even a valid one, is not enough.
+  const notice = SESSION_NOTICES[params?.reason] ?? null;
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center px-6 py-12">
@@ -33,6 +42,15 @@ export default async function AdminLoginPage({ searchParams }) {
           className="rounded-card border-good/30 bg-good/10 mt-6 border p-3.5 text-sm leading-relaxed"
         >
           Your password has been changed. Sign in with it below.
+        </p>
+      ) : null}
+
+      {notice && !justReset ? (
+        <p
+          role="status"
+          className="rounded-card border-warn/30 bg-warn-bg mt-6 border p-3.5 text-sm leading-relaxed"
+        >
+          {notice}
         </p>
       ) : null}
 

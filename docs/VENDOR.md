@@ -108,14 +108,35 @@ The board and detail come from `vendor_order_board()` and
 `vendor_order_detail()`, which decide exposure in the **database**. A page that
 merely omitted a column would still have sent it over the wire.
 
-| Shown                                             | Withheld                           |
-| ------------------------------------------------- | ---------------------------------- |
-| The daily queue number, items, quantities         | The customer's phone number        |
-| Snapshotted prices and the total                  | The destination **room**           |
-| Collection, or delivery + **zone**                | The delivery code                  |
-| Payment status                                    | Any other store's orders           |
-| Order age                                         | Which Partner, beyond a first name |
-| The handoff code, once somebody is due to collect |                                    |
+| Shown                                             | Withheld                             |
+| ------------------------------------------------- | ------------------------------------ |
+| The daily queue number, items, quantities         | The customer's phone number          |
+| Snapshotted item prices                           | The destination **room**             |
+| **Their own amount** (`vendor_amount_pesewas`)    | The customer's total                 |
+| Collection, or delivery + **zone**                | The service fee and the delivery fee |
+| Payment status                                    | The delivery code                    |
+| Order age                                         | Any other store's orders             |
+| The handoff code, once somebody is due to collect | Which Partner, beyond a first name   |
+
+**A vendor sees only their own cut.** `vendor_amount_pesewas` is the food
+subtotal, which is exactly the VENDOR allocation and the amount the Paystack
+split routes to the store. Neither read function returns `total_pesewas`,
+`service_fee_pesewas` or `delivery_fee_pesewas` any more: the service fee is
+Campus Dash's, the delivery fee is the Partner's, and the board used to hand
+both to a client component under "Customer paid". See migration
+`20260930000001_vendor_sees_only_their_amount.sql`.
+
+**A vendor has no direct read of `orders`, `order_events` or `order_items`.**
+Migration `20260930000002_vendor_reads_only_through_rpcs.sql` dropped
+`orders_read_vendor` and the vendor branches of `order_events_read` (whose
+`details` record the customer's total and the delivery fee) and
+`order_items_read`. A store's view of its orders is exactly what the vendor
+functions return: `vendor_order_board`, `vendor_order_detail`,
+`vendor_pending_count`, `vendor_active_count`, `vendor_handoff_code`,
+`vendor_daily_sales` and `vendor_orders_on_day`, each re-checking
+`is_vendor_staff()`. The only money a vendor reads directly is its own: VENDOR
+allocations and its payouts. Customers, assigned Partners and administrators keep
+their policies unchanged.
 
 The destination zone (`Hostel Block A`) is enough for a store to picture the
 job. The room is the Partner's business, not theirs. A collecting customer's
@@ -127,14 +148,39 @@ morning and counted per store. `orders.order_number` (`CD-01043`) is still
 underneath as the internal reference, and is never what anybody is asked to read
 out.
 
+## The dashboard
+
+The store's home is `/vendor/<id>`. It answers three questions, in order:
+
+1. **How is today going?** Today's orders and Today's sales, from
+   `vendor_daily_sales()` — the sum of this store's live VENDOR allocations,
+   grouped by `orders.order_day`, the same day the queue number restarts on.
+2. **What needs me?** The NEW and READY groups below.
+3. **What just happened?** The last five finished orders, then **History**.
+
+Navigation is four named destinations — Orders, History, Menu, Store — as a
+bottom bar on a phone and tabs from `sm` up. Sign-out lives on the Store tab,
+because a vendor-only account is redirected out of `/account`.
+
+## History
+
+`/vendor/history` lists the last 30 days: orders and sales per day, Today first
+even at zero. A day opens `/vendor/history/<YYYY-MM-DD>`, the orders behind that
+row from `vendor_orders_on_day()`, each linking to its detail. An order counts as
+a sale while it is `PAID` and has a live VENDOR allocation. `REFUND_PENDING` and
+`REFUNDED` orders are listed and labelled, and left out of the total, even where
+a split left the allocation `SETTLED`; the ledger itself is untouched. A day whose
+only orders were refunded is still listed, at zero, so they stay reachable. Deliberately not an analytics screen: no
+charts, ranges or averages.
+
 ## The three groups
 
 Server-decided, via `vendor_order_bucket()`, so every screen agrees:
 
 - **NEW** — paid, and still to be made. The only group that raises an alert.
 - **READY** — made, waiting for a Partner or a customer to collect.
-- **CLOSED** — completed or cancelled. Capped at 20 so a busy store does not
-  scroll through last week.
+- **CLOSED** — completed or cancelled. The dashboard asks for the last five;
+  the full record is History.
 
 There used to be a fourth, between accepting an order and starting it. It only
 existed because a store had to answer a doorbell.

@@ -201,6 +201,39 @@ account is created from a confirmed email address alone: `public.users` is
 provisioned on EITHER confirmation, so no phone number is asked for and none is
 attached.
 
+### The admin session is operational, not persistent
+
+Customer and vendor sessions persist: `@supabase/ssr` writes the auth cookie with
+a 400-day Max-Age and the proxy renews it on every request. The console is the
+opposite case, and `lib/auth/admin-session.js` holds both limits:
+
+- **Session-only cookies.** `adminSignIn` creates its client with
+  `{ sessionOnly: true }` and sets the `cd-admin-session` marker (httpOnly, the
+  administrator's user id). While the marker names the signed-in user,
+  `lib/supabase/server.js` and `lib/supabase/middleware.js` write the auth
+  cookies with no Max-Age. `@supabase/ssr` forces Max-Age whatever options it is
+  given, so this has to happen in our own `setAll`. A marker that names somebody
+  else is deleted by the proxy and that session gets its persistent cookie back.
+  The marker is never read as authority; forging it only shortens your own
+  cookie.
+- **Eight hours, server-side.** `requireAdmin()` and every action in
+  `app/admin/actions.js` (through `authoriseAdminAction()`) read the verified JWT
+  with `getClaims()` and require an `amr` entry with method `password` no older
+  than `ADMIN_SESSION_MAX_SECONDS`. That timestamp is the original sign-in and
+  survives refresh, so activity does not extend it. It is a code constant, not a
+  `pricing_config` value.
+
+The second limit is the boundary. Browsers that restore tabs keep session-only
+cookies alive, and an administrator who also holds the Customer capability can
+sign in by emailed code: that session's method is `otp`, so it reaches the rest
+of the app and is sent back to `/login/admin?reason=password` from the console.
+Sign-out is global and also deletes the marker.
+
+Admin server actions are public POST endpoints. Settlement and payout retries use
+the service-role client, which bypasses `is_admin()`, so the action guard is the
+check there, not a duplicate of one. `tests/admin-action-auth.test.js` fails if
+an export is added without it.
+
 ### Forgetting the password
 
 Administrators are the one account with a password, so they are the only one
@@ -504,6 +537,18 @@ rejected store that page is the only place the reason exists.
 
 A user who bypassed either would reach a page rendering nothing they are
 entitled to, because every query underneath still filters by `auth.uid()`.
+
+### Vendor-only accounts do not see customer screens
+
+A vendor who does not hold the Customer capability is sent to their store from
+`/`, `/order` and `/order/[vendorId]`, and from `/account`. The rule is
+`vendorOnlyHome()` in `lib/auth/landing.js`, applied by
+`redirectVendorOnlyAccount()`. "Student vendor" means `can_order`, not
+`vendors.owner_is_student`, which is self-declared and confers nothing. A student
+vendor browses the marketplace like any customer and reaches the store through
+the account navigation. Sign-in routing is unchanged: `landingFor()` still sends
+every vendor to `/vendor` first. The only destinations are `/vendor` and
+`/vendor/application`, neither of which applies the rule, so it cannot loop.
 
 ## Terms acceptance
 

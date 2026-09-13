@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 /**
  * Shared admin building blocks.
  *
@@ -160,9 +162,9 @@ export function Stat({ label, value, hint, tone = 'neutral', href }) {
   );
   const className = 'block rounded-card bg-surface p-4 ring-1 ring-line transition-colors';
   return href ? (
-    <a href={href} className={`${className} press hover:ring-line-strong`}>
+    <Link href={href} className={`${className} press hover:ring-line-strong`}>
       {body}
-    </a>
+    </Link>
   ) : (
     <div className={className}>{body}</div>
   );
@@ -217,14 +219,15 @@ export function Cell({ children, mono = false, numeric = false, muted = false })
  */
 export function FilterChip({ active, href, label }) {
   return (
-    <a
+    <Link
       href={href}
-      className={`press-sm rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+      aria-current={active ? 'true' : undefined}
+      className={`press-sm inline-flex min-h-9 items-center rounded-full px-3.5 text-xs font-semibold whitespace-nowrap transition-colors ${
         active ? 'bg-brand-700 text-white' : 'bg-surface ring-line hover:ring-line-strong ring-1'
       }`}
     >
       {label}
-    </a>
+    </Link>
   );
 }
 

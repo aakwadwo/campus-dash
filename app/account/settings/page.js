@@ -1,10 +1,9 @@
-import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import { signOut } from '@/app/(auth)/login/actions';
 import { outstandingTerms } from '@/lib/terms';
 import ProfileForm from '../profile-form';
 import EmailForm from '../email-form';
-import { Panel } from '../../ui';
+import { Panel, Button, ButtonLink } from '../../ui';
 
 export const metadata = { title: 'Settings · Campus Dash' };
 export const dynamic = 'force-dynamic';
@@ -66,19 +65,16 @@ export default async function AccountSettingsPage() {
             title="Terms"
             description="A new version has been published and needs your agreement."
           >
-            <Link href="/terms" className="text-brand-700 text-sm font-semibold">
-              Read and accept →
-            </Link>
+            <ButtonLink href="/terms" size="sm">
+              Read and accept
+            </ButtonLink>
           </Panel>
         ) : null}
 
-        <form action={signOut} className="pt-2">
-          <button
-            type="submit"
-            className="text-bad text-sm font-semibold underline underline-offset-4"
-          >
+        <form action={signOut} className="border-line border-t pt-5">
+          <Button type="submit" variant="danger">
             Sign out
-          </button>
+          </Button>
         </form>
       </div>
     </div>

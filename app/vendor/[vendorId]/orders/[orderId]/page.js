@@ -1,14 +1,14 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getOrderDetail, getHandoffCode } from '@/lib/vendor';
 import { orderLabel } from '@/lib/orders/state';
 import { formatPesewas } from '@/lib/util/money';
+import { BackLink, Card, Facts, Fact } from '@/app/ui';
 import OrderActions from './order-actions';
 
 export const dynamic = 'force-dynamic';
 
 const STATUS_COPY = {
-  ACCEPTED: 'Paid — start preparing',
+  ACCEPTED: 'Paid. Start preparing',
   PREPARING: 'Preparing',
   READY: 'Ready for pickup',
   COMPLETED: 'Completed',
@@ -38,54 +38,52 @@ export default async function VendorOrderPage({ params }) {
     : null;
 
   return (
-    <main className="mx-auto max-w-2xl px-4 pt-4 pb-24">
-      <Link
-        href={`/vendor/${vendorId}`}
-        className="text-muted text-sm underline underline-offset-4"
-      >
-        ← All orders
-      </Link>
+    <main className="mx-auto max-w-2xl px-4 pt-3 pb-16 sm:px-6 sm:pt-6">
+      <BackLink href={`/vendor/${vendorId}`}>Orders</BackLink>
 
-      <header className="mt-3 mb-5">
-        <p className="text-muted text-xs font-semibold tracking-[0.14em] uppercase">Order number</p>
-        <h1 className="text-5xl leading-none font-bold tabular-nums">{orderLabel(order)}</h1>
-        <p className="mt-2 font-medium">{STATUS_COPY[order.order_status] ?? order.order_status}</p>
+      {/* The number first and biggest: it is what gets called out. */}
+      <header className="mt-3 mb-6">
+        <p className="text-muted text-sm font-medium">Order</p>
+        <h1 className="text-6xl leading-none font-bold tabular-nums">{orderLabel(order)}</h1>
+        <p className="mt-3 text-lg font-semibold">
+          {STATUS_COPY[order.order_status] ?? order.order_status}
+        </p>
         {order.cancellation_reason ? (
           <p className="text-muted mt-1 text-sm">{order.cancellation_reason}</p>
         ) : null}
       </header>
 
-      <section className="rounded-card bg-surface ring-line mb-4 p-4 ring-1">
-        <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Items</h2>
+      {/* WHAT TO DO comes before what the order contains. */}
+      <OrderActions order={order} vendorId={vendorId} handoffCode={handoffCode} />
+
+      <Card className="mt-6 p-5">
+        <h2 className="mb-2 font-semibold">Items</h2>
         <ul className="divide-line divide-y">
           {order.items.map((item, index) => (
-            <li key={index} className="flex items-baseline justify-between gap-3 py-2">
-              <span>
+            <li key={index} className="flex items-baseline justify-between gap-3 py-2.5">
+              <span className="min-w-0">
                 <span className="font-semibold tabular-nums">{item.quantity}×</span> {item.name}
               </span>
-              <span className="tabular-nums">{formatPesewas(item.line_total_pesewas)}</span>
+              <span className="text-muted shrink-0 text-sm tabular-nums">
+                {formatPesewas(item.line_total_pesewas)}
+              </span>
             </li>
           ))}
         </ul>
 
-        <dl className="border-line mt-3 space-y-1 border-t pt-3 text-sm">
-          <Row label="Food" value={formatPesewas(order.subtotal_pesewas)} />
-          <Row label="Service fee" value={formatPesewas(order.service_fee_pesewas)} />
-          {order.delivery_fee_pesewas > 0 ? (
-            <Row label="Partner delivery" value={formatPesewas(order.delivery_fee_pesewas)} />
-          ) : null}
-          <Row label="Customer paid" value={formatPesewas(order.total_pesewas)} strong />
-        </dl>
-        <p className="text-muted mt-3 text-xs">
-          You receive the food amount. The service and delivery fees are not yours, and are settled
-          separately.
-        </p>
-      </section>
+        {/* THE STORE'S AMOUNT, and only that. The fees on this order belong to
+            Campus Dash and the Partner and are not returned to this screen. */}
+        <div className="border-line mt-3 flex items-baseline justify-between gap-3 border-t pt-3">
+          <span className="font-semibold">Your amount</span>
+          <span className="text-lg font-semibold tabular-nums">
+            {formatPesewas(order.vendor_amount_pesewas)}
+          </span>
+        </div>
+      </Card>
 
-      <section className="rounded-card bg-surface ring-line mb-4 p-4 ring-1">
-        <h2 className="mb-3 text-xs font-semibold tracking-wide uppercase">Details</h2>
-        <dl className="space-y-1 text-sm">
-          <Row
+      <Card className="mt-4 px-5 py-2">
+        <Facts>
+          <Fact
             label="Collected by"
             value={
               order.fulfilment_type === 'PICKUP'
@@ -94,30 +92,19 @@ export default async function VendorOrderPage({ params }) {
             }
           />
           {order.fulfilment_type === 'DELIVERY' ? (
-            <Row label="Destination zone" value={order.destination_zone ?? 'Campus'} />
-          ) : null}
-          <Row label="Payment" value={paymentCopy(order.payment_status)} />
-          {order.fulfilment_type === 'DELIVERY' ? (
-            <Row
+            <Fact
               label="Partner"
-              value={order.partner_assigned ? (order.partner_name ?? 'Assigned') : 'Searching…'}
+              value={order.partner_assigned ? (order.partner_name ?? 'Assigned') : 'Not yet'}
             />
           ) : null}
-          <Row label="Order age" value={formatAge(order.age_seconds)} />
-        </dl>
-      </section>
-
-      <OrderActions order={order} vendorId={vendorId} handoffCode={handoffCode} />
+          {order.fulfilment_type === 'DELIVERY' ? (
+            <Fact label="Going to" value={order.destination_zone ?? 'Campus'} />
+          ) : null}
+          <Fact label="Payment" value={paymentCopy(order.payment_status)} />
+          <Fact label="Placed" value={formatAge(order.age_seconds)} />
+        </Facts>
+      </Card>
     </main>
-  );
-}
-
-function Row({ label, value, strong }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted">{label}</dt>
-      <dd className={`tabular-nums ${strong ? 'font-semibold' : ''}`}>{value}</dd>
-    </div>
   );
 }
 
@@ -135,7 +122,8 @@ function paymentCopy(status) {
 function formatAge(seconds) {
   if (seconds == null) return '-';
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ${minutes % 60} min ago`;
+  return `${Math.floor(minutes / (24 * 60))} days ago`;
 }

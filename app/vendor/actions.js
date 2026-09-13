@@ -12,6 +12,7 @@ import {
   removeImage,
   setPayoutDestination,
   setMenuItemAvailable,
+  getOrderDetail,
 } from '@/lib/vendor';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
@@ -70,11 +71,28 @@ const str = (formData, key) => {
  * has to be proved with a code.
  */
 export async function markReadyAction(_prev, formData) {
-  return run(
-    () => vendorMarkReady(str(formData, 'order_id')),
+  const orderId = str(formData, 'order_id');
+  const result = await run(
+    () => vendorMarkReady(orderId),
     'Ready for pickup. Read the code out to whoever collects it.',
     str(formData, 'vendor_id')
   );
+  if (!result.ok) return result;
+
+  // A DELIVERY NOBODY HAS TAKEN YET has no one at the counter and no code to
+  // read out, so saying so would send the store looking for a Partner who does
+  // not exist. The wording is chosen from the order as it now stands; the
+  // transition itself is unchanged. If the order cannot be read back, the
+  // general message stands.
+  const order = await getOrderDetail(orderId).catch(() => null);
+  if (order?.fulfilment_type === 'DELIVERY' && !order.partner_assigned) {
+    return {
+      ok: true,
+      message:
+        'Ready for pickup. It is waiting for a Partner, and the code appears here when one arrives.',
+    };
+  }
+  return result;
 }
 
 /**

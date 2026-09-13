@@ -1,7 +1,9 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
+import { ADMIN_SESSION_COOKIE } from '@/lib/auth/admin-session';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { landingFor, safeNext } from '@/lib/auth/landing';
 import { normaliseSchoolEmail, SCHOOL_DOMAIN } from '@/lib/auth/school-email';
@@ -231,6 +233,9 @@ export async function verifyOtp(_prevState, formData) {
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
+  // The administrator session marker, if this browser has one. A no-op for
+  // everybody else.
+  (await cookies()).delete(ADMIN_SESSION_COOKIE);
   redirect('/');
 }
 
@@ -268,8 +273,12 @@ export async function adminSignIn(_prevState, formData) {
     return { error: 'Enter your email address and password.' };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  // SESSION-ONLY from the first cookie written. This door exists to operate the
+  // console, and that session ends with the browser and, server-side, after
+  // ADMIN_SESSION_MAX_SECONDS. See lib/auth/admin-session.js.
+  const supabase = await createClient({ sessionOnly: true });
+  const cookieStore = await cookies();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
     console.error('[auth] admin signInWithPassword failed:', error.message);
@@ -286,8 +295,19 @@ export async function adminSignIn(_prevState, formData) {
 
   if (!capabilities?.is_admin || capabilities?.is_suspended) {
     await supabase.auth.signOut();
+    cookieStore.delete(ADMIN_SESSION_COOKIE);
     return { error: 'That account does not have administrator access.' };
   }
+
+  // Keeps the rotated cookies session-only on every later request. It names
+  // the user so a later sign-in by somebody else in this browser is not caught
+  // by it. Not authority: the console reads the verified JWT, never this.
+  cookieStore.set(ADMIN_SESSION_COOKIE, data.user.id, {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.isProduction(),
+  });
 
   // A deep link into the console survives the sign-in. It is honoured only
   // AFTER the database has confirmed is_admin, and only as a path on this

@@ -135,11 +135,14 @@ function ActiveOrderCard({ order }) {
             <LiveDot tone={stage.badge === 'bad' ? 'bad' : 'good'} />
             <span className={stage.tone}>{headline}</span>
           </p>
-          <p className="mt-1 truncate font-semibold">{order.vendor_name}</p>
+          <p className="mt-1 flex items-baseline justify-between gap-3 font-semibold">
+            <span className="truncate">{order.vendor_name}</span>
+            <Money pesewas={order.total_pesewas} className="shrink-0" />
+          </p>
           <p className="text-muted mt-1 text-sm leading-relaxed">{stage.detail}</p>
           <Meta order={order} />
         </div>
-        <ChevronRightIcon className="text-faint mt-1 hidden size-5 shrink-0 sm:block" />
+        <ChevronRightIcon className="text-faint mt-1 size-5 shrink-0" />
       </div>
     </Link>
   );
@@ -172,7 +175,7 @@ function OrderRow({ order }) {
         <Meta order={order} />
       </div>
 
-      <ChevronRightIcon className="text-faint hidden size-5 shrink-0 sm:block" />
+      <ChevronRightIcon className="text-faint size-5 shrink-0" />
     </Link>
   );
 }
@@ -190,14 +193,16 @@ function Meta({ order }) {
       <span className="text-faint">·</span>
       <span>{when(order.completed_at ?? order.submitted_at)}</span>
       <span className="text-faint">·</span>
-      <span>{order.fulfilment_type === 'PICKUP' ? 'Collected' : 'Partner delivery'}</span>
+      <span>
+        {order.fulfilment_type === 'PICKUP'
+          ? order.stage === 'COMPLETED'
+            ? 'Collected'
+            : 'You collect'
+          : 'Partner delivery'}
+      </span>
       <span className="text-faint">·</span>
       <span>
         {order.item_count} item{order.item_count === 1 ? '' : 's'}
-      </span>
-      <span className="text-faint">·</span>
-      <span className="text-ink font-semibold">
-        <Money pesewas={order.total_pesewas} />
       </span>
     </p>
   );

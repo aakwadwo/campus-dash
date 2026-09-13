@@ -6,18 +6,23 @@ import { useRouter } from 'next/navigation';
 import { setAcceptingOrdersAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
+import { Button, Stat, Unavailable, ChevronRightIcon, SuccessNote, ErrorNote } from '@/app/ui';
 
 /**
- * The store's whole day on one screen.
+ * The store's day on one screen.
  *
- * Designed for a phone propped next to a hot plate: big numbers, large touch
- * targets, and the oldest unmade order at the top of the list that needs
- * attention.
+ * Designed for a phone propped next to a hot plate, and read top to bottom in
+ * the order the questions come:
  *
- * THREE GROUPS, because there are three things an order can be to a store now.
- * There used to be four, and the extra one existed only because a store had to
- * answer a doorbell before anybody paid. Every order on this board has been
- * paid for: make it, hand it over, done.
+ *   1. Am I open?                    the status line and its one button
+ *   2. How is today going?           Today's orders, Today's sales
+ *   3. What needs me right now?      to prepare, then ready for collection
+ *   4. What just happened?           the last few finished, then History
+ *
+ * EVERY FIGURE IS THE STORE'S OWN. The sales number and the amount on each card
+ * are the food subtotal: what this store is paid. The customer's total and the
+ * fees are not on this screen because vendor_order_board() no longer returns
+ * them.
  */
 const GROUPS = [
   {
@@ -29,24 +34,18 @@ const GROUPS = [
   },
   {
     key: 'READY',
-    title: 'Ready — waiting to be collected',
-    tone: 'border-brand-600 bg-brand-100',
-    dot: 'bg-brand-700',
+    title: 'Ready for collection',
+    tone: 'border-brand-600 bg-surface',
+    dot: 'bg-good',
     empty: 'Nothing waiting at the counter.',
-  },
-  {
-    key: 'CLOSED',
-    title: 'Finished',
-    tone: 'border-line bg-surface',
-    dot: 'bg-surface-3',
-    empty: 'Nothing finished yet today.',
   },
 ];
 
-export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000 }) {
+export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000, today }) {
   const router = useRouter();
   const [openState, toggleOpen, toggling] = useActionState(setAcceptingOrdersAction, {});
   const pending = buckets.NEW.length;
+  const finished = buckets.CLOSED ?? [];
   // Shown when a handoff takes an order off the board, then cleared. Held here
   // rather than in the row, because by the time it fires the row is gone.
   const [collected, setCollected] = useState(0);
@@ -62,145 +61,206 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
     onCompleted: announceCompleted,
   });
 
-  return (
-    <main className="mx-auto max-w-2xl px-4 pt-4 pb-16">
-      <CollectedToast count={collected} onDone={() => setCollected(0)} />
-      <header className="mb-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight">{vendor.name}</h1>
-            <p className="mt-0.5 flex items-center gap-1.5 text-sm">
-              <span
-                className={`size-1.5 rounded-full ${vendor.is_accepting_orders ? 'bg-good' : 'bg-surface-3'}`}
-                aria-hidden
-              />
-              <span
-                className={vendor.is_accepting_orders ? 'text-good font-semibold' : 'text-muted'}
-              >
-                {vendor.is_accepting_orders ? 'Open for orders' : 'Closed to new orders'}
-              </span>
-            </p>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-              <Link href="/vendor/menu" className="text-brand-700 font-medium">
-                Menu &amp; sold out →
-              </Link>
-              <Link href="/vendor/profile" className="text-brand-700 font-medium">
-                Store details →
-              </Link>
-            </div>
-          </div>
+  const open = vendor.is_accepting_orders;
+  const nothingActive = buckets.NEW.length === 0 && buckets.READY.length === 0;
 
-          <form action={toggleOpen} className="shrink-0">
-            <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
-            <input
-              type="hidden"
-              name="accepting"
-              value={vendor.is_accepting_orders ? 'false' : 'true'}
+  return (
+    <main className="mx-auto max-w-3xl px-4 pt-5 pb-16 sm:px-6 sm:pt-8">
+      <CollectedToast count={collected} onDone={() => setCollected(0)} />
+
+      {/* 1. WHERE AM I, AND AM I OPEN. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
+          <h1 className="text-display text-2xl font-semibold break-words sm:text-3xl">
+            {vendor.name}
+          </h1>
+          <p className="mt-1.5 flex items-center gap-2 text-sm">
+            <span
+              className={`size-2 rounded-full ${open ? 'bg-good' : 'bg-line-strong'}`}
+              aria-hidden
             />
-            <button
-              type="submit"
-              disabled={toggling}
-              className={`press rounded-full px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-60 ${
-                vendor.is_accepting_orders
-                  ? 'text-ink bg-surface ring-line-strong ring-1'
-                  : 'bg-brand-700 text-white'
-              }`}
-            >
-              {toggling
-                ? vendor.is_accepting_orders
-                  ? 'Closing…'
-                  : 'Opening…'
-                : vendor.is_accepting_orders
-                  ? 'Close store'
-                  : 'Open store'}
-            </button>
-          </form>
-        </div>
-        {openState.message ? (
-          <p
-            role="status"
-            className={`mt-2.5 text-sm ${openState.ok ? 'text-brand-700' : 'text-bad'}`}
-          >
-            {openState.message}
+            <span className={open ? 'text-good font-semibold' : 'text-muted font-semibold'}>
+              {open ? 'Open for orders' : 'Closed to new orders'}
+            </span>
           </p>
-        ) : null}
+        </div>
+
+        <form action={toggleOpen} className="shrink-0">
+          <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
+          <input type="hidden" name="accepting" value={open ? 'false' : 'true'} />
+          {/* OPENING is the primary action when closed; closing is a quiet one,
+              because it is the button nobody should hit by accident. */}
+          <Button type="submit" variant={open ? 'secondary' : 'primary'} disabled={toggling}>
+            {toggling ? (open ? 'Closing…' : 'Opening…') : open ? 'Close store' : 'Open store'}
+          </Button>
+        </form>
       </header>
 
-      {pending > 0 ? (
-        <p
-          role="status"
-          className="bg-warn-bg text-warn mb-4 rounded-full px-4 py-3 text-sm font-semibold"
-        >
-          {pending === 1 ? '1 paid order to prepare' : `${pending} paid orders to prepare`}.
-        </p>
+      {openState.message ? (
+        openState.ok ? (
+          <SuccessNote className="mt-3">{openState.message}</SuccessNote>
+        ) : (
+          <ErrorNote className="mt-3">{openState.message}</ErrorNote>
+        )
       ) : null}
 
-      {GROUPS.map((group) => {
-        const orders = buckets[group.key] ?? [];
-        return (
-          <section key={group.key} className="mb-6">
-            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide uppercase">
-              <span className={`size-2 rounded-full ${group.dot}`} aria-hidden />
-              {group.title}
-              <span className="text-muted font-normal">({orders.length})</span>
-            </h2>
-            {orders.length ? (
-              <ul className="space-y-2">
-                {orders.map((order) => (
-                  <li key={order.order_id}>
-                    <OrderCard order={order} vendorId={vendor.vendor_id} tone={group.tone} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-muted rounded-card border-line border border-dashed px-4 py-4 text-sm">
-                {group.empty}
-              </p>
-            )}
-          </section>
-        );
-      })}
+      {/* 2. HOW IS TODAY GOING. Two numbers, both the store's own. */}
+      {today ? (
+        <dl className="mt-6 grid grid-cols-2 gap-3">
+          <Stat label="Today's orders" value={today.orders} />
+          <Stat label="Today's sales" value={formatPesewas(today.salesPesewas)} />
+        </dl>
+      ) : (
+        <Unavailable className="mt-6">
+          Today&apos;s totals could not be loaded. Your orders below are still up to date.
+        </Unavailable>
+      )}
+
+      {/* 3. WHAT NEEDS ME. */}
+      <div className="mt-8 space-y-7">
+        {nothingActive ? (
+          <p className="text-muted bg-surface-2 rounded-card px-4 py-5 text-sm leading-relaxed">
+            {open
+              ? 'No orders in progress. New paid orders appear here with a sound.'
+              : 'Your store is closed, so no new orders will arrive. Open it when you are ready to cook.'}
+          </p>
+        ) : (
+          GROUPS.map((group) => {
+            const orders = buckets[group.key] ?? [];
+            if (group.key === 'READY' && orders.length === 0) return null;
+            return (
+              <section key={group.key}>
+                <h2 className="mb-3 flex items-center gap-2 font-semibold">
+                  <span className={`size-2 rounded-full ${group.dot}`} aria-hidden />
+                  {group.title}
+                  <span className="text-muted font-normal tabular-nums">{orders.length}</span>
+                </h2>
+                {orders.length ? (
+                  <ul className="space-y-2.5">
+                    {orders.map((order) => (
+                      <li key={order.order_id}>
+                        <OrderCard order={order} vendorId={vendor.vendor_id} tone={group.tone} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-muted bg-surface-2 rounded-card px-4 py-4 text-sm">
+                    {group.empty}
+                  </p>
+                )}
+              </section>
+            );
+          })
+        )}
+
+        {/* 4. WHAT JUST HAPPENED. A few, then the record. */}
+        <section>
+          <div className="mb-3 flex items-baseline justify-between gap-4">
+            <h2 className="font-semibold">Recently finished</h2>
+            <Link
+              href="/vendor/history"
+              className="text-brand-700 press-sm -mr-2 inline-flex min-h-11 items-center gap-0.5 rounded-full px-2 text-sm font-semibold"
+            >
+              Order history
+              <ChevronRightIcon className="size-4" />
+            </Link>
+          </div>
+          {finished.length ? (
+            <ul className="bg-surface border-line divide-line rounded-card divide-y border">
+              {finished.map((order) => (
+                <li key={order.order_id}>
+                  <FinishedRow order={order} vendorId={vendor.vendor_id} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted text-sm">Nothing finished yet.</p>
+          )}
+        </section>
+      </div>
     </main>
   );
 }
 
 function OrderCard({ order, vendorId, tone }) {
+  // THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. Somebody standing there
+  // waiting for a code is the only thing that requires the store to act this
+  // second.
+  const callout = order.partner_waiting
+    ? { text: 'Partner at the counter. Open to read out the code', strong: true }
+    : order.awaiting_collection
+      ? { text: 'Customer collecting. Open to read out the code', strong: true }
+      : order.delivery_status === 'PICKED_UP'
+        ? { text: 'Handed to the Partner. Nothing more to do', strong: false }
+        : order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY'
+          ? { text: 'Waiting for a Partner to arrive', strong: false }
+          : null;
+
   return (
     <Link
       href={`/vendor/${vendorId}/orders/${order.order_id}`}
-      className={`press rounded-card block border px-4 py-3.5 transition-colors ${tone}`}
+      className={`press rounded-card hover:border-brand-600 flex items-center gap-4 border px-4 py-3.5 transition-colors ${tone}`}
     >
-      <div className="flex items-baseline justify-between gap-3">
-        {/* THE NUMBER THE COUNTER CALLS OUT. Three digits, restarting at 001
-            every morning, unique to this store — not a database key. */}
-        <span className="text-2xl leading-none font-bold tabular-nums">{orderLabel(order)}</span>
-        <span className="font-semibold tabular-nums">{formatPesewas(order.total_pesewas)}</span>
-      </div>
-      <div className="text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <span>
-          {order.item_count} item{order.item_count === 1 ? '' : 's'}
+      {/* THE NUMBER THE COUNTER CALLS OUT. Three digits, restarting at 001
+          every morning, unique to this store — not a database key. */}
+      <span className="w-16 shrink-0 text-3xl leading-none font-bold tabular-nums">
+        {orderLabel(order)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="font-semibold">
+            {order.fulfilment_type === 'PICKUP' ? 'Customer collects' : 'Partner delivery'}
+          </span>
+          <span className="text-muted">
+            {order.item_count} item{order.item_count === 1 ? '' : 's'} ·{' '}
+            <Age key={order.age_seconds} seconds={order.age_seconds} />
+          </span>
         </span>
-        <span>
-          {order.fulfilment_type === 'PICKUP'
-            ? 'Customer collects'
-            : `Partner delivery · ${order.destination_zone ?? 'campus'}`}
+        {callout ? (
+          <span
+            className={`mt-1 block text-sm ${callout.strong ? 'text-brand-800 font-semibold' : 'text-muted'}`}
+          >
+            {callout.text}
+          </span>
+        ) : null}
+      </span>
+      <span className="shrink-0 text-right">
+        <span className="block font-semibold tabular-nums">
+          {formatPesewas(order.vendor_amount_pesewas)}
         </span>
-        <Age key={order.age_seconds} seconds={order.age_seconds} />
-      </div>
-      {/* THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. Somebody standing there
-          waiting for a code is the only thing that requires the store to act
-          this second. */}
-      {order.partner_waiting ? (
-        <p className="text-brand-700 mt-1.5 text-sm font-semibold">
-          Partner waiting — open to read out the code
-        </p>
-      ) : order.awaiting_collection ? (
-        <p className="text-brand-700 mt-1.5 text-sm font-semibold">
-          Customer collecting — open to read out the code
-        </p>
-      ) : order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY' ? (
-        <p className="text-muted mt-1.5 text-sm font-medium">Waiting for a Partner…</p>
-      ) : null}
+        <ChevronRightIcon className="text-faint ml-auto size-5" />
+      </span>
+    </Link>
+  );
+}
+
+function FinishedRow({ order, vendorId }) {
+  const cancelled =
+    ['CANCELLED', 'CANCELLED_BY_VENDOR', 'REJECTED', 'EXPIRED'].includes(order.order_status) ||
+    order.payment_status !== 'PAID';
+  return (
+    <Link
+      href={`/vendor/${vendorId}/orders/${order.order_id}`}
+      className="press-sm hover:bg-surface-2 flex min-h-14 items-center gap-4 px-4 py-2.5 transition-colors"
+    >
+      <span className="w-12 shrink-0 font-semibold tabular-nums">{orderLabel(order)}</span>
+      <span className={`min-w-0 flex-1 text-sm ${cancelled ? 'text-bad' : 'text-muted'}`}>
+        {order.payment_status === 'REFUNDED'
+          ? 'Refunded'
+          : order.payment_status === 'REFUND_PENDING'
+            ? 'Refund pending'
+            : cancelled
+              ? 'Cancelled'
+              : order.fulfilment_type === 'PICKUP'
+                ? 'Collected'
+                : 'Delivered'}
+      </span>
+      <span
+        className={`shrink-0 text-sm font-semibold tabular-nums ${cancelled ? 'text-faint line-through' : ''}`}
+      >
+        {formatPesewas(order.vendor_amount_pesewas)}
+      </span>
+      <ChevronRightIcon className="text-faint size-4 shrink-0" />
     </Link>
   );
 }

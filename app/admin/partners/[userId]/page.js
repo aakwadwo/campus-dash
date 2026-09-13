@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
 import { partnerDetail } from '@/lib/admin';
 import { requireAdmin } from '@/lib/auth/session';
@@ -39,11 +40,9 @@ export default async function AdminPartnerPage({ params }) {
 
   return (
     <>
-      <p className="text-muted mb-2 text-sm">
-        <Link href="/admin/partners" className="underline underline-offset-4">
-          Partners
-        </Link>
-      </p>
+      <BackLink href="/admin/partners" className="mb-2">
+        Partners
+      </BackLink>
 
       <div className="mb-4 flex flex-wrap items-baseline gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">{p.full_name ?? p.phone}</h1>
@@ -52,8 +51,11 @@ export default async function AdminPartnerPage({ params }) {
         <Badge tone={p.is_available ? 'good' : 'neutral'}>
           {p.is_available ? 'Online' : 'Offline'}
         </Badge>
-        <Link href={`/admin/customers/${p.user_id}`} className="text-brand-700 text-sm underline">
-          Customer record →
+        <Link
+          href={`/admin/customers/${p.user_id}`}
+          className="text-brand-700 text-sm font-medium underline underline-offset-4"
+        >
+          Customer record
         </Link>
       </div>
 

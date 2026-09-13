@@ -17,9 +17,10 @@ import {
   Facts,
   Callout,
   LiveDot,
-  ArrowLeftIcon,
+  BackLink,
+  ButtonLink,
+  Completion,
 } from '../../ui';
-import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
 
@@ -151,32 +152,48 @@ export default async function CustomerOrderPage({ params }) {
 
       <main className="pb-24 sm:pb-16">
         <Container size="narrow" className="pt-6 sm:pt-10">
-          <Link
-            href="/orders"
-            className="text-muted hover:text-ink press-sm mb-6 -ml-1 inline-flex items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
-          >
-            <ArrowLeftIcon className="size-4" />
+          <BackLink href="/orders" className="mb-5">
             My orders
-          </Link>
+          </BackLink>
 
-          {/* The headline: one sentence saying what is happening, centred and
-              large, the way the references treat a status screen. */}
-          <header className="text-center">
-            <p className="text-muted text-sm">{order.vendor_name}</p>
-            <h1 className={`text-display mt-2 text-3xl font-semibold sm:text-4xl ${stage.tone}`}>
-              {stage.label}
-            </h1>
-            {stage.detail ? (
-              <p className="text-muted mx-auto mt-3 max-w-sm leading-relaxed">{stage.detail}</p>
-            ) : null}
-            {order.cancellation_reason ? (
-              <p className="mt-3 text-sm">Reason: {order.cancellation_reason}</p>
-            ) : null}
-            <p className="text-faint mt-4 flex items-center justify-center gap-2 font-mono text-xs">
-              {live ? <LiveDot tone={stage.badge === 'bad' ? 'bad' : 'good'} /> : null}
-              Order {orderLabel(order)}
-            </p>
-          </header>
+          {/* THE END OF THE JOURNEY gets its own moment. A muted "Completed"
+              in grey type was the last thing a customer saw after walking to a
+              counter or opening a door, and it read like an archive entry. */}
+          {order.stage === 'COMPLETED' ? (
+            <header>
+              <Completion
+                title={order.fulfilment_type === 'PICKUP' ? 'Collected' : 'Delivered'}
+                action={
+                  <ButtonLink href="/order" variant="secondary">
+                    Order something else
+                  </ButtonLink>
+                }
+              >
+                Your order from <span className="text-ink font-semibold">{order.vendor_name}</span>{' '}
+                is complete. Enjoy your meal.
+              </Completion>
+              <p className="text-faint mt-5 text-center text-xs tabular-nums">
+                Order {orderLabel(order)}
+              </p>
+            </header>
+          ) : (
+            <header className="text-center">
+              <p className="text-muted text-sm">{order.vendor_name}</p>
+              <h1 className={`text-display mt-2 text-3xl font-semibold sm:text-4xl ${stage.tone}`}>
+                {stage.label}
+              </h1>
+              {stage.detail ? (
+                <p className="text-muted mx-auto mt-3 max-w-sm leading-relaxed">{stage.detail}</p>
+              ) : null}
+              {order.cancellation_reason ? (
+                <p className="mt-3 text-sm">Reason: {order.cancellation_reason}</p>
+              ) : null}
+              <p className="text-faint mt-4 flex items-center justify-center gap-2 text-xs tabular-nums">
+                {live ? <LiveDot tone={stage.badge === 'bad' ? 'bad' : 'good'} /> : null}
+                Order {orderLabel(order)}
+              </p>
+            </header>
+          )}
 
           {/* Whatever the customer can DO right now — pay, give a code, decide
               what happens when nobody took the delivery. */}

@@ -2,6 +2,7 @@
 
 import { useActionState } from 'react';
 import { markReadyAction } from '@/app/vendor/actions';
+import { Button, CodeDisplay, ErrorNote, SuccessNote, Callout } from '@/app/ui';
 
 /**
  * The store's buttons — and there is now only one.
@@ -11,21 +12,21 @@ import { markReadyAction } from '@/app/vendor/actions';
  *
  * Which control appears is decided from the order's current state, but that is
  * presentation, not permission: the database re-checks every transition and
- * refuses one that is no longer valid. If a colleague marked the same order
- * ready a second earlier, the button is still there and pressing it simply
- * says so.
+ * refuses one that is no longer valid. If the same order was marked ready a
+ * second earlier on another phone, the button is still there and pressing it
+ * simply says so.
  */
 export default function OrderActions({ order, vendorId, handoffCode }) {
   const [ready, readyAction, marking] = useActionState(markReadyAction, {});
 
-  const collectingParty =
+  const collector =
     order.fulfilment_type === 'PICKUP'
-      ? order.customer_first_name
-        ? `${order.customer_first_name} is`
-        : 'The customer is'
-      : order.partner_name
-        ? `${order.partner_name} is`
-        : 'A Partner is';
+      ? (order.customer_first_name ?? 'The customer')
+      : (order.partner_name ?? 'The Partner');
+
+  const handedToPartner = order.order_status === 'READY' && order.delivery_status === 'PICKED_UP';
+  const waitingForPartner =
+    order.order_status === 'READY' && !order.handoff_code_available && !handedToPartner;
 
   return (
     <div className="space-y-3">
@@ -33,11 +34,13 @@ export default function OrderActions({ order, vendorId, handoffCode }) {
         <form action={readyAction}>
           <input type="hidden" name="order_id" value={order.order_id} />
           <input type="hidden" name="vendor_id" value={vendorId} />
-          <BigButton disabled={marking}>{marking ? 'Marking…' : 'Ready for pickup'}</BigButton>
-          <p className="text-muted mt-2 text-xs leading-relaxed">
+          <Button type="submit" size="lg" block disabled={marking} className="h-14 text-lg">
+            {marking ? 'Marking ready…' : 'Ready for pickup'}
+          </Button>
+          <p className="text-muted mt-2.5 text-center text-sm leading-relaxed">
             {order.fulfilment_type === 'DELIVERY'
-              ? 'The Partner carrying this is told the moment you press it, and a code appears here for you to read out.'
-              : 'The customer is told the moment you press it, and a code appears here for you to read out.'}
+              ? 'The Partner is told straight away. A code appears here to read out when they arrive.'
+              : 'The customer is told straight away. A code appears here to read out when they arrive.'}
           </p>
         </form>
       ) : null}
@@ -47,63 +50,45 @@ export default function OrderActions({ order, vendorId, handoffCode }) {
           must not also be the one confirming, or the code proves nothing — so
           this is a display, never a form. */}
       {order.order_status === 'READY' && order.handoff_code_available ? (
-        <div className="rounded-card bg-surface ring-line p-4 ring-1">
-          <p className="text-sm font-medium">{collectingParty} collecting this order.</p>
-          <p className="text-muted mt-1 text-xs leading-relaxed">
-            Read this code out to them. They type it into their own app, and only then do you hand
-            the food over.
-          </p>
-          {handoffCode ? (
-            <p className="text-ink bg-surface-2 rounded-card mt-3 py-5 text-center text-4xl font-semibold tracking-[0.4em] tabular-nums">
-              {handoffCode}
-            </p>
-          ) : (
-            <p className="text-muted mt-3 text-sm">Refresh to load the code.</p>
-          )}
-        </div>
+        handoffCode ? (
+          <CodeDisplay
+            label={`${collector} is collecting`}
+            hint="Read this out. Hand the food over once they have entered it."
+            code={handoffCode}
+          />
+        ) : (
+          <Callout tone="warn">
+            The code could not be loaded. Pull down or reload this page to try again.
+          </Callout>
+        )
       ) : null}
 
-      {order.order_status === 'READY' && !order.handoff_code_available ? (
-        <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
-          Ready and waiting for a Partner. Nothing for you to do: the order stays exactly as it is.
-        </p>
+      {waitingForPartner ? (
+        <Callout tone="neutral">
+          Ready and waiting for a Partner. Nothing for you to do until they arrive. The code shows
+          here when they do.
+        </Callout>
       ) : null}
 
-      {order.order_status === 'READY' && order.delivery_status === 'PICKED_UP' ? (
-        <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
+      {handedToPartner ? (
+        <Callout tone="good">
           Handed to the Partner. Nothing more for you to do on this order.
-        </p>
+        </Callout>
       ) : null}
 
       {order.order_status === 'COMPLETED' ? (
-        <p className="rounded-card bg-surface ring-line px-4 py-4 text-sm ring-1">
-          Collected and complete.
-        </p>
+        <Callout tone="good">
+          {order.fulfilment_type === 'PICKUP' ? 'Collected' : 'Delivered'}. This order is complete.
+        </Callout>
       ) : null}
 
       {ready.message ? (
-        <p
-          role="status"
-          className={`rounded-lg px-4 py-3 text-sm font-medium ${
-            ready.ok ? 'bg-brand-50 text-brand-700' : 'bg-bad-bg text-bad'
-          }`}
-        >
-          {ready.message}
-        </p>
+        ready.ok ? (
+          <SuccessNote>{ready.message}</SuccessNote>
+        ) : (
+          <ErrorNote>{ready.message}</ErrorNote>
+        )
       ) : null}
     </div>
-  );
-}
-
-/** Sized for a thumb on a phone propped next to a hot plate. */
-function BigButton({ children, disabled }) {
-  return (
-    <button
-      type="submit"
-      disabled={disabled}
-      className="press bg-brand-700 hover:bg-brand-800 w-full rounded-lg py-4 text-base font-semibold text-white transition-colors disabled:opacity-60"
-    >
-      {children}
-    </button>
   );
 }

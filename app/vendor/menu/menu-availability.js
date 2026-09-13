@@ -3,6 +3,7 @@
 import { useActionState, useOptimistic } from 'react';
 import { setMenuItemAvailableAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
+import { Button } from '@/app/ui';
 
 /**
  * Sold out, or on.
@@ -15,7 +16,7 @@ import { formatPesewas } from '@/lib/util/money';
  */
 export default function MenuAvailability({ vendorId, menu }) {
   if (menu.length === 0) {
-    return <p className="text-muted text-sm">No items yet.</p>;
+    return <p className="text-muted text-sm">No items on your menu yet.</p>;
   }
 
   return (
@@ -41,7 +42,7 @@ function Row({ item, vendorId }) {
         <p className={`font-medium ${available ? '' : 'text-muted'}`}>{item.name}</p>
         <p className="text-muted mt-0.5 text-sm tabular-nums">
           {formatPesewas(item.price_pesewas)}
-          {available ? null : <span className="ml-2 font-semibold">· Sold out</span>}
+          {available ? null : <span className="text-warn ml-2 font-semibold">Sold out</span>}
         </p>
         {state.message && !state.ok ? (
           <p role="alert" className="text-bad mt-1 text-sm">
@@ -61,16 +62,15 @@ function Row({ item, vendorId }) {
         <input type="hidden" name="vendor_id" value={vendorId} />
         <input type="hidden" name="name" value={item.name} />
         <input type="hidden" name="available" value={available ? 'false' : 'true'} />
-        <button
+        <Button
           type="submit"
+          variant={available ? 'secondary' : 'primary'}
           disabled={pending}
           aria-label={available ? `Mark ${item.name} sold out` : `Put ${item.name} back on`}
-          className={`press h-10 min-w-28 rounded-full px-4 text-sm font-semibold transition-colors disabled:opacity-60 ${
-            available ? 'text-ink bg-surface ring-line-strong ring-1' : 'bg-brand-700 text-white'
-          }`}
+          className="min-w-32"
         >
-          {pending ? '…' : available ? 'Mark sold out' : 'Put back on'}
-        </button>
+          {pending ? 'Saving…' : available ? 'Mark sold out' : 'Put back on'}
+        </Button>
       </form>
     </div>
   );

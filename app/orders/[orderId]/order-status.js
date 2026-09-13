@@ -12,7 +12,18 @@ import {
   completePickupAction,
 } from '@/app/order/actions';
 import { formatPesewas } from '@/lib/util/money';
-import { Callout, CodeDisplay, ErrorNote, Button, Field, Input, Select } from '@/app/ui';
+import {
+  Callout,
+  CodeDisplay,
+  CodeInput,
+  ErrorNote,
+  SuccessNote,
+  Button,
+  Field,
+  Input,
+  Select,
+  TEXT_LINK_CLASS,
+} from '@/app/ui';
 
 /**
  * The live part of the order screen: the pay button while it is unpaid, the
@@ -89,9 +100,11 @@ export default function OrderStatus({
       return (
         <form action={saveEmail} className="space-y-3">
           <input type="hidden" name="order_id" value={order.order_id} />
-          <label className="block">
-            <span className="text-sm font-medium">Email address</span>
-            <input
+          <Field
+            label="Email address"
+            hint="The payment page needs it, and your receipt goes there. We do not send anything else to it."
+          >
+            <Input
               name="email"
               type="email"
               autoComplete="email"
@@ -99,13 +112,8 @@ export default function OrderStatus({
               required
               defaultValue={email ?? ''}
               placeholder="you@example.com"
-              className="rounded-input bg-surface border-line-strong focus:border-brand-600 mt-1 h-12 w-full border px-4 text-base outline-none"
             />
-          </label>
-          <p className="text-muted text-xs">
-            The payment page needs it, and your receipt goes there. We do not send anything else to
-            it.
-          </p>
+          </Field>
           <Button type="submit" size="lg" block disabled={savingEmail}>
             {savingEmail ? 'Saving…' : 'Save and continue'}
           </Button>
@@ -154,7 +162,7 @@ export default function OrderStatus({
             <button
               type="button"
               onClick={() => setChanging(true)}
-              className="text-brand-700 font-semibold underline underline-offset-4"
+              className={`${TEXT_LINK_CLASS} inline-flex min-h-11 items-center px-1`}
             >
               Change
             </button>
@@ -192,27 +200,17 @@ export default function OrderStatus({
     return (
       <form action={completePickup} className="space-y-3">
         <input type="hidden" name="order_id" value={order.order_id} />
-        <p className="text-sm leading-relaxed">
+        <label htmlFor="pickup_code" className="block leading-relaxed">
           Your order is ready at <span className="font-semibold">{order.vendor_name}</span>. Ask
-          them for the 4-digit code and enter it here to finish.
-        </p>
-        <input
-          name="pickup_code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          required
-          pattern="\d{4}"
-          maxLength={4}
-          placeholder="1234"
-          disabled={completing}
-          className="rounded-input bg-surface border-line-strong focus:border-brand-600 h-16 w-full border text-center text-3xl font-semibold tracking-[0.4em] tabular-nums outline-none disabled:opacity-60"
-        />
+          them for the 4-digit code and enter it here to collect.
+        </label>
+        <CodeInput name="pickup_code" label="Code from the store" disabled={completing} />
         <Button type="submit" size="lg" block disabled={completing}>
           {completing ? 'Checking…' : 'Confirm collection'}
         </Button>
         {pickupState.message ? (
           pickupState.ok ? (
-            <p className="text-good text-center text-sm font-semibold">{pickupState.message}</p>
+            <SuccessNote>{pickupState.message}</SuccessNote>
           ) : (
             <ErrorNote>{pickupState.message}</ErrorNote>
           )
@@ -235,10 +233,7 @@ export default function OrderStatus({
           <p className="text-muted mt-3 text-sm leading-relaxed">
             {order.partner_name} is bringing your order.{' '}
             {order.partner_phone ? (
-              <a
-                href={`tel:${order.partner_phone}`}
-                className="text-brand-700 font-semibold underline-offset-4 hover:underline"
-              >
+              <a href={`tel:${order.partner_phone}`} className={TEXT_LINK_CLASS}>
                 Call them
               </a>
             ) : null}

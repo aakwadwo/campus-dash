@@ -15,6 +15,7 @@ import {
   ChevronRightIcon,
   ReceiptIcon,
   LiveDot,
+  TextLink,
 } from '../ui';
 
 export const metadata = { title: 'Your account · Campus Dash' };
@@ -40,13 +41,16 @@ export default async function AccountPage() {
   if (!me.can_order) return <NotYetACustomer me={me} />;
 
   const [orders, summary, outstanding] = await Promise.all([
-    listMyOrders(20),
+    listMyOrders(6),
     getMyOrderSummary(),
     outstandingTerms(),
   ]);
 
   const live = orders.filter((o) => LIVE_STAGES.has(o.stage));
-  const past = orders.filter((o) => !LIVE_STAGES.has(o.stage));
+  // A GLANCE, not a second copy of My orders. The full history lives at
+  // /orders, one tap from here and from the header, so this shows the last
+  // few and says where the rest are.
+  const past = orders.filter((o) => !LIVE_STAGES.has(o.stage)).slice(0, 5);
 
   return (
     <div>
@@ -102,12 +106,12 @@ export default async function AccountPage() {
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-muted text-xs font-semibold tracking-[0.14em] uppercase">
-            Order history
+            Recent orders
           </h2>
-          {orders.length >= 20 ? (
-            <Link href="/orders" className="text-brand-700 text-sm font-semibold">
-              See all
-            </Link>
+          {summary.total_orders > 0 ? (
+            <TextLink href="/orders" className="text-sm">
+              See all orders
+            </TextLink>
           ) : null}
         </div>
 
@@ -171,7 +175,7 @@ function ActiveRow({ order }) {
         <p className="mt-1 truncate font-semibold">{order.vendor_name}</p>
         <Meta order={order} />
       </div>
-      <ChevronRightIcon className="text-faint mt-1 hidden size-5 shrink-0 sm:block" />
+      <ChevronRightIcon className="text-faint mt-1 size-5 shrink-0" />
     </Link>
   );
 }
@@ -201,7 +205,7 @@ function HistoryRow({ order }) {
         </div>
         <Meta order={order} />
       </div>
-      <ChevronRightIcon className="text-faint hidden size-5 shrink-0 sm:block" />
+      <ChevronRightIcon className="text-faint size-5 shrink-0" />
     </Link>
   );
 }
@@ -213,7 +217,13 @@ function Meta({ order }) {
       <span className="text-faint">·</span>
       <span>{when(order.completed_at ?? order.submitted_at)}</span>
       <span className="text-faint">·</span>
-      <span>{order.fulfilment_type === 'PICKUP' ? 'Collected' : 'Partner delivery'}</span>
+      <span>
+        {order.fulfilment_type === 'PICKUP'
+          ? order.stage === 'COMPLETED'
+            ? 'Collected'
+            : 'You collect'
+          : 'Partner delivery'}
+      </span>
       <span className="text-faint">·</span>
       <span>
         {order.item_count} item{order.item_count === 1 ? '' : 's'}

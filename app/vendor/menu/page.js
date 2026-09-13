@@ -27,33 +27,26 @@ export default async function VendorMenuPage() {
   const soldOut = menu.filter((item) => !item.is_available).length;
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-5 py-8">
+    <main className="mx-auto w-full max-w-3xl px-4 pt-5 pb-16 sm:px-6 sm:pt-8">
       <PageHeader
-        eyebrow="Vendor"
         title="Menu"
         description={
           menu.length === 0
-            ? 'Nothing on your menu yet. Campus Dash adds items for you — ask us and we will set them up.'
+            ? 'Nothing on your menu yet. Campus Dash adds items for you, so ask us and we will set them up.'
             : soldOut === 0
               ? 'Everything is available. Mark anything you run out of as sold out.'
-              : `${soldOut} of ${menu.length} marked sold out.`
+              : `${soldOut} of ${menu.length} sold out. Students can see these but cannot order them.`
         }
-        back={{ href: `/vendor/${vendor.vendor_id}`, label: 'Orders' }}
       />
 
-      <div className="mt-6 space-y-6">
-        <Panel
-          title="What you have today"
-          description="A sold-out item still shows on your storefront, marked sold out, so students can see you sell it. They just cannot order it."
-        >
-          <MenuAvailability vendorId={vendor.vendor_id} menu={menu} />
-        </Panel>
+      <Panel title="Available today">
+        <MenuAvailability vendorId={vendor.vendor_id} menu={menu} />
+      </Panel>
 
-        <p className="text-muted text-sm leading-relaxed">
-          Everything here goes back to available the next time you open the store, so you never have
-          to walk through the menu in the morning.
-        </p>
-      </div>
+      <p className="text-muted mt-4 text-sm leading-relaxed">
+        Sold-out items come back on automatically the next time you open the store. To add an item
+        or change a price, contact Campus Dash.
+      </p>
     </main>
   );
 }
