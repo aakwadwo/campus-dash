@@ -164,6 +164,58 @@ record(
   missingFns.length ? `missing: ${missingFns.join(', ')}` : `found ${rpcs.length} functions`
 );
 
+// --- The shape the vendor screens read --------------------------------------
+// A function that EXISTS can still be the old version. The hosted project once
+// kept the vendor_order_board() that returned total_pesewas after the code moved
+// to vendor_amount_pesewas, and the store dashboard crashed on its first paid
+// order. PostgREST refuses a `select` of a column the function does not return,
+// even over zero rows, so this asks for exactly the columns the screens format
+// and for the ones that must no longer be there.
+console.log('\nVendor read shapes');
+{
+  const ZERO = '00000000-0000-0000-0000-000000000000';
+  const SHAPES = [
+    [
+      'vendor_order_board',
+      { p_vendor_id: ZERO, p_closed_limit: 1 },
+      'order_id,bucket,item_count,vendor_amount_pesewas,awaiting_collection',
+    ],
+    [
+      'vendor_order_detail',
+      { p_order_id: ZERO },
+      'order_id,vendor_amount_pesewas,handoff_code_available,items',
+    ],
+    [
+      'vendor_orders_on_day',
+      { p_vendor_id: ZERO, p_day: '2026-01-01' },
+      'order_id,vendor_amount_pesewas,counts_as_sale',
+    ],
+    ['vendor_daily_sales', { p_vendor_id: ZERO, p_days: 1 }, 'order_day,order_count,sales_pesewas'],
+  ];
+  for (const [fn, body, columns] of SHAPES) {
+    const r = await req(`/rest/v1/rpc/${fn}?select=${columns}`, {
+      key: SERVICE_KEY,
+      method: 'POST',
+      body,
+    });
+    record(
+      r.status === 200,
+      `${fn}() returns what the vendor screens read`,
+      r.status === 200 ? '' : (r.json?.message ?? `HTTP ${r.status}`)
+    );
+  }
+  for (const fn of ['vendor_order_board', 'vendor_order_detail']) {
+    const body =
+      fn === 'vendor_order_board' ? { p_vendor_id: ZERO, p_closed_limit: 1 } : { p_order_id: ZERO };
+    const r = await req(`/rest/v1/rpc/${fn}?select=total_pesewas`, {
+      key: SERVICE_KEY,
+      method: 'POST',
+      body,
+    });
+    record(r.status === 400, `${fn}() no longer returns the customer's total`, `HTTP ${r.status}`);
+  }
+}
+
 // --- Reference data ---------------------------------------------------------
 console.log('\nReference data');
 {

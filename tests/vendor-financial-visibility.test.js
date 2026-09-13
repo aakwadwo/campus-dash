@@ -1,5 +1,7 @@
 import { test, beforeEach, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { formatPesewas } from '../lib/util/money.js';
 import {
   asService,
   asUser,
@@ -204,6 +206,72 @@ describe('vendor financial visibility', () => {
       [['VENDOR', 7000]],
       'their own allocation only — never the platform row'
     );
+  });
+
+  /**
+   * THE DASHBOARD CRASHED ON ITS FIRST PAID ORDER. The hosted database was
+   * still on the vendor_order_board() that returned total_pesewas, the screen
+   * read vendor_amount_pesewas, and formatPesewas(undefined) threw while
+   * rendering the row. An empty board rendered, so nothing failed until a
+   * store actually had an order.
+   *
+   * So the fields each vendor screen reads are taken FROM THE SCREEN'S SOURCE
+   * and checked against what the function returns for a paid Self Pickup order.
+   * A screen and a function that stop agreeing fail here, not at the counter.
+   */
+  test('every field the vendor screens read is returned for a paid self-pickup order', async () => {
+    const order = await submitOrder({
+      items: [{ menu_item_id: MENU.jollof, quantity: 2 }],
+      fulfilment: 'PICKUP',
+      destination: null,
+    });
+    await payOrder(order.order_id);
+
+    const fieldsReadBy = (path, names) => {
+      const source = readFileSync(new URL(`../app/vendor/${path}`, import.meta.url), 'utf8');
+      const pattern = new RegExp(`\\b(?:${names.join('|')})\\.([a-z_]+)`, 'g');
+      return [...new Set([...source.matchAll(pattern)].map((m) => m[1]))];
+    };
+
+    const board = await as(ACTORS.vendor1Staff, 'select * from public.vendor_order_board($1, 5)', [
+      VENDORS.one,
+    ]);
+    const [detail] = await as(ACTORS.vendor1Staff, 'select * from public.vendor_order_detail($1)', [
+      order.order_id,
+    ]);
+    const onDay = await as(
+      ACTORS.vendor1Staff,
+      'select * from public.vendor_orders_on_day($1, (now() at time zone $2)::date)',
+      [VENDORS.one, 'UTC']
+    );
+    const days = await as(ACTORS.vendor1Staff, 'select * from public.vendor_daily_sales($1, 1)', [
+      VENDORS.one,
+    ]);
+
+    const screens = [
+      ['[vendorId]/order-board.js', ['order'], board],
+      ['[vendorId]/orders/[orderId]/page.js', ['order'], [detail]],
+      ['history/[day]/page.js', ['order', 'o'], onDay],
+      // `placeholder` is set by the page itself on days with no sales row.
+      ['history/page.js', ['d', 'day'], days, ['placeholder']],
+    ];
+
+    for (const [path, names, rows, local = []] of screens) {
+      assert.equal(rows.length, 1, `${path}: the paid pickup order is there to render`);
+      const fields = fieldsReadBy(path, names).filter((f) => !local.includes(f));
+      assert.ok(fields.length > 0, `${path}: found the fields it reads`);
+      for (const field of fields) {
+        assert.ok(field in rows[0], `${path} reads ${field}, which the function does not return`);
+      }
+    }
+
+    // The exact call that threw, on every row a screen formats.
+    for (const row of [...board, detail, ...onDay]) {
+      assert.equal(formatPesewas(row.vendor_amount_pesewas), 'GH₵70.00');
+    }
+    assert.equal(formatPesewas(Number(days[0].sales_pesewas)), 'GH₵70.00');
+    assert.equal(board[0].fulfilment_type, 'PICKUP');
+    assert.equal(board[0].bucket, 'NEW');
   });
 
   // ===========================================================================

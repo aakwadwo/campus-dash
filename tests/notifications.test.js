@@ -1,7 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { renderSms } from '../lib/notifications/templates.js';
+import { renderSms, SMS_TEMPLATES } from '../lib/notifications/templates.js';
+import { isGsm7, toGsm7 } from '../lib/notifications/gsm7.js';
 import { NOTIFICATION_EVENT, AUDIENCE } from '../lib/notifications/events.js';
 
 /**
@@ -135,6 +136,73 @@ describe('order notifications', () => {
     assert.match(vendor, /007/);
     assert.match(vendor, /https:\/\/example\.test\/vendor/, 'the store gets a way in');
     assert.doesNotMatch(vendor, /accept|reject/i, 'there is nothing left to accept');
+  });
+
+  /**
+   * THE STORE'S NEW-ORDER SMS WAS ACCEPTED AND NEVER ARRIVED. It was the only
+   * message carrying an em dash, which forces the whole text into UCS-2; the
+   * approval SMS to the same number, same link, plain punctuation, arrived. So
+   * every message is rendered into the GSM-7 alphabet, and this holds all of
+   * them to it — including the ones whose context adds a "×" or a cedi sign.
+   */
+  test('every SMS renders in the GSM-7 alphabet', () => {
+    const context = {
+      orderNumber: '001',
+      vendorName: 'Asumadu Specials',
+      customerName: 'Ama',
+      partnerName: 'Kwame',
+      storeName: 'Asumadu Specials',
+      itemCount: 3,
+      orderSummary: '2× Jollof Rice and 1 more item',
+      appUrl: 'https://www.campusdash.app',
+      totalPesewas: 9700,
+      earningsPesewas: 500,
+      amountPesewas: 2000,
+      deliveryCode: '4821',
+      destinationLabel: 'Hostel A',
+      refundNote: 'Your refund is on its way.',
+    };
+
+    let rendered = 0;
+    for (const [event, audiences] of Object.entries(SMS_TEMPLATES)) {
+      for (const audience of Object.keys(audiences)) {
+        for (const isPickup of [true, false]) {
+          const message = renderSms(event, audience, { ...context, isPickup });
+          assert.ok(
+            isGsm7(message),
+            `${event} -> ${audience} leaves GSM-7: ${JSON.stringify(
+              [...message].filter((ch) => !isGsm7(ch))
+            )}`
+          );
+          rendered += 1;
+        }
+      }
+    }
+    assert.ok(rendered > 20, 'the loop reached the templates');
+  });
+
+  test('the self-pickup NEW PAID ORDER SMS to the store is one plain GSM-7 segment', () => {
+    const vendor = renderSms(NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR, {
+      orderNumber: '001',
+      itemCount: 1,
+      isPickup: true,
+      appUrl: 'http://localhost:3000',
+    });
+    assert.equal(
+      vendor,
+      'Campus Dash: NEW PAID ORDER #001 - 1 item, collection. Start preparing: http://localhost:3000/vendor'
+    );
+    assert.ok(isGsm7(vendor));
+    assert.ok(vendor.length <= 160, `${vendor.length} chars is more than one segment`);
+  });
+
+  test('typographic characters fold to plain ones, and names are left alone', () => {
+    assert.equal(toGsm7('a — b – c'), 'a - b - c');
+    assert.equal(toGsm7('“it’s” …'), '"it\'s" ...');
+    assert.equal(toGsm7('2× GH₵5.00'), '2x GHS 5.00');
+    assert.equal(toGsm7('Ɛsi’s Kitchen'), "Ɛsi's Kitchen", 'a name is not rewritten');
+    assert.equal(isGsm7('Campus Dash: order #007 — ready'), false);
+    assert.equal(isGsm7('Café @ £5 {ok} €'), true);
   });
 
   test('READY copy differs for pickup and delivery', () => {
