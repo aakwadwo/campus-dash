@@ -114,6 +114,10 @@ describe('schema invariants', () => {
       // could mark its own unsent messages delivered, which is precisely the
       // record support relies on when someone says a code never arrived.
       'record_sms_delivery_status',
+      // Deletes whole accounts, their stores, orders and money records. Run
+      // only by the database owner acting as an administrator, never through
+      // PostgREST — not even a signed-in administrator's browser session.
+      'admin_purge_test_accounts',
     ];
     const callable = await asService(
       async (c) =>
