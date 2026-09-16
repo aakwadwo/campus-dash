@@ -857,6 +857,14 @@ alter table public.partner_sessions enable row level security;
 
 -- A Partner may read their own history. Nobody else reaches the table directly;
 -- an administrator sees it through admin_partner_activity().
+--
+-- DROPPED FIRST, because the table above is created `if not exists` and this
+-- policy was not. On a database that already has the table — a hand-applied
+-- fix, or a schema.sql install ahead of the migration history — the CREATE
+-- would fail on 42710 and stop the deployment on a line that changes nothing.
+-- Every other policy in this chain is written this way; this one was the
+-- exception.
+drop policy if exists "partner_sessions_own" on public.partner_sessions;
 create policy "partner_sessions_own" on public.partner_sessions
   for select to authenticated
   using (user_id = auth.uid() or public.is_admin());

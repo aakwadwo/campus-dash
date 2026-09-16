@@ -201,7 +201,22 @@ grant execute on function public.vendor_order_detail("uuid") to authenticated, s
 
 -- --- Daily totals -------------------------------------------------------------
 
-create function public.vendor_daily_sales("p_vendor_id" "uuid", "p_days" integer default 30)
+-- CREATE OR REPLACE, not a bare CREATE, and not the drop-then-create the two
+-- functions above use.
+--
+-- Those two drop first because THIS migration changes their return type, and
+-- Postgres will not replace a function whose OUT columns have moved. These two
+-- keep the shape they already had, so a plain replace is legal — and it is also
+-- the safer verb here, because a DROP would take the function's grants with it
+-- and briefly leave the vendor dashboard with no function to call at all.
+--
+-- It matters because production can already have this function. A hotfix was
+-- applied there by hand, ahead of the migration history, so `db push` arriving
+-- with a bare CREATE failed on 42723 and stopped the whole deployment. The
+-- replace lands cleanly on a database that has it and on one that does not, and
+-- 20260930000002 — the next file in the same push — immediately replaces this
+-- body with the refund-aware one that production is already running.
+create or replace function public.vendor_daily_sales("p_vendor_id" "uuid", "p_days" integer default 30)
 returns table (
   "order_day" "date",
   "order_count" integer,
@@ -237,7 +252,10 @@ alter function public.vendor_daily_sales("uuid", integer) owner to postgres;
 revoke all on function public.vendor_daily_sales("uuid", integer) from public, anon;
 grant execute on function public.vendor_daily_sales("uuid", integer) to authenticated, service_role;
 
-create function public.vendor_orders_on_day("p_vendor_id" "uuid", "p_day" "date")
+-- Replaced rather than created, for the same reason and with the same shape:
+-- 20260930000002 refines this one's refund handling too, and production may
+-- already be carrying that refinement.
+create or replace function public.vendor_orders_on_day("p_vendor_id" "uuid", "p_day" "date")
 returns table (
   "order_id" "uuid",
   "vendor_order_no" integer,
