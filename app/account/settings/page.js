@@ -5,7 +5,7 @@ import ProfileForm from '../profile-form';
 import EmailForm from '../email-form';
 import { Panel, Button, ButtonLink } from '../../ui';
 
-export const metadata = { title: 'Settings · Campus Dash' };
+export const metadata = { title: 'Settings' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -45,6 +45,10 @@ export default async function AccountSettingsPage() {
             firstName={me.first_name ?? null}
             lastName={me.last_name ?? null}
             phone={me.phone ?? null}
+            isCustomer={Boolean(me.is_customer)}
+            affiliation={me.affiliation ?? 'STUDENT'}
+            graduationYear={me.graduation_year ?? null}
+            gender={me.gender ?? null}
             phoneIsCredential={phoneIsCredential}
           />
         </Panel>

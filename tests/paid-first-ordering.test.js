@@ -23,6 +23,7 @@ import {
   getSecrets,
   getAllocations,
   tryTransition,
+  submitScanOrder,
   expectRejection,
 } from './helpers/flow.js';
 
@@ -312,7 +313,7 @@ describe('paid-first ordering', () => {
     assert.ok(row.submitted_at);
     assert.equal(row.stage, 'PREPARING_PARTNER_ASSIGNED');
 
-    // FIRST NAME ONLY, and only while they are carrying it.
+    // FIRST NAME ONLY, ever. Never a surname, in either direction.
     assert.equal(row.partner_first_name, 'Yaw');
     assert.ok(!JSON.stringify(row).includes('Boateng'), 'never a surname');
 
@@ -326,7 +327,12 @@ describe('paid-first ordering', () => {
       )
     ).find((r) => r.order_id === order.order_id);
     assert.equal(after.stage, 'COMPLETED');
-    assert.equal(after.partner_first_name, null, 'who it was is no longer their business');
+    // AND IT STAYS. "Kwame brought this" is what somebody remembers about an
+    // order; a history row that names nobody is a record of a transaction
+    // rather than of something that happened. The PHONE NUMBER is the thing
+    // that ends with the delivery, and the list never carried one.
+    assert.equal(after.partner_first_name, 'Yaw');
+    assert.ok(!JSON.stringify(after).includes('+233'), 'and never a number');
     assert.ok(after.completed_at);
   });
 
@@ -369,32 +375,26 @@ describe('paid-first ordering', () => {
   // =========================================================================
   // THE QUEUE NUMBER
   // =========================================================================
-  test('a scan errand takes no queue number, because no store ever sees it', async () => {
-    const errand = await asUser(
-      ACTORS.customerAma,
-      async (c) =>
-        (
-          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6)', [
-            VENDORS.wafflemania,
-            LOCATIONS.room204,
-            `${ACTORS.customerAma}/scans/queue.jpg`,
-            'image/jpeg',
-            1024,
-            'Two waakye',
-          ])
-        ).rows[0],
-      { commit: true }
-    );
+  test('a meal scan order takes a queue number, like everything else on the board', async () => {
+    const errand = await submitScanOrder({ vendorId: VENDORS.wafflemania });
 
     const stored = await getOrder(errand.order_id);
-    assert.equal(stored.vendor_order_no, null);
-    // The internal reference is still there, and is what the customer's screen
-    // falls back to.
-    assert.match(stored.order_number, /^CD-\d{5}$/);
+    // THE CORRECTION. A scan order used to take no queue number, because no
+    // store ever saw one. The store IS the redemption point now: it has the
+    // order on its board and calls the number out like any other.
+    assert.equal(stored.vendor_order_no, 1, 'the first scan order of the day at this store');
+    assert.match(stored.order_number, /^CD-\d{5}$/, 'the internal reference survives underneath');
 
-    // A food order at the same store still starts at 1: the errand consumed
-    // nothing, so the store's own count has no gap in it.
+    // And it is per store per day, so an order at a different store is its own
+    // 001 rather than continuing somebody else's count.
     const food = await submitOrder({ vendorId: VENDORS.one });
     assert.equal(food.vendor_order_no, 1);
+
+    // A second scan order at the same store continues that store's count.
+    const second = await submitScanOrder({
+      vendorId: VENDORS.wafflemania,
+      customer: ACTORS.customerKwesi,
+    });
+    assert.equal((await getOrder(second.order_id)).vendor_order_no, 2);
   });
 });

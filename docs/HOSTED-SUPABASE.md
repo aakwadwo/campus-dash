@@ -349,7 +349,8 @@ the twelve vendor categories. It installs **no people and no places**. So:
    `@acity.edu.gh` address if you also want that account to be able to order.
 2. `/admin/locations` — the campus tree. Nothing can be delivered until at
    least one location is `is_deliverable`.
-3. `/admin/pilot` — the delivery fee, and the scan fee if scan delivery is on.
+3. `/admin/pilot` — the Partner fee, and the scan and pack fees if any store
+   honours meal scans.
    The 5% service fee is already correct; do not change it.
 4. Vendors **sign themselves up** at `/vendor/signup` and you approve them at
    `/admin/vendors`. The only rows you create by hand are catalogue entries for

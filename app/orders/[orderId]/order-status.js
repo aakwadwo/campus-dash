@@ -225,8 +225,8 @@ export default function OrderStatus({
     return (
       <div>
         <CodeDisplay
-          label="Delivery code"
-          hint="Give this to the Partner"
+          label="Your code"
+          hint="Read this out to your Partner on arrival"
           code={order.delivery_code}
         />
         {order.partner_name ? (
@@ -268,8 +268,8 @@ export default function OrderStatus({
           </Button>
         </form>
         <p className="text-muted text-center text-xs">
-          Collecting it yourself does not automatically refund the delivery fee. Contact support and
-          we will sort it out.
+          Collecting it yourself does not automatically refund the GH₵5 fee. Contact support and we
+          will sort it out.
         </p>
         {[waitState, collectState]
           .filter((s) => s.message && !s.ok)
@@ -308,20 +308,20 @@ function FulfilmentChoice({ order, options, locations, action, pending, state, o
           checked={choice === 'PICKUP'}
           onChange={() => setChoice('PICKUP')}
           title="Collect it myself"
-          detail={`No delivery fee. Walk to ${order.vendor_name}.`}
+          detail={`Walk to ${order.vendor_name}. No extra fee.`}
           total={pickup ? formatPesewas(pickup.total_pesewas) : null}
         />
         <Option
           checked={choice === 'DELIVERY'}
           onChange={() => setChoice('DELIVERY')}
           disabled={!deliveryAvailable}
-          title="Have a Partner bring it"
+          title="Campus Dash Partner"
           detail={
             !deliveryAvailable
               ? 'No Partners are available right now.'
               : delivery
-                ? `${formatPesewas(delivery.delivery_fee_pesewas)} delivery fee`
-                : 'A student Partner collects it and brings it to you'
+                ? `${formatPesewas(delivery.delivery_fee_pesewas)} — another student brings it to you`
+                : 'Another student collects it and brings it to you'
           }
           total={deliveryAvailable && delivery ? formatPesewas(delivery.total_pesewas) : null}
         />

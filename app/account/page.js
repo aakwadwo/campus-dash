@@ -18,7 +18,7 @@ import {
   TextLink,
 } from '../ui';
 
-export const metadata = { title: 'Your account · Campus Dash' };
+export const metadata = { title: 'Your account' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -222,7 +222,7 @@ function Meta({ order }) {
           ? order.stage === 'COMPLETED'
             ? 'Collected'
             : 'You collect'
-          : 'Partner delivery'}
+          : 'Campus Dash Partner'}
       </span>
       <span className="text-faint">·</span>
       <span>

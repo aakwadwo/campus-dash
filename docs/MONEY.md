@@ -28,12 +28,12 @@ Worked example — 2 × GH₵35 jollof, GH₵3 water, delivered:
 |                     |                       |
 | ------------------- | --------------------- |
 | Food                | GH₵73.00 → vendor     |
-| Service fee (5%)    | GH₵3.65 → Campus Dash |
+| Service fee (6.95%) | GH₵5.07 → Campus Dash |
 | Delivery fee (flat) | GH₵5.00 → Partner     |
-| **Customer pays**   | **GH₵81.65**          |
+| **Customer pays**   | **GH₵83.07**          |
 
 The service fee is a percentage of the food (`pricing_config.service_fee_bps`,
-500 bps = 5%), rounded half-up in integer pesewas. The delivery fee is flat.
+695 bps = 6.95%), rounded half-up in integer pesewas. The delivery fee is flat.
 Both are snapshotted onto the order at submission, so a later fee change never
 moves an order that was already quoted.
 
@@ -43,10 +43,39 @@ neither expression mentions the rate — so changing it moves Campus Dash's own
 revenue and nothing else. Provider transaction fees are likewise a platform
 expense and are never deducted from an allocation.
 
-At 5% the rounding rule earns its keep in a way it did not at 10%: a subtotal
-that is an odd multiple of ten pesewas lands exactly on half a pesewa, and
-half-up sends it to the customer rather than quietly to Campus Dash. See
+The rounding rule earns its keep at this rate in a way it did not at 10%, where
+a basket priced in whole cedis could never produce a fraction of a pesewa. At
+6.95% it can: a subtotal that is an odd multiple of GH₵10.00 lands exactly on
+half a pesewa — GH₵30.00 of food is GH₵2.085 of fee — and half-up resolves it
+to GH₵2.09, so the customer pays a pesewa more rather than Campus Dash quietly
+eating it. Which subtotals land there is a property of the RATE, so the rule is
+stated once and the fixtures are recomputed whenever the rate moves. See
 `tests/service-fee.test.js`.
+
+## Two pricing systems, and they never meet
+
+Everything above is a **food order**: Campus Dash sold the food, there is a real
+subtotal, and the service fee is a percentage of it.
+
+A **scan order** is not that. The student's campus meal entitlement pays the
+store for the food; Campus Dash sold no food, `orders.subtotal_pesewas` is zero
+and no VENDOR allocation is written at all. So the fee cannot be a percentage of
+anything — there is nothing of ours to take a percentage of.
+
+|             | Food order                        | Scan order                        |
+| ----------- | --------------------------------- | --------------------------------- |
+| Subtotal    | the store's prices                | **GH₵0.00**                       |
+| Service fee | `service_fee_bps` of the subtotal | `scan_service_fee_pesewas` FLAT   |
+|             | 6.95%                             | GH₵2.00, whatever is in it        |
+| Pack fee    | never (CHECK constraint)          | GH₵4.00, optional on a collection |
+| Partner fee | `delivery_fee_pesewas`, GH₵5.00   | `delivery_fee_pesewas`, GH₵5.00   |
+| VENDOR row  | the subtotal                      | **none is written**               |
+
+`price_order()` reads `service_fee_bps`; `price_scan_order()` does not read it at
+all. Taking a percentage of the value a scan covered would be charging a
+commission on a transaction between the student and the university, and it would
+make the fee move with a number the customer is not paying. See `docs/SCAN.md`
+for the full table, including the pack rules.
 
 ## Why the Partner allocation arrives late, and why it cannot be split
 

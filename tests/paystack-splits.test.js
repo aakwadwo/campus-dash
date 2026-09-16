@@ -19,6 +19,7 @@ import {
   partnerAccept,
   completeDelivery,
   getAllocations,
+  submitScanOrder,
   expectRejection,
 } from './helpers/flow.js';
 
@@ -484,22 +485,7 @@ describe('split settlement in the ledger', () => {
   test('a scan errand has no vendor allocation to split at all', async () => {
     await giveVendorASubaccount(VENDORS.wafflemania);
 
-    const order = await asUser(
-      ACTORS.customerAma,
-      async (c) =>
-        (
-          await c.query('select * from public.submit_scan_order($1,$2,$3,$4,$5,$6,$7)', [
-            VENDORS.wafflemania,
-            '10000000-0000-4000-8000-000000000121',
-            `${ACTORS.customerAma}/scans/scan-1.jpg`,
-            'image/jpeg',
-            120000,
-            'Jollof from the hot counter.',
-            null,
-          ])
-        ).rows[0],
-      { commit: true }
-    );
+    const order = await submitScanOrder({ vendorId: VENDORS.wafflemania });
     await payWithSplit(order.order_id, { subaccount: null });
 
     const allocations = await getAllocations(order.order_id);

@@ -620,6 +620,20 @@ export async function runSettlementAction(_prev, formData) {
         `and swept into a later run.`
       : '';
 
+    // A PARTNER RUN SENDS NOTHING, on purpose. It gathers what is owed into
+    // payouts and stops; the money leaves when a person sends it and records
+    // the reference. Saying "0 payouts sent" here would read as a failure.
+    if (result.manual) {
+      return {
+        ok: true,
+        message: result.awaitingManualSettlement
+          ? `${result.awaitingManualSettlement} ${
+              result.awaitingManualSettlement === 1 ? 'Partner is' : 'Partners are'
+            } ready to be paid. Send the money, then record each one below.` + deferred
+          : 'Nothing was owed for that period.' + deferred,
+      };
+    }
+
     return {
       ok: result.failed === 0,
       message:
@@ -634,6 +648,34 @@ export async function runSettlementAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
+}
+
+/**
+ * A person recording that they sent a Partner their money.
+ *
+ * THE REFERENCE IS THE EVIDENCE and the database refuses without one: a manual
+ * settlement has no provider event behind it, so what the operator typed is the
+ * only thing linking the row to a real transfer. Appends to admin_actions.
+ */
+export async function settlePayoutManuallyAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  const reference = str(formData, 'reference');
+  if (!reference) {
+    return { ok: false, message: 'Record the transfer reference you sent it with.' };
+  }
+
+  return run(
+    () =>
+      admin.settlePayoutManually({
+        payoutId: str(formData, 'payout_id'),
+        reference,
+        reason: str(formData, 'reason') ?? 'Paid by hand at the weekly run',
+      }),
+    'Recorded as paid.',
+    ['/admin/settlements']
+  );
 }
 
 /**
@@ -687,7 +729,15 @@ export async function retryPayoutsAction(_prev, formData) {
  * on the account, a name the network rejects. The destination is saved either
  * way, so this is the button that finishes the job later.
  */
-/** Records that a customer's reward was honoured, and what it was. */
+/**
+ * Records that a customer's reward was honoured, and what it was.
+ *
+ * THE SCREEN THAT CALLED THIS IS GONE — /admin/community was a report rather
+ * than an operational destination and came off the console — but the action and
+ * admin_settle_customer_reward() behind it are untouched, because the reward
+ * ledger is a real record and removing a page is not a reason to stop being
+ * able to write to it. It is reachable from the customer's own record.
+ */
 export async function settleCustomerRewardAction(_prev, formData) {
   const denied = await authoriseAdminAction();
   if (denied) return denied;
@@ -699,7 +749,7 @@ export async function settleCustomerRewardAction(_prev, formData) {
         notes: str(formData, 'notes'),
       }),
     'Recorded.',
-    ['/admin/community']
+    ['/admin/customers']
   );
 }
 

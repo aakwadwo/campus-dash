@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useActionState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import {
   updateProfileAction,
   addImageAction,
@@ -184,25 +184,143 @@ export function ImageForms({ vendorId, images }) {
       )}
       <Result state={removeState} />
 
-      <form action={add} className="space-y-3">
-        <input type="hidden" name="vendor_id" value={vendorId} />
-        <Field label="Add a photo" hint="JPEG, PNG or WebP, under 5 MB. Up to 12 in total.">
+      {/* KEYED ON THE GALLERY SIZE, which is what resets the picker after a
+          successful upload. A `useEffect` that cleared the fields would be
+          setState inside an effect body — a cascading render — and would have
+          to revoke the preview URL itself; remounting does both, and the
+          unmount cleanup in usePreview is already the right place for the
+          revoke. */}
+      <AddPhoto
+        key={images.length}
+        vendorId={vendorId}
+        add={add}
+        adding={adding}
+        state={addState}
+      />
+    </div>
+  );
+}
+
+/**
+ * Adding one photograph.
+ *
+ * THE FAILURE THIS FIXES was a bare file input, a caption box and an Upload
+ * button: nothing happened visibly when a file was chosen, so on a phone —
+ * where the picker takes a second and the preview is the only confirmation the
+ * right photo was picked — the honest reading was that the tap had missed.
+ * People tapped Upload twice, or chose the file again.
+ *
+ * So: the tile shows the local preview the instant a file is chosen, the
+ * selection can be replaced or cleared before anything is sent, the pending
+ * state sits on the thing being uploaded, and a failure leaves the file
+ * selected so the next tap is a retry rather than starting over.
+ *
+ * `capture="environment"` puts the rear camera in the phone picker alongside
+ * the gallery, which is what a cook standing over a plate actually wants.
+ */
+function AddPhoto({ vendorId, add, adding, state }) {
+  const inputRef = useRef(null);
+  const [chosen, setChosen] = useState(null);
+  const [preview, setPreview] = usePreview();
+
+  // A SUCCESSFUL UPLOAD CLEARS THE FORM by remounting this component — see the
+  // key on it. Leaving the photo in the picker under a success message reads as
+  // "it did not go", and invites a duplicate.
+  const clear = () => {
+    setChosen(null);
+    setPreview(null);
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
+  return (
+    <form action={add} className="border-line space-y-3 border-t pt-5">
+      <input type="hidden" name="vendor_id" value={vendorId} />
+
+      <div className="flex items-start gap-4">
+        <label
+          className={`rounded-card border-line-strong hover:bg-surface-2 grid aspect-[4/3] w-32 shrink-0 cursor-pointer place-items-center overflow-hidden border border-dashed transition-colors ${
+            adding ? 'pointer-events-none opacity-60' : ''
+          }`}
+        >
+          {preview ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={preview} alt="" className="size-full object-cover" />
+          ) : (
+            <span className="text-muted px-2 text-center text-xs font-medium">
+              Choose or take a photo
+            </span>
+          )}
           <input
+            ref={inputRef}
             type="file"
             name="image"
             accept="image/jpeg,image/png,image/webp"
+            capture="environment"
             required
-            className="text-muted file:bg-surface-2 file:text-ink w-full text-sm file:mr-3 file:rounded-full file:border-0 file:px-4 file:py-2 file:text-sm file:font-medium"
+            disabled={adding}
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return clear();
+              setChosen(file.name);
+              setPreview(URL.createObjectURL(file));
+            }}
           />
-        </Field>
-        <Field label="Caption" hint="Optional.">
-          <Input name="caption" placeholder="Jollof with grilled chicken" />
-        </Field>
-        <Button type="submit" variant="secondary" disabled={adding}>
-          {adding ? 'Uploading…' : 'Upload photo'}
-        </Button>
-        <Result state={addState} />
-      </form>
-    </div>
+        </label>
+
+        <div className="min-w-0 flex-1 space-y-3">
+          <p className="text-muted text-xs leading-relaxed">
+            JPEG, PNG or WebP, under 5 MB. Up to 12 in total.
+            {chosen ? (
+              <span className="text-ink mt-1 block truncate font-medium">{chosen}</span>
+            ) : null}
+          </p>
+
+          <Field label="Caption" hint="Optional.">
+            <Input name="caption" placeholder="Jollof with grilled chicken" disabled={adding} />
+          </Field>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" variant="secondary" disabled={adding || !chosen}>
+              {adding ? 'Uploading…' : state.message && !state.ok ? 'Try again' : 'Upload photo'}
+            </Button>
+            {chosen && !adding ? (
+              <button
+                type="button"
+                onClick={clear}
+                className="text-muted hover:text-ink press-sm min-h-9 rounded px-2 text-sm font-medium transition-colors"
+              >
+                Remove
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {/* RECOVERABLE. The file stays selected on a failure, so the button above
+          becomes a retry rather than sending somebody back to the picker. */}
+      <Result state={state} />
+    </form>
   );
+}
+
+/** An object URL that is revoked when replaced and on unmount. */
+function usePreview() {
+  const [url, setUrl] = useState(null);
+  const current = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (current.current) URL.revokeObjectURL(current.current);
+    },
+    []
+  );
+
+  const set = (next) => {
+    if (current.current) URL.revokeObjectURL(current.current);
+    current.current = next;
+    setUrl(next);
+  };
+
+  return [url, set];
 }

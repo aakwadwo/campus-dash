@@ -14,6 +14,7 @@ import {
   partnerAccept,
   partnerConfirmPickup,
   completeDelivery,
+  submitScanOrder,
   expectRejection,
 } from './helpers/flow.js';
 
@@ -260,16 +261,33 @@ describe('first names and the scan brief', () => {
     assert.ok(detail.partner_phone, 'the number is there while they are carrying it');
   });
 
-  test('the Partner’s name and number both stop when the delivery does', async () => {
+  /**
+   * THE NUMBER STOPS. THE FIRST NAME DOES NOT.
+   *
+   * Both used to end with the delivery, which meant the rating prompt said
+   * "your Partner" and the order history named nobody — rating somebody became
+   * an oddly anonymous act, and a customer could not say who had brought their
+   * lunch an hour later. A first name is what one person tells another about
+   * another, and hard rule 19 has always allowed it in both directions.
+   *
+   * The PHONE NUMBER is the thing the window was really protecting, and its
+   * window is unchanged: assignment until the delivery ends, never afterwards,
+   * never in an SMS. Hard rule 14.
+   */
+  test('the Partner’s number stops when the delivery does, and their first name stays', async () => {
     const order = await orderReadyForDispatch({ destination: LOCATIONS.room204 });
     await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await completeDelivery(order.order_id, ACTORS.partnerYaw);
 
     const detail = await detailFor(ACTORS.customerAma, order.order_id);
     assert.equal(detail.delivery_status, 'DELIVERED');
-    assert.equal(detail.partner_name, null, 'the delivery is over');
-    assert.equal(detail.partner_phone, null);
+    assert.equal(detail.partner_name, 'Yaw', 'the customer can still say who brought it');
+    assert.equal(detail.partner_phone, null, 'the number is over with the delivery');
     assert.equal(detail.delivery_code, null, 'and the code has no further use');
+
+    // A SURNAME IS NEVER RETURNED, at any point. given_name() is what the
+    // column holds, so widening this would take a deliberate change.
+    assert.doesNotMatch(JSON.stringify(detail), /Test-Partner/);
   });
 
   test('the Partner sees the customer’s first name for as long as they carry it', async () => {
@@ -339,36 +357,20 @@ describe('first names and the scan brief', () => {
     customer = ACTORS.customerAma,
     details = 'Jollof with chicken from the hot counter. Fish is fine if it has run out.',
   } = {}) {
-    return asUser(
-      customer,
-      async (c) =>
-        (
-          await c.query('select * from public.submit_scan_order($1,$2,$3,$4,$5,$6,$7)', [
-            VENDORS.wafflemania,
-            LOCATIONS.room204,
-            `${customer}/scans/scan-1.jpg`,
-            'image/jpeg',
-            120000,
-            details,
-            null,
-          ])
-        ).rows[0],
-      { commit: true }
-    );
+    return submitScanOrder({ customer, vendorId: VENDORS.wafflemania, details });
   }
 
-  test('an errand without details is refused', async () => {
+  /**
+   * THE NOTE IS OPTIONAL NOW, and that is a consequence of the items being
+   * real. It used to be the only way anybody knew what to collect, so it had to
+   * be compulsory and a blank one was refused. The order itself says what was
+   * asked for; what is left is genuinely optional context.
+   */
+  test('a scan order without a note is accepted', async () => {
     for (const details of ['', '   ', null]) {
-      const error = await expectRejection(submitScan({ details }));
-      assert.match(error.message, /tell us what you want/i);
+      const order = await submitScan({ details });
+      assert.ok(order.order_id, 'a blank note is not a reason to refuse an order');
     }
-
-    const orders = await asService(
-      async (c) =>
-        (await c.query("select count(*)::int as n from public.orders where order_type = 'SCAN'"))
-          .rows[0].n
-    );
-    assert.equal(orders, 0, 'and no half-created errand is left behind');
   });
 
   test('the details are stored, and the customer can read their own back', async () => {
@@ -420,6 +422,9 @@ describe('first names and the scan brief', () => {
     );
     assert.match(during.details, /Jollof with chicken/, 'the assigned Partner is told what to ask');
     assert.equal(during.restaurant_name, 'Wafflemania (test)');
+    // AND WHAT THE ORDER ACTUALLY IS. The note is context; the items are the
+    // order, and a Partner who has both does not have to ring anybody.
+    assert.equal(during.items.length, 1);
 
     // An unassigned Partner gets nothing, at the same moment.
     const otherPartner = await asUser(

@@ -2,11 +2,17 @@ import Link from 'next/link';
 import SiteHeader from './site-header';
 import SiteFooter from './site-footer';
 import { listVendors } from '@/lib/customer';
+import { vendorImageUrl } from '@/lib/verification/documents';
 import { redirectVendorOnlyAccount } from '@/lib/auth/session';
-import { ButtonLink, Container, ImagePlaceholder, ChevronRightIcon } from './ui';
+import { ButtonLink, Container, VendorCard, ChevronRightIcon } from './ui';
 
 export const metadata = {
-  title: 'Campus Dash: order food around Academic City',
+  // THE TAB TITLE FOR `/`. The root layout's `title.template` deliberately does
+  // NOT apply here: a template decorates titles from CHILD segments, and
+  // app/page.js shares the root segment with app/layout.js. So this string is
+  // rendered verbatim, with no ` · Campus Dash` suffix — which is why it and
+  // the layout's `title.default` have to say the same thing.
+  title: 'Campus Dash | Food & More at Academic City',
   description:
     'Order from vendors around Academic City. Collect it yourself, or have a student Partner bring it to you.',
 };
@@ -33,7 +39,7 @@ export const dynamic = 'force-dynamic';
 const HOW_IT_WORKS = [
   ['Pick a vendor', 'Stores around campus, with what they have right now.'],
   ['Collect it, or have it brought', 'Pick it up free, or send it to your block.'],
-  ['Pay once', 'One payment covers the food, the delivery and our fee.'],
+  ['Pay once', 'One payment covers the food, the Partner and our fee.'],
 ];
 
 export default async function Home() {
@@ -43,13 +49,20 @@ export default async function Home() {
 
   // Never let a slow or failing marketplace query take the landing page down.
   const vendors = await listVendors().catch(() => []);
-  const open = (vendors ?? []).filter((v) => v.is_accepting_orders).slice(0, 4);
+  // THE REAL PHOTOGRAPH, not a placeholder. storefront_vendors() has returned
+  // image_path all along and /order has rendered it all along; the landing page
+  // — the one screen a person sees before deciding whether this is worth an
+  // account — was the only place still drawing initials in a coloured box.
+  const open = (vendors ?? [])
+    .filter((v) => v.is_accepting_orders)
+    .slice(0, 4)
+    .map((v) => ({ ...v, image_url: vendorImageUrl(v.image_path) }));
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex min-h-dvh flex-col">
       <SiteHeader active="browse" />
 
-      <main className="pb-16">
+      <main className="flex-1 pb-16">
         {/* ----------------------------------------------------------------
             The whole pitch, above the fold on a 360px screen. */}
         <Container size="wide" className="pt-10 pb-8 sm:pt-20 sm:pb-14">
@@ -105,16 +118,21 @@ export default async function Home() {
             <ul className="grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-4">
               {open.map((vendor) => (
                 <li key={vendor.vendor_id}>
-                  <Link href={`/order/${vendor.vendor_id}`} className="press block rounded-[16px]">
-                    <ImagePlaceholder name={vendor.name} />
-                    <p className="mt-2.5 px-0.5 leading-snug font-semibold break-words">
-                      {vendor.name}
-                    </p>
-                    <p className="text-good mt-1 flex items-center gap-1.5 px-0.5 text-sm font-medium">
-                      <span className="bg-good size-1.5 rounded-full" />
-                      Open
-                    </p>
-                  </Link>
+                  {/* The same card the marketplace uses, so a photograph loads,
+                      falls back and crops identically in both places rather
+                      than in two hand-written variants that drift. */}
+                  <VendorCard
+                    vendor={vendor}
+                    href={`/order/${vendor.vendor_id}`}
+                    imageUrl={vendor.image_url}
+                    meta={
+                      vendor.menu_count ? (
+                        <span>
+                          {vendor.menu_count} {vendor.menu_count === 1 ? 'item' : 'items'}
+                        </span>
+                      ) : null
+                    }
+                  />
                 </li>
               ))}
             </ul>

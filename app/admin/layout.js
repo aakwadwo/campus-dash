@@ -4,7 +4,16 @@ import { signOut } from '@/app/(auth)/login/actions';
 import AreaSwitcher from '@/app/area-switcher';
 import AdminNav from './admin-nav';
 
-export const metadata = { title: 'Admin · Campus Dash' };
+/**
+ * NEVER INDEXED. Everything under this route needs a session, so a crawler
+ * would only ever reach a sign-in bounce — but the URLs themselves say things
+ * (that an admin console is here, and where), and robots.txt is a request rather than a rule. This is the layer a
+ * crawler that already has the URL actually honours.
+ */
+export const metadata = {
+  title: 'Admin',
+  robots: { index: false, follow: false, nocache: true },
+};
 
 /**
  * requireAdmin() runs on every admin page through this layout. It is a

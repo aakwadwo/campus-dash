@@ -131,11 +131,20 @@ export async function resetTransactionalState() {
     // admin_actions is append-only: its trigger blocks DELETE, but TRUNCATE is
     // a different operation and is how we keep test runs independent.
     await c.query('truncate table public.admin_actions restart identity cascade');
+    // ONLINE HISTORY GOES WITH THE PARTNER STATE. Availability is a recorded
+    // session now, so leaving old rows behind would have one file's minutes
+    // counted in another's totals. Truncating first means the profile updates
+    // below re-open exactly one session per approved Partner, through the
+    // trigger that owns that invariant.
+    await c.query('truncate table public.partner_sessions restart identity cascade');
     // Restore the seeded Partner states. Tests suspend and approve Partners, and
     // without this those changes leak into later tests as order-dependent flakes.
     // BOTH verification documents live here now — the student ID photograph
     // moved back to the Partner application, which is the only review that
     // looks at one.
+    // Off first, so the flag genuinely transitions and the trigger opens a
+    // fresh session rather than seeing no change and doing nothing.
+    await c.query('update public.partner_profiles set is_available = false');
     await c.query(`
       update public.partner_profiles
          set status = 'APPROVED', is_available = true,
@@ -245,12 +254,13 @@ export async function resetTransactionalState() {
        )
     `);
     // can_accept_scans is restored here too. Scan tests flip it to prove a
-    // non-scan restaurant is refused, and without a restore that flag leaks
-    // into the next file exactly as a renamed vendor once did.
+    // non-scan store is refused, and without a restore that flag leaks into the
+    // next file exactly as a renamed vendor once did.
     // Ownership is restored with the row. It is the vendor capability, so a
     // test that reassigns or clears it would otherwise silently un-vendor an
-    // account for every file that runs afterwards. Vendors 3 and 4 keep a NULL
-    // owner on purpose: they are catalogue-only scan restaurants.
+    // account for every file that runs afterwards. Vendors 3 and 4 ARE owned:
+    // a store that honours a meal scan is the redemption point, and it cannot
+    // check a scan or read out a handoff code without a board to do it from.
     await c.query(`
       insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans,
                                   owner_user_id, category_id, description, applicant_name,
@@ -266,10 +276,12 @@ export async function resetTransactionalState() {
          'Shawarma, burgers and pies from the grill.', 'Grill Owner (test)', true, now(), now(), null,
          '10000000-0000-4000-8000-000000000040', 6),
         ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000053', 'ACTIVE', true, true,
-         null, '40000000-0000-4000-8000-000000000004', null, null, null, null, null, null,
+         '00000000-0000-4000-8000-000000000015', '40000000-0000-4000-8000-000000000004',
+         null, null, null, null, null, null,
          '10000000-0000-4000-8000-000000000030', 3),
         ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)', '+233200000054', 'ACTIVE', true, true,
-         null, '40000000-0000-4000-8000-000000000001', null, null, null, null, null, null,
+         '00000000-0000-4000-8000-000000000016', '40000000-0000-4000-8000-000000000001',
+         null, null, null, null, null, null,
          '10000000-0000-4000-8000-000000000040', 5),
         ('20000000-0000-4000-8000-000000000005', 'Pending Provisions (test)', '+233200000013', 'PENDING_APPROVAL', false, false,
          '00000000-0000-4000-8000-000000000013', '40000000-0000-4000-8000-000000000005',
@@ -297,25 +309,28 @@ export async function resetTransactionalState() {
     `);
     await c.query(`delete from public.vendor_images`);
     await c.query(`
-      insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order)
+      insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order, scan_eligible)
       values
-        ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, 1),
-        ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special', 'Waakye, egg, gari, stew', 3000, true, 2),
-        ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef', 'Fried rice and beef', 4000, true, 3),
-        ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water', '500ml', 300, true, 4),
-        ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele', 'Spiced fried plantain', 1500, false, 5),
-        ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, 1),
-        ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, 2),
-        ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, 3),
-        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4),
-        ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle', 'Waffle, fried chicken, syrup', 3800, true, 1),
-        ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream', 'Two scoops', 2200, true, 2),
-        ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce', 4200, true, 1),
-        ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice', 'Freshly pressed', 1200, true, 2)
+        ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, 1, false),
+        ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special', 'Waakye, egg, gari, stew', 3000, true, 2, false),
+        ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef', 'Fried rice and beef', 4000, true, 3, false),
+        ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water', '500ml', 300, true, 4, false),
+        ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele', 'Spiced fried plantain', 1500, false, 5, false),
+        ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, 1, false),
+        ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, 2, false),
+        ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, 3, false),
+        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4, false),
+        ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle', 'Waffle, fried chicken, syrup', 3800, true, 1, true),
+        ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream', 'Two scoops', 2200, true, 2, false),
+        ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce', 4200, true, 1, true),
+        ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice', 'Freshly pressed', 1200, true, 2, false)
       on conflict (id) do update
          set vendor_id = excluded.vendor_id, name = excluded.name,
              description = excluded.description, price_pesewas = excluded.price_pesewas,
-             is_available = excluded.is_available, sort_order = excluded.sort_order
+             is_available = excluded.is_available, sort_order = excluded.sort_order,
+             -- WHAT A MEAL SCAN MAY BE SPENT ON. Scan tests flip this to prove
+             -- the per-item rule, so it is restored with everything else.
+             scan_eligible = excluded.scan_eligible
     `);
     await c.query(`
       delete from public.menu_items
@@ -426,6 +441,10 @@ export const ACTORS = {
   vendor2Staff: '00000000-0000-4000-8000-000000000012',
   vendorPendingOwner: '00000000-0000-4000-8000-000000000013',
   vendorRejectedOwner: '00000000-0000-4000-8000-000000000014',
+  // The scan stores are OPERATED, not catalogue entries: a store that honours a
+  // meal scan is the redemption point and needs a board to do it from.
+  wafflemaniaStaff: '00000000-0000-4000-8000-000000000015',
+  yellowBarStaff: '00000000-0000-4000-8000-000000000016',
   customerAma: '00000000-0000-4000-8000-000000000021',
   customerKwesi: '00000000-0000-4000-8000-000000000022',
   customerEfua: '00000000-0000-4000-8000-000000000023',
@@ -466,6 +485,21 @@ export const MENU = {
   water: '30000000-0000-4000-8000-000000000004', // 300
   kelewele: '30000000-0000-4000-8000-000000000005', // unavailable
   shawarma: '30000000-0000-4000-8000-000000000011', // vendor two
+};
+
+/**
+ * The scan stores' menus.
+ *
+ * ELIGIBILITY IS PER ITEM, so `wafflemaniaIneligible` exists on purpose: it is
+ * on a scan store's menu and still cannot be paid for with a scan, which is the
+ * distinction the store-level switch alone could not express.
+ */
+export const SCAN_MENU = {
+  waffle: '30000000-0000-4000-8000-000000000021', // 3800, Wafflemania, eligible
+  tilapia: '30000000-0000-4000-8000-000000000031', // 4200, Yellow Bar, eligible
+  // On a scan store's menu and still NOT payable with a scan.
+  iceCream: '30000000-0000-4000-8000-000000000022', // 2200, Wafflemania
+  juice: '30000000-0000-4000-8000-000000000032', // 1200, Yellow Bar
 };
 
 export const LOCATIONS = {

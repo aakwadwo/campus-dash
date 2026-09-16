@@ -6,11 +6,13 @@ import {
   payoutReadiness,
   partnerBalances,
   payoutHistory,
+  payoutsAwaitingSettlement,
 } from '@/lib/admin';
 import { formatPesewas } from '@/lib/util/money';
 import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
 import SettlementControls from './settlement-controls';
 import PayoutDestinations from './payout-destinations';
+import ManualSettlement from './manual-settlement';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +34,13 @@ export default async function AdminSettlementsPage() {
     payoutHistory({ limit: 100 }).catch(() => null),
   ]);
 
-  const balances = await partnerBalances().catch(() => null);
+  const [balances, awaiting] = await Promise.all([
+    partnerBalances().catch(() => null),
+    // THE WEEKLY LIST. Partner payouts are created by the run and stop there —
+    // a person sends the money and records it — so this is the screen's most
+    // operational panel, not a report.
+    payoutsAwaitingSettlement('PARTNER').catch(() => null),
+  ]);
 
   const vendorPending =
     overview === null ? null : overview.filter((r) => r.payee_type === 'VENDOR');
@@ -49,12 +57,17 @@ export default async function AdminSettlementsPage() {
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settlements</h1>
       <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
         A vendor with a registered subaccount is paid by Paystack as each order is charged, and
-        never appears in a run at all. Everything else is settled by transfer: vendors daily,
-        Partners weekly. Campus Dash holds nobody&apos;s money — a run gathers what is already owed
-        and moves it out.
+        never appears in a run at all. A vendor without one is settled by transfer, daily.
+      </p>
+      <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
+        <span className="text-ink font-semibold">Partners are paid by hand, weekly.</span> The run
+        gathers what is owed into payouts and stops; you send the money and record each one below.
+        Nothing leaves automatically.
       </p>
 
       <SettlementControls />
+
+      <ManualSettlement payouts={awaiting} />
 
       <PayoutDestinations destinations={destinations} />
 

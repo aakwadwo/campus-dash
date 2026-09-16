@@ -266,8 +266,10 @@ describe('customer ordering', () => {
     // at the checkout, which is why this is the first stage there is.
     assert.equal(await stageNow(), 'PAYMENT_REQUIRED');
     await payOrder(order.order_id);
-    // Paying is what puts it in a kitchen, so PREPARING is immediate.
-    assert.equal(await stageNow(), 'PREPARING');
+    // Paying is what puts it in a kitchen AND opens dispatch, so both are true
+    // at once and the stage says both. It used to collapse to 'PREPARING',
+    // which hid the Partner search for most of the time it was running.
+    assert.equal(await stageNow(), 'PREPARING_SEARCHING');
     await vendorReady(order.order_id);
     // A DELIVERY order at READY is not "ready" to the customer — it is waiting
     // for someone to carry it.
@@ -346,10 +348,12 @@ describe('customer ordering', () => {
     await payOrder(order.order_id);
 
     // DISPATCH OPENS AT PAYMENT, not at READY. A Partner found while the food
-    // cooks is a Partner who is not standing at a counter waiting.
+    // cooks is a Partner who is not standing at a counter waiting — and the
+    // customer's stage now says that both things are happening, so the search
+    // countdown has somewhere honest to live before the food is made.
     view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.delivery_status, 'SEARCHING');
-    assert.equal(view.stage, 'PREPARING');
+    assert.equal(view.stage, 'PREPARING_SEARCHING');
   });
 
   // =========================================================================
@@ -443,8 +447,9 @@ describe('customer ordering', () => {
 
     view = await myOrder(ACTORS.customerAma, order.order_id);
     assert.equal(view.payment_status, 'PAID');
-    // Paying is what reaches the kitchen, so there is no waiting stage to sit in.
-    assert.equal(view.stage, 'PREPARING');
+    // Paying is what reaches the kitchen, so there is no waiting stage to sit
+    // in — and for a Partner order it opens the search in the same statement.
+    assert.equal(view.stage, 'PREPARING_SEARCHING');
   });
 
   test('two simultaneous pay taps cannot create two live intents', async () => {

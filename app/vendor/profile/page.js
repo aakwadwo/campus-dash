@@ -13,7 +13,7 @@ import { Panel, PageHeader, Badge, Button } from '@/app/ui';
 import { StoreDetailsForm, ImageForms, PayoutForm } from './profile-forms';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Store · Campus Dash' };
+export const metadata = { title: 'Store' };
 
 /**
  * Everything about the store that is not an order.

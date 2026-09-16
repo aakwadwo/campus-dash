@@ -8,7 +8,7 @@ Read `docs/ARCHITECTURE.md` first, then `docs/DATABASE.md` — the schema is whe
 most of the safety lives. `docs/HOSTED-SUPABASE.md` covers running against a
 real hosted project. `docs/AUTH.md` covers phone OTP and the Send SMS Hook,
 `docs/VENDOR.md` the vendor module, `docs/CUSTOMER.md` customer ordering,
-`docs/PARTNER.md` the Partner system, `docs/SCAN.md` scan delivery,
+`docs/PARTNER.md` the Partner system, `docs/SCAN.md` meal scans,
 `docs/MONEY.md` allocation and settlement,
 `docs/PAYMENTS.md` the Paystack integration,
 `docs/SECURITY.md` the security model, `docs/NOTIFICATIONS.md` messaging and
@@ -24,13 +24,33 @@ around those as if they were settled.
 - Delivery people are **Partners**. Never "runners", never "drivers", never
   "deliverers". A Partner helps the campus community and earns for it; nothing
   in the copy may make them read as subordinate to a customer.
+- **The GH₵5 line is "Campus Dash Partner" wherever a customer reads it** — on
+  the fulfilment choice, in the price breakdown, on the order. Never "Dash
+  Partner fee". And **"delivery" is not a customer-facing word**: it is the
+  fulfilment option, the fee line and the tracking copy that carry the Partner's
+  name instead. THE BACKEND KEEPS ITS NAMES. `delivery_status`,
+  `delivery_fee_pesewas`, `delivery_code`, `fulfilment_type = 'DELIVERY'` and
+  every RPC that mentions delivery are unchanged, because renaming a column to
+  fix a noun in a sentence is how a migration breaks something that was working.
 - A vendor runs a **store**, not a "stall".
 - A **vendor** is an identity that owns a business. There are no "vendor staff":
   `vendors.owner_user_id` is the whole model, and it is one account per store.
 - Money is **integer pesewas**. 1 GHS = 100 pesewas. Never floats, anywhere.
-- A **scan** is a student's prepaid campus meal entitlement. A **scan delivery**
-  is the errand of redeeming one — Campus Dash sells the errand, never the food.
-  See `docs/SCAN.md`.
+- A **scan** is a student's prepaid campus meal entitlement, and paying with one
+  is a **payment method, not a different product**. A scan order is an ordinary
+  order on the store's board — real items, a queue number, the same four-digit
+  handoff — whose food is settled by the university's system rather than by
+  Campus Dash. **The store is the redemption point** and is the party that
+  verifies the scan. See `docs/SCAN.md`.
+- **A NORMAL FOOD ORDER and a SCAN FOOD REDEMPTION ORDER are priced by two
+  systems that never meet.** A food order pays `service_fee_bps` (6.95%) of a
+  real subtotal. A scan order pays a FLAT `scan_service_fee_pesewas` (GH₵2.00) —
+  never a percentage, because the value a scan covers is the store's price for
+  food Campus Dash did not sell. `price_scan_order()` does not read
+  `service_fee_bps` at all, and adding a percentage there would be charging
+  commission on a transaction between the student and the university. The pack
+  (GH₵4.00) is the customer's choice on a collection and compulsory with a
+  Partner, who cannot carry a meal without one: GH₵2 / GH₵6 / GH₵11.
 
 ## Hard rules
 
@@ -49,7 +69,7 @@ around those as if they were settled.
 
    `customer_choose_fulfilment()` survives as the CHANGE path, usable only
    while the order is unpaid. Every fee it recomputes comes from the order's own
-   price snapshot; the 5% service fee is never recomputed there.
+   price snapshot; the 6.95% service fee is never recomputed there.
 
 2. **Three independent state dimensions** — `order_status`, `payment_status`,
    `delivery_status`. Never merge them. A failed delivery does not fail the food
@@ -101,8 +121,10 @@ around those as if they were settled.
     upsert locks the counter row, and guarded a second time by
     `orders_vendor_day_no_unique`. `orders.order_number` (`CD-01043`) survives
     underneath as the internal reference every payment, allocation and payout
-    keys off; it is never what a customer or a store is asked to read out. A
-    SCAN errand takes no queue number, because no store ever sees one.
+    keys off; it is never what a customer or a store is asked to read out.
+    **A SCAN ORDER TAKES ONE TOO**, because the store sees it and calls it out
+    like any other. (It used to take none, on the reasoning that no store ever
+    saw one. That reasoning is gone with the model it belonged to.)
 
 13. **Partner capacity is CONFIGURABLE, and the limit is an index.**
     `pricing_config.max_active_deliveries_per_partner` (default 2) decides how
@@ -239,10 +261,21 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
 - Auth roles come from `my_capabilities()`, derived from the database on every
   request. Never trust a role sent by the client. `can_order` is the CUSTOMER
   capability, not "has a pulse".
+- A customer is a **STUDENT or STAFF** (`customer_profiles.affiliation`). Staff
+  hold the identical CUSTOMER capability and may become Partners; the
+  distinction changes what sign-up ASKS, never what an account may then do. A
+  student names an **expected graduation year**, which replaced `level` because
+  100/200/300/400 was wrong for three of the four years it described — nobody
+  comes back in September to move themselves up. `level` survives as a
+  historical column nothing writes. Gender is MALE or FEMALE and optional.
 - Customers sign in with a code emailed to their school address at `/login`;
   vendors with an SMS code at `/login/vendor`; administrators with a password at
   `/login/admin`, which is deliberately not linked from any public page.
   Ordering additionally requires customer sign-up at `/signup`.
+  **The vendor door is for accounts that exist**: `/login/vendor` asks
+  `phone_can_sign_in_as_vendor()` before sending anything, so it cannot be used
+  to text an arbitrary number or provision an identity with no store.
+  Registration at `/vendor/signup` is the other door and is unchanged.
 - A customer's phone number is a PROFILE FIELD, not a credential: it is the
   number a Partner rings on arrival. A vendor's phone number IS the credential.
 - The design system lives in `app/globals.css` (tokens) and `app/ui.js` (the

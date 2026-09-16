@@ -19,7 +19,10 @@ import {
   LiveDot,
 } from '../ui';
 
-export const metadata = { title: 'My orders · Campus Dash' };
+export const metadata = {
+  robots: { index: false, follow: false },
+  title: 'My orders',
+};
 export const dynamic = 'force-dynamic';
 
 /**
@@ -38,10 +41,10 @@ export default async function MyOrdersPage() {
   const past = orders.filter((o) => !LIVE_STAGES.has(o.stage));
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex min-h-dvh flex-col">
       <SiteHeader active="orders" />
 
-      <main className="pb-24 sm:pb-0">
+      <main className="flex-1 pb-24 sm:pb-0">
         <Container className="pt-8 sm:pt-12">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
@@ -198,7 +201,7 @@ function Meta({ order }) {
           ? order.stage === 'COMPLETED'
             ? 'Collected'
             : 'You collect'
-          : 'Partner delivery'}
+          : 'Campus Dash Partner'}
       </span>
       <span className="text-faint">·</span>
       <span>

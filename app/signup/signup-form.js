@@ -7,7 +7,7 @@ import {
   resendSignUpCodeAction,
   completeSignUpAction,
 } from './actions';
-import { LEVELS, RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
+import { graduationYears, RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
 import { Button, ErrorNote, Field, Input, Select, TextLink } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
 
@@ -139,7 +139,9 @@ function Carried({ values, next }) {
       <input type="hidden" name="first_name" value={values.firstName ?? ''} />
       <input type="hidden" name="last_name" value={values.lastName ?? ''} />
       <input type="hidden" name="email" value={values.email ?? ''} />
-      <input type="hidden" name="level" value={values.level ?? ''} />
+      <input type="hidden" name="affiliation" value={values.affiliation ?? 'STUDENT'} />
+      <input type="hidden" name="graduation_year" value={values.graduationYear ?? ''} />
+      <input type="hidden" name="gender" value={values.gender ?? ''} />
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
     </>
   );
@@ -195,30 +197,9 @@ function DetailsStep({ values, next, action, pending, state, hasAccount }) {
         />
       </Field>
 
-      <Field label="Level">
-        <Select name="level" required defaultValue={values.level ?? ''}>
-          <option value="" disabled>
-            Choose your level
-          </option>
-          {LEVELS.map((level) => (
-            <option key={level} value={level}>
-              Level {level}
-            </option>
-          ))}
-        </Select>
-      </Field>
+      <WhoYouAre values={values} />
 
-      <Field label="Phone number" hint="So a Partner can call you when they arrive.">
-        <Input
-          name="phone"
-          type="tel"
-          required
-          autoComplete="tel"
-          inputMode="tel"
-          placeholder="020 123 4567"
-          defaultValue={values.phoneRaw ?? ''}
-        />
-      </Field>
+      <PhoneField defaultValue={values.phoneRaw ?? ''} />
 
       <label className="border-line bg-surface-2 rounded-card flex items-start gap-3 border p-3.5">
         <input
@@ -360,29 +341,9 @@ function CompleteStep({ values, next, action, pending, state }) {
         </Field>
       </div>
 
-      <Field label="Level">
-        <Select name="level" required defaultValue={values.level ?? ''}>
-          <option value="" disabled>
-            Choose your level
-          </option>
-          {LEVELS.map((level) => (
-            <option key={level} value={level}>
-              Level {level}
-            </option>
-          ))}
-        </Select>
-      </Field>
+      <WhoYouAre values={values} />
 
-      <Field label="Phone number" hint="So a Partner can call you when they arrive.">
-        <Input
-          name="phone"
-          type="tel"
-          required
-          autoComplete="tel"
-          inputMode="tel"
-          defaultValue={values.phoneRaw ?? ''}
-        />
-      </Field>
+      <PhoneField defaultValue={values.phoneRaw ?? ''} />
 
       {/* Already agreed to on the first step, and carried so the database sees
           the same acceptance it would have seen then. */}
@@ -393,5 +354,129 @@ function CompleteStep({ values, next, action, pending, state }) {
       </Button>
       <Message state={state} />
     </form>
+  );
+}
+
+/**
+ * Student or staff, and what each of them is asked next.
+ *
+ * TWO DIFFERENT PEOPLE, NOT ONE WITH AN EXTRA BOX. Staff eat lunch and staff
+ * can be Partners; asking them for a year group was asking them to claim
+ * something untrue in order to buy a sandwich. The graduation-year field
+ * appears only for a student, and the value is dropped server-side for staff
+ * anyway — a CHECK constraint says staff have no graduation year.
+ *
+ * A GRADUATION YEAR RATHER THAN A LEVEL, because a level is wrong for three of
+ * the four years it describes: nobody comes back in September to move
+ * themselves up. The year somebody expects to finish stays true for as long as
+ * they are here, which is the whole point of asking it instead.
+ */
+function WhoYouAre({ values }) {
+  const [affiliation, setAffiliation] = useState(values.affiliation || 'STUDENT');
+  const years = graduationYears();
+
+  return (
+    <>
+      <fieldset>
+        <legend className="mb-2 text-sm font-medium">Are you a student or staff?</legend>
+        <div className="grid grid-cols-2 gap-2.5">
+          {[
+            ['STUDENT', 'Student'],
+            ['STAFF', 'Staff'],
+          ].map(([value, label]) => (
+            <label
+              key={value}
+              className={`rounded-card press flex min-h-12 cursor-pointer items-center justify-center border text-sm font-semibold transition-colors ${
+                affiliation === value
+                  ? 'border-brand-600 bg-brand-50 ring-brand-600/25 ring-1'
+                  : 'border-line-strong hover:bg-surface-2'
+              }`}
+            >
+              <input
+                type="radio"
+                name="affiliation"
+                value={value}
+                checked={affiliation === value}
+                onChange={() => setAffiliation(value)}
+                className="sr-only"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {affiliation === 'STUDENT' ? (
+        <Field
+          label="When do you expect to graduate?"
+          hint="So we do not have to ask you again every year."
+        >
+          <Select name="graduation_year" required defaultValue={values.graduationYear ?? ''}>
+            <option value="" disabled>
+              Choose a year
+            </option>
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : (
+        // Staff do not graduate, and sending an empty value is what makes the
+        // server store null rather than whatever a previous render left behind.
+        <input type="hidden" name="graduation_year" value="" />
+      )}
+
+      {/* OPTIONAL, AND SAYS SO. Nobody is stopped from buying lunch over it. */}
+      <Field label="Gender" hint="Optional.">
+        <Select name="gender" defaultValue={values.gender ?? ''}>
+          <option value="">Prefer not to say</option>
+          <option value="MALE">Male</option>
+          <option value="FEMALE">Female</option>
+        </Select>
+      </Field>
+    </>
+  );
+}
+
+/**
+ * A Ghanaian phone number, asked for the way Ghanaians write one.
+ *
+ * TYPE 0XXXXXXXXX. The +233 is shown as a fixed prefix rather than asked for,
+ * because nobody writes their own number that way and every person who tried
+ * produced +2330244… — a leading zero after the country code, which is not a
+ * number. normaliseGhanaPhone() accepts all the forms anyway; this is about not
+ * making somebody guess which one is wanted.
+ *
+ * The prefix is decoration, not a value: the field still submits exactly what
+ * was typed, and the server normalises it.
+ */
+function PhoneField({ defaultValue }) {
+  return (
+    <Field label="Phone number" hint="So a Partner can call you when they arrive.">
+      <div className="relative">
+        <span
+          className="text-muted pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-[15px] font-medium"
+          aria-hidden
+        >
+          +233
+        </span>
+        <Input
+          name="phone"
+          type="tel"
+          required
+          autoComplete="tel"
+          inputMode="numeric"
+          placeholder="020 123 4567"
+          defaultValue={defaultValue}
+          className="pl-[3.75rem]"
+          aria-describedby="phone-format"
+        />
+      </div>
+      <p id="phone-format" className="text-faint mt-1.5 text-xs">
+        Start with 0, the way you would write it to a friend.
+      </p>
+    </Field>
   );
 }

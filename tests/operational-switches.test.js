@@ -8,6 +8,7 @@ import {
   ACTORS,
   VENDORS,
   MENU,
+  SCAN_MENU,
   LOCATIONS,
 } from './helpers/db.js';
 import {
@@ -18,6 +19,7 @@ import {
   completeDelivery,
   getOrder,
   getAllocations,
+  submitScanOrder,
   expectRejection,
 } from './helpers/flow.js';
 
@@ -288,19 +290,25 @@ describe('operational switches', () => {
       { commit: true }
     );
 
-  test('the pack fee is an admin setting, charged on a scan and shown as its own line', async () => {
-    await setPackFee(150);
-
-    const quoted = await asUser(
+  /** A Partner-carried scan order at Wafflemania, priced by the server. */
+  const quoteScan = () =>
+    asUser(
       ACTORS.customerAma,
       async (c) =>
         (
-          await c.query('select * from public.quote_scan_order($1, $2)', [
+          await c.query('select * from public.quote_scan_order($1, $2::jsonb, $3, $4)', [
             VENDORS.wafflemania,
+            JSON.stringify([{ menu_item_id: SCAN_MENU.waffle, quantity: 1 }]),
+            'DELIVERY',
             LOCATIONS.room204,
           ])
         ).rows[0]
     );
+
+  test('the pack fee is an admin setting, charged on a scan and shown as its own line', async () => {
+    await setPackFee(150);
+
+    const quoted = await quoteScan();
 
     assert.equal(Number(quoted.subtotal_pesewas), 0, 'the food was paid for by the scan');
     assert.equal(Number(quoted.pack_fee_pesewas), 150);
@@ -335,16 +343,7 @@ describe('operational switches', () => {
 
   test('a zero pack fee is a real setting, and means Campus Dash absorbs it', async () => {
     await setPackFee(0);
-    const quoted = await asUser(
-      ACTORS.customerAma,
-      async (c) =>
-        (
-          await c.query('select * from public.quote_scan_order($1, $2)', [
-            VENDORS.wafflemania,
-            LOCATIONS.room204,
-          ])
-        ).rows[0]
-    );
+    const quoted = await quoteScan();
     assert.equal(Number(quoted.pack_fee_pesewas), 0);
   });
 
@@ -355,21 +354,7 @@ describe('operational switches', () => {
 
   test('the pack fee a customer paid is snapshotted, not re-read later', async () => {
     await setPackFee(150);
-    const errand = await asUser(
-      ACTORS.customerAma,
-      async (c) =>
-        (
-          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6)', [
-            VENDORS.wafflemania,
-            LOCATIONS.room204,
-            `${ACTORS.customerAma}/scans/pack-fee.jpg`,
-            'image/jpeg',
-            2048,
-            'One waakye, no shito',
-          ])
-        ).rows[0],
-      { commit: true }
-    );
+    const errand = await submitScanOrder({ vendorId: VENDORS.wafflemania });
 
     await setPackFee(900);
 

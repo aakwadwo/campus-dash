@@ -34,7 +34,11 @@ export default function DeliveryActions({ delivery, isScan = false }) {
 
   const hidden = <input type="hidden" name="order_id" value={delivery.order_id} />;
   const carrying = delivery.delivery_status === 'PICKED_UP';
-  const waitingForKitchen = !carrying && !isScan && !delivery.food_is_ready;
+  // A SCAN ORDER WAITS TOO, and it did not used to. It reached READY the moment
+  // it was paid for, because no store had a part in it; now the store checks the
+  // scan and presses Ready like any other order, so the Partner waits for the
+  // same signal — only the reason differs, and the copy below says which.
+  const waitingForKitchen = !carrying && !delivery.food_is_ready;
 
   // Nothing on this screen can change except the kitchen, so it is polled only
   // while that is what is being waited on.
@@ -50,19 +54,21 @@ export default function DeliveryActions({ delivery, isScan = false }) {
 
   return (
     <div className="space-y-3">
-      {/* THE PICKUP CODE, entered by the Partner. The vendor reads it out; the
-          Partner types it in. A scan errand has no handover to prove, so it
-          uses the redemption report instead — see ScanCollection. */}
+      {/* THE PICKUP CODE, entered by the Partner. The store reads it out; the
+          Partner types it in. A MEAL SCAN ORDER IS NO DIFFERENT any more: the
+          store checks the scan, hands the food over and reads out the same four
+          digits, so there is one collection path rather than two. */}
       {waitingForKitchen ? (
         <Callout tone="warn">
           <p role="status" className="font-medium">
-            Waiting for {delivery.vendor_name} to mark this ready. The code box appears here the
-            moment they do.
+            {isScan
+              ? `Waiting for ${delivery.vendor_name} to check the scan and mark this ready. The code box appears here the moment they do.`
+              : `Waiting for ${delivery.vendor_name} to mark this ready. The code box appears here the moment they do.`}
           </p>
         </Callout>
       ) : null}
 
-      {!carrying && !isScan && delivery.food_is_ready ? (
+      {!carrying && delivery.food_is_ready ? (
         <form action={confirmPickup} className="rounded-card bg-surface border-line border p-4">
           {hidden}
           <label className="mb-2 block font-semibold" htmlFor="pickup_code">

@@ -6,7 +6,10 @@ import { safeNext } from '@/lib/auth/landing';
 import { Card, TextLink, ArrowLeftIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
 
-export const metadata = { title: 'Sign in · Campus Dash' };
+export const metadata = {
+  robots: { index: false, follow: false },
+  title: 'Sign in',
+};
 
 /**
  * Sign-in.

@@ -4,7 +4,16 @@ import AreaSwitcher from '@/app/area-switcher';
 import { UserIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
 
-export const metadata = { title: 'Partner · Campus Dash' };
+/**
+ * NEVER INDEXED. Everything under this route needs a session, so a crawler
+ * would only ever reach a sign-in bounce — but the URLs themselves say things
+ * (who is carrying what), and robots.txt is a request rather than a rule. This is the layer a
+ * crawler that already has the URL actually honours.
+ */
+export const metadata = {
+  title: 'Partner',
+  robots: { index: false, follow: false },
+};
 
 /**
  * Any signed-in user can reach the Partner area — that is how someone applies.

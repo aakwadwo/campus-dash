@@ -12,7 +12,13 @@ import {
   removeImage,
   setPayoutDestination,
   setMenuItemAvailable,
+  createMenuItem,
+  updateMenuItem,
+  deleteMenuItem,
+  setMenuItemImage,
+  clearMenuItemImage,
 } from '@/lib/vendor';
+import { vendorRedeemScan, vendorRefuseScan } from '@/lib/scan';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
 
@@ -87,27 +93,242 @@ export async function markReadyAction(_prev, formData) {
 }
 
 /**
- * Sold out, or back on today's menu.
+ * The store says the meal scan is good.
  *
- * The customer keeps seeing the item — marked sold out — because a dish that
- * vanishes reads as a store that stopped selling it. Every sold-out mark is
- * cleared when the store next reopens, so nobody has to walk back through the
- * menu in the morning.
+ * THIS IS THE STORE'S ACT, and it used to be the Partner's. A Partner standing
+ * at a counter reporting that an entitlement had been honoured was recording an
+ * account of something nobody had checked; the restaurant is the only party
+ * that can actually judge it, and the only one holding the food.
+ *
+ * It is separate from pressing Ready on purpose. Verifying a scan and handing
+ * food over are different claims, and collapsing them would lose the one that
+ * matters on the day a scan turns out to be dead.
+ */
+export async function redeemScanAction(_prev, formData) {
+  const orderId = str(formData, 'order_id');
+  const vendorId = str(formData, 'vendor_id');
+  return run(() => vendorRedeemScan(orderId), 'Scan verified. Mark it ready when the food is.', [
+    `/vendor/${vendorId}`,
+    `/vendor/${vendorId}/orders/${orderId}`,
+  ]);
+}
+
+/**
+ * The store says the scan cannot be honoured.
+ *
+ * NO MONEY MOVES. What the customer paid is a Campus Dash fee, and whether it
+ * is refunded is a decision nobody has made — so the order stops here and an
+ * administrator picks it up, rather than a database function inventing a refund
+ * policy.
+ */
+export async function refuseScanAction(_prev, formData) {
+  const orderId = str(formData, 'order_id');
+  const vendorId = str(formData, 'vendor_id');
+  const reason = str(formData, 'reason');
+
+  if (!reason) return { ok: false, message: 'Say why the scan could not be honoured.' };
+
+  return run(
+    () => vendorRefuseScan(orderId, reason),
+    'Recorded. Campus Dash will follow it up with the customer.',
+    [`/vendor/${vendorId}`, `/vendor/${vendorId}/orders/${orderId}`]
+  );
+}
+
+/**
+ * Sold out, withdrawn, or back on.
+ *
+ * THREE ACTS, ONE CALL, and the reason is what keeps them apart. A sold-out
+ * mark is cleared when the store next reopens, because running out of jollof is
+ * a fact about a service; a withdrawn item stays off until somebody puts it
+ * back, because that was a decision.
+ *
+ * Either way the customer keeps SEEING the item, marked, because a dish that
+ * vanishes reads as a store that stopped selling it.
  */
 export async function setMenuItemAvailableAction(_prev, formData) {
   const available = formData.get('available') === 'true';
+  const reason = formData.get('reason') === 'WITHDRAWN' ? 'WITHDRAWN' : 'SOLD_OUT';
   const name = str(formData, 'name') ?? 'That item';
+
   try {
-    await setMenuItemAvailable(str(formData, 'menu_item_id'), available);
+    await setMenuItemAvailable(str(formData, 'menu_item_id'), available, reason);
   } catch (error) {
     return fail(error);
   }
   revalidatePath('/vendor/menu');
   revalidatePath(`/order/${str(formData, 'vendor_id')}`);
+
   return {
     ok: true,
-    message: available ? `${name} is back on the menu.` : `${name} is marked sold out.`,
+    message: available
+      ? `${name} is back on the menu.`
+      : reason === 'WITHDRAWN'
+        ? `${name} is off the menu until you put it back.`
+        : `${name} is marked sold out. It comes back when you reopen.`,
   };
+}
+
+export async function createMenuItemAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const name = str(formData, 'name');
+  const price = parsePrice(formData.get('price'));
+
+  if (!name) return { ok: false, message: 'Give the item a name.' };
+  if (price === null) return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
+
+  try {
+    await createMenuItem({
+      vendorId,
+      name,
+      pricePesewas: price,
+      description: str(formData, 'description'),
+      scanEligible: formData.get('scan_eligible') === 'on',
+    });
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: `${name} added to your menu.` };
+}
+
+/**
+ * Editing an item.
+ *
+ * A PRICE CHANGE REACHES NO EXISTING ORDER. price_order() snapshots every figure
+ * onto the order at submission and order_items keeps its own copy, so this moves
+ * what the next customer is quoted and nothing else — which is the whole reason
+ * a store can be trusted with its own prices.
+ */
+export async function updateMenuItemAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const price = parsePrice(formData.get('price'));
+
+  if (formData.get('price') && price === null) {
+    return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
+  }
+
+  try {
+    await updateMenuItem({
+      menuItemId: str(formData, 'menu_item_id'),
+      name: str(formData, 'name'),
+      pricePesewas: price,
+      // An empty box means "clear the description", which is different from
+      // "leave it alone" — so the empty string is passed through rather than
+      // collapsed to null by str().
+      description: String(formData.get('description') ?? '').trim(),
+      scanEligible: formData.get('scan_eligible') === 'on',
+    });
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: 'Saved.' };
+}
+
+/**
+ * Removing an item for good.
+ *
+ * REFUSED IF ANYBODY HAS ORDERED IT, in SQL, and the message says what to do
+ * instead. Deleting it would either orphan those order lines or rewrite what
+ * somebody was charged for.
+ */
+export async function deleteMenuItemAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const name = str(formData, 'name') ?? 'That item';
+
+  try {
+    const path = await clearMenuItemImage(str(formData, 'menu_item_id'));
+    await deleteMenuItem(str(formData, 'menu_item_id'));
+    // The row is gone, so the object it pointed at is unreachable. Removing it
+    // after the row means a failure here costs a stray file rather than a
+    // menu item pointing at nothing.
+    if (path) await deleteVendorImage(path).catch(() => {});
+  } catch (error) {
+    return fail(error);
+  }
+
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: `${name} removed from your menu.` };
+}
+
+/**
+ * A photograph on one dish.
+ *
+ * UPLOAD FIRST, THEN RECORD, then delete whatever was there before — the same
+ * order the storefront gallery uses, and for the same reason. A row pointing at
+ * an object that does not exist is a broken image on every storefront; an object
+ * with no row is invisible and costs a few kilobytes.
+ */
+export async function setMenuItemImageAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const menuItemId = str(formData, 'menu_item_id');
+  const file = formData.get('image');
+
+  if (!file || typeof file === 'string' || file.size === 0) {
+    return { ok: false, message: 'Choose a photo to upload.' };
+  }
+
+  let uploaded;
+  let previous = null;
+  try {
+    uploaded = await uploadVendorImage({ vendorId, file });
+    previous = await setMenuItemImage({
+      menuItemId,
+      storagePath: uploaded.path,
+      contentType: uploaded.contentType,
+      byteSize: uploaded.byteSize,
+    });
+  } catch (error) {
+    if (uploaded?.path) await deleteVendorImage(uploaded.path).catch(() => {});
+    return fail(error);
+  }
+
+  // THE ONE IT REPLACED. Without this every retaken photo leaves its
+  // predecessor in the bucket for ever.
+  if (previous && previous !== uploaded.path) {
+    await deleteVendorImage(previous).catch(() => {});
+  }
+
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: 'Photo saved.' };
+}
+
+export async function clearMenuItemImageAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  try {
+    const path = await clearMenuItemImage(str(formData, 'menu_item_id'));
+    if (path) await deleteVendorImage(path).catch(() => {});
+  } catch (error) {
+    return fail(error);
+  }
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/order/${vendorId}`);
+  return { ok: true, message: 'Photo removed.' };
+}
+
+/**
+ * "35" and "35.50" both mean pesewas in the end, and neither may become a float.
+ *
+ * Parsed as two integer parts and combined, rather than multiplied by 100:
+ * `35.35 * 100` is 3534.9999999999995 in IEEE 754, and rounding that is a habit
+ * that eventually rounds the wrong way on somebody's money.
+ */
+function parsePrice(raw) {
+  const text = String(raw ?? '')
+    .trim()
+    .replace(/[^\d.]/g, '');
+  if (!text || !/^\d+(\.\d{1,2})?$/.test(text)) return null;
+
+  const [cedis, pesewas = ''] = text.split('.');
+  const value = Number(cedis) * 100 + Number(pesewas.padEnd(2, '0'));
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 // --- The store itself --------------------------------------------------------

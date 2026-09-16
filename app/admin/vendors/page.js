@@ -14,7 +14,6 @@ import {
   FilterChip,
 } from '../ui';
 import CreateVendorForm from './create-vendor-form';
-import CategoryForms from './category-forms';
 
 export const dynamic = 'force-dynamic';
 
@@ -187,12 +186,18 @@ export default async function VendorsPage({ searchParams }) {
         )}
       </Panel>
 
-      <Panel
-        title="Categories"
-        description="Disabling a category hides it from the sign-up form and the customer filter. It never detaches the stores already in it, and never touches a historical order."
-      >
-        <CategoryForms categories={categories} />
-      </Panel>
+      {/* CATEGORIES MOVED OUT. They are the vocabulary the whole marketplace
+          is filed under — a customer filters by them and a store picks one at
+          sign-up — and they were a panel at the bottom of a table of every
+          store, which is where you put something nobody is expected to look
+          at. See /admin/categories. */}
+      <p className="text-muted text-sm leading-relaxed">
+        Categories are managed at{' '}
+        <Link href="/admin/categories" className="text-brand-700 underline underline-offset-4">
+          Admin &rarr; Categories
+        </Link>
+        .
+      </p>
 
       <Panel
         title="Add a catalogue entry"

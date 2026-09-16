@@ -23,20 +23,42 @@ import { CampusDashLogo } from './brand';
  */
 
 const LINKS = [
-  { group: 'Campus Dash', items: [['Browse food', '/order']] },
+  {
+    group: 'Campus Dash',
+    items: [
+      ['Browse food', '/order'],
+      ['What we are building', '/about'],
+    ],
+  },
   {
     group: 'Work with us',
     items: [
       ['Become a Partner', '/partner/apply'],
-      ['Vendor sign-in', '/vendor'],
+      ['Sell on Campus Dash', '/vendor/signup'],
     ],
   },
   { group: 'Legal', items: [['Terms', '/terms']] },
 ];
 
+/**
+ * THE FOOTER SITS AT THE BOTTOM, and on a short page that is not the same thing
+ * as sitting after the content.
+ *
+ * `mt-14` put it below whatever came before it, which on a page with one
+ * paragraph left it floating in the middle of the viewport with white space
+ * underneath. The fix is a layout rather than a margin: the page is a flex
+ * column at least as tall as the viewport, `main` grows to fill it, and the
+ * footer lands on the bottom edge when there is spare room and immediately
+ * after the content when there is not. `mt-auto` here is the half of that
+ * contract this component owns; see the `flex min-h-dvh flex-col` wrapper on
+ * every page that renders one.
+ *
+ * NOT FIXED, and never. A fixed footer overlaps content on a phone and covers
+ * the last thing somebody was reading.
+ */
 export default function SiteFooter() {
   return (
-    <footer className="border-line mt-14 border-t">
+    <footer className="border-line mt-auto border-t pt-14">
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
         {/* Mobile: stacked sections of tall rows. Desktop: three columns of the
             same content, where a compact link list is the right density. */}

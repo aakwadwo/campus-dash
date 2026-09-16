@@ -5,7 +5,7 @@ import { signOut } from '@/app/(auth)/login/actions';
 import { Badge, Button, ButtonLink, Callout, Card, Facts, Fact, PageHeader } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Your application · Campus Dash' };
+export const metadata = { title: 'Your application' };
 
 /**
  * Where a store application stands.

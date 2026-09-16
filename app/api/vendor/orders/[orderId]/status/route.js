@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * the staff of this order's store (or an administrator), and only for a paid
  * order — anyone else gets 404, which does not confirm the order exists.
  *
- * FOUR STATE FIELDS, AND NOTHING ELSE. The row carries items and the vendor's
+ * FIVE STATE FIELDS, AND NOTHING ELSE. The row carries items and the vendor's
  * own amount; none of that is sent, because a screen polling every few seconds
  * needs to know whether to refresh, not to re-download the order. No total, no
  * fee, no Partner earning is in the row to begin with — see migration
@@ -42,6 +42,10 @@ export async function GET(_request, { params }) {
       delivery_status: order.delivery_status,
       payment_status: order.payment_status,
       handoff_code_available: Boolean(order.handoff_code_available),
+      // THE STORE'S OWN COMPLETION. Handing a bag to a Partner ends the store's
+      // part while order_status stays READY for the customer's sake, so without
+      // this the code sat on the counter screen until somebody navigated away.
+      vendor_completed_at: order.vendor_completed_at ?? null,
     },
     { headers: { 'Cache-Control': 'no-store', 'Server-Timing': timing.header() } }
   );

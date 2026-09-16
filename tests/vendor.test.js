@@ -753,22 +753,34 @@ describe('vendor module', () => {
     assert.match(tooEarly.message, /no handoff code on this order right now/);
   });
 
-  test('the board never carries the room number or the customer', async () => {
+  /**
+   * THE STORE IS NEVER TOLD WHERE IT IS GOING.
+   *
+   * The board used to carry the destination ZONE — "Hostel Block A" — as useful
+   * context. It is not: a store hands food across a counter to whoever reads
+   * back four digits, and it never travels anywhere. The zone was a customer's
+   * whereabouts shown to a room, and it bought the store nothing, so it went
+   * with the room number and the phone number rather than being narrowed again.
+   */
+  test('the board never carries the destination, the room number or the customer', async () => {
     const order = await acceptedOrder({ destination: LOCATIONS.room204 });
     await payOrder(order.order_id);
     const card = (await board(ACTORS.vendor1Staff)).find((r) => r.order_id === order.order_id);
 
-    assert.equal(card.destination_zone, 'Hostel Block A', 'the zone is useful context');
     const serialised = JSON.stringify(card);
+    assert.ok(!serialised.includes('Hostel Block A'), 'not even the block');
     assert.ok(!serialised.includes('Room 204'), 'the room is never sent to the vendor');
     assert.ok(!serialised.includes('+2332000000'), 'no phone number either');
     assert.ok(!('customer_id' in card));
+    assert.ok(!('destination_zone' in card));
     assert.ok(!('destination_location_id' in card));
 
     const view = await detail(ACTORS.vendor1Staff, order.order_id);
     const detailSerialised = JSON.stringify(view);
+    assert.ok(!detailSerialised.includes('Hostel Block A'));
     assert.ok(!detailSerialised.includes('Room 204'));
     assert.ok(!detailSerialised.includes('+2332000000'));
+    assert.ok(!('destination_zone' in view));
   });
 
   test('a vendor cannot suspend themselves out of trouble or change their own status', async () => {

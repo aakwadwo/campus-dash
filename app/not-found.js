@@ -1,6 +1,6 @@
 import { ButtonLink } from './ui';
 
-export const metadata = { title: 'Not found · Campus Dash' };
+export const metadata = { title: 'Not found' };
 
 /**
  * A 404 that offers the marketplace rather than an apology.

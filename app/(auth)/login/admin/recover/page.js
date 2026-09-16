@@ -1,6 +1,6 @@
 import RecoveryClient from './recovery-client';
 
-export const metadata = { title: 'Opening your reset link · Campus Dash' };
+export const metadata = { title: 'Opening your reset link' };
 export const dynamic = 'force-dynamic';
 
 /**

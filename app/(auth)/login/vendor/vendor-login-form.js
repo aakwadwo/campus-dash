@@ -2,7 +2,7 @@
 
 import { useActionState } from 'react';
 import { requestOtp, verifyOtp } from '../actions';
-import { Button, ErrorNote, Field, Input } from '@/app/ui';
+import { Button, ErrorNote, TextLink, Field, Input } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
 
 const INITIAL = { step: 'phone' };
@@ -64,7 +64,23 @@ function SubmitButton({ pending, label, pendingLabel }) {
 }
 
 function Message({ state }) {
-  if (state.error) return <ErrorNote>{state.error}</ErrorNote>;
+  if (state.error) {
+    return (
+      <ErrorNote>
+        {state.error}
+        {/* A DEAD END NAMES THE WAY OUT. Somebody who typed a number with no
+            store behind it is almost always a store owner who has not
+            registered yet, and telling them so without a link is telling them
+            to go and look for one. */}
+        {state.registerHref ? (
+          <>
+            {' '}
+            <TextLink href={state.registerHref}>Register your store</TextLink>
+          </>
+        ) : null}
+      </ErrorNote>
+    );
+  }
   if (state.notice) {
     return (
       <p className="text-muted text-sm leading-relaxed" role="status">

@@ -15,7 +15,17 @@ import {
   TextLink,
 } from '../ui';
 
-export const metadata = { title: 'Browse vendors · Campus Dash' };
+export const metadata = {
+  title: 'Browse stores around Academic City',
+  description:
+    'Every store open on campus right now, with what they have and what it costs. Collect it yourself or have a Campus Dash Partner bring it.',
+  alternates: { canonical: '/order' },
+  openGraph: {
+    title: 'Browse stores around Academic City',
+    description: 'Every store open on campus right now, with what they have and what it costs.',
+    url: '/order',
+  },
+};
 export const dynamic = 'force-dynamic';
 
 /**
@@ -49,10 +59,10 @@ export default async function VendorListPage() {
   const vendors = rows.map((v) => ({ ...v, image_url: vendorImageUrl(v.image_path) }));
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex min-h-dvh flex-col">
       <SiteHeader active="browse" />
 
-      <main className="pb-24 sm:pb-0">
+      <main className="flex-1 pb-24 sm:pb-0">
         <Container size="wide" className="pt-8 sm:pt-12">
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
             <h1 className="text-display text-2xl font-semibold sm:text-4xl">Browse food</h1>
