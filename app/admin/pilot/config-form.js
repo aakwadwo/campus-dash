@@ -24,20 +24,20 @@ export default function ConfigForm({ config }) {
           functions, and price_scan_order() never looks at service_fee_bps. */}
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Food orders</h3>
       <Field
-        label="Food service fee (basis points, 500 = 5% of the food subtotal)"
+        label="Food service fee (basis points, 695 = 6.95% of the food subtotal)"
         name="service_fee_bps"
         type="number"
         placeholder={String(config?.service_fee_bps ?? '')}
         hint="A percentage of what the food costs. Applies to FOOD orders only."
       />
 
-      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Scan delivery</h3>
+      <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Meal scans</h3>
       <Field
         label="Scan service fee (pesewas, 200 = GH₵2.00, flat)"
         name="scan_service_fee_pesewas"
         type="number"
         placeholder={String(config?.scan_service_fee_pesewas ?? 'not configured')}
-        hint="A flat amount per errand, never a percentage: a scan order has no food value to take a percentage of. Clearing it stops scan ordering rather than making it free."
+        hint="A flat amount per scan order, on collection and Partner orders alike, never a percentage: a scan order has no food value of ours to take a percentage of. Clearing it stops scan ordering rather than making it free."
       />
       {/* SCAN ORDERS ONLY. A normal food order arrives in the store's own
           packaging and is charged nothing for it — the constraint on
@@ -48,7 +48,7 @@ export default function ConfigForm({ config }) {
         type="number"
         min="0"
         placeholder={String(config?.scan_pack_fee_pesewas ?? 0)}
-        hint="Charged on SCAN errands only, and shown to the customer as its own line. A normal food order comes in the store's packaging and is never charged this. 0 means Campus Dash absorbs it."
+        hint="SCAN orders only, and its own line on the customer's bill. Optional on a collection — they may bring their own container — and compulsory with a Partner, who needs something to carry. A normal food order comes in the store's packaging and is never charged this. 0 means Campus Dash absorbs it."
       />
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Both order types</h3>

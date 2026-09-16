@@ -16,9 +16,21 @@ Placing an order needs the **CUSTOMER capability**, which is a
 
 - first and last name
 - school email — it must end **exactly** `@acity.edu.gh` — and a code sent to it
-- level: 100, 200, 300 or 400
+- **student or staff**, and for a student the year they expect to graduate
+- gender, which is optional
 - a phone number
 - acceptance of the current customer terms
+
+**Staff are full customers.** They order, and they may become Partners. The
+distinction changes what sign-up asks and nothing about what the account may
+then do.
+
+**A graduation year rather than a level.** `level` — 100, 200, 300, 400 — was
+wrong for three of the four years it described: nobody comes back in September
+to move themselves up, so an account created in first year claimed to be a first
+year for ever. The year somebody expects to finish is the same fact stated so
+that it stays true for as long as they are here. The column survives, nullable
+and unwritten, so an older row still says what it said.
 
 `complete_customer_onboarding()` writes all of it in one transaction, including
 the terms acceptance — a capability granted before the agreement it depends on
@@ -79,8 +91,8 @@ nobody's fault, and it made the customer wait to find out what their lunch was
 going to cost.
 
 `submit_order()` therefore takes the fulfilment and the destination, prices the
-whole thing — food, the 5% service fee, and the GH₵5 if a Partner is bringing it
-— and creates the order ACCEPTED, which from here means "priced and payable".
+whole thing — food, the 6.95% service fee, and the GH₵5 if a Partner is bringing
+it — and creates the order ACCEPTED, which from here means "priced and payable".
 `confirm_payment()` is what moves it to PREPARING and, for a delivery, what
 opens the Partner search.
 

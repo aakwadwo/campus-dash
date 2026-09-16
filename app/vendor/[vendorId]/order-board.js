@@ -182,18 +182,28 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
   );
 }
 
+/**
+ * One order on the board.
+ *
+ * WHO IS COLLECTING IS DELIBERATELY NOT ON THIS CARD. A counter does the same
+ * work either way — make it, check the scan if there is one, read out four
+ * digits to whoever is standing there — and naming the recipient invited stores
+ * to treat the two differently. What IS shown is the handoff state, because
+ * somebody waiting at the counter is the only thing that needs an answer this
+ * second.
+ */
 function OrderCard({ order, vendorId, tone }) {
-  // THE ONE LINE A BUSY COUNTER ACTUALLY NEEDS. Somebody standing there
-  // waiting for a code is the only thing that requires the store to act this
-  // second.
-  const callout = order.partner_waiting
-    ? { text: 'Partner at the counter. Open to read out the code', strong: true }
-    : order.awaiting_collection
-      ? { text: 'Customer collecting. Open to read out the code', strong: true }
-      : order.delivery_status === 'PICKED_UP'
-        ? { text: 'Handed to the Partner. Nothing more to do', strong: false }
-        : order.bucket === 'READY' && order.fulfilment_type === 'DELIVERY'
-          ? { text: 'Waiting for a Partner to arrive', strong: false }
+  const scan = order.order_type === 'SCAN';
+  const needsScanCheck = scan && ['UPLOADED', 'RELEASED'].includes(order.scan_status);
+
+  const callout = needsScanCheck
+    ? { text: 'Check the meal scan before you hand anything over', strong: true }
+    : order.awaiting_handoff
+      ? { text: 'Someone is at the counter. Open to read out the code', strong: true }
+      : order.vendor_completed_at
+        ? { text: 'Handed over. Nothing more to do', strong: false }
+        : order.bucket === 'READY'
+          ? { text: 'Waiting to be collected', strong: false }
           : null;
 
   return (
@@ -202,15 +212,19 @@ function OrderCard({ order, vendorId, tone }) {
       className={`press rounded-card hover:border-brand-600 flex items-center gap-4 border px-4 py-3.5 transition-colors ${tone}`}
     >
       {/* THE NUMBER THE COUNTER CALLS OUT. Three digits, restarting at 001
-          every morning, unique to this store — not a database key. */}
+          every morning, unique to this store — not a database key. A meal scan
+          takes one exactly like everything else, because the queue is the
+          queue. */}
       <span className="w-16 shrink-0 text-3xl leading-none font-bold tabular-nums">
         {orderLabel(order)}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
-          <span className="font-semibold">
-            {order.fulfilment_type === 'PICKUP' ? 'Customer collects' : 'Partner delivery'}
-          </span>
+          {scan ? (
+            <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 text-xs font-semibold">
+              Meal scan
+            </span>
+          ) : null}
           <span className="text-muted">
             {order.item_count} item{order.item_count === 1 ? '' : 's'} ·{' '}
             <Age key={order.age_seconds} seconds={order.age_seconds} />
@@ -225,9 +239,20 @@ function OrderCard({ order, vendorId, tone }) {
         ) : null}
       </span>
       <span className="shrink-0 text-right">
-        <span className="block font-semibold tabular-nums">
-          {formatPesewas(order.vendor_amount_pesewas)}
-        </span>
+        {/* WHAT CAMPUS DASH PAYS THIS STORE. On a meal scan that is nothing —
+            the university's system settles it — so the scan's value is shown
+            instead, marked as what it is, rather than a bare GH₵0.00 that
+            reads like a mistake. */}
+        {scan ? (
+          <span className="block text-sm font-semibold tabular-nums">
+            {formatPesewas(order.scan_value_pesewas)}
+            <span className="text-muted block text-xs font-normal">on scan</span>
+          </span>
+        ) : (
+          <span className="block font-semibold tabular-nums">
+            {formatPesewas(order.vendor_amount_pesewas)}
+          </span>
+        )}
         <ChevronRightIcon className="text-faint ml-auto size-5" />
       </span>
     </Link>
@@ -251,14 +276,17 @@ function FinishedRow({ order, vendorId }) {
             ? 'Refund pending'
             : cancelled
               ? 'Cancelled'
-              : order.fulfilment_type === 'PICKUP'
-                ? 'Collected'
-                : 'Delivered'}
+              : order.scan_status === 'REFUSED'
+                ? 'Scan refused'
+                : 'Handed over'}
+        {order.order_type === 'SCAN' ? <span className="text-faint"> · meal scan</span> : null}
       </span>
       <span
         className={`shrink-0 text-sm font-semibold tabular-nums ${cancelled ? 'text-faint line-through' : ''}`}
       >
-        {formatPesewas(order.vendor_amount_pesewas)}
+        {formatPesewas(
+          order.order_type === 'SCAN' ? order.scan_value_pesewas : order.vendor_amount_pesewas
+        )}
       </span>
       <ChevronRightIcon className="text-faint size-4 shrink-0" />
     </Link>

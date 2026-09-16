@@ -116,6 +116,62 @@ export async function temporaryVendor() {
   };
 }
 
+/**
+ * A browser session for a SEEDED, PHONE-ONLY vendor identity.
+ *
+ * WHY THIS IS AWKWARD, and why the awkwardness is named here rather than
+ * repeated in a suite: a vendor signs in with an SMS code, and a test cannot
+ * receive one. GoTrue will only mint a session from something it can issue a
+ * link for, so the identity is lent a confirmed school address for the duration
+ * of the suite and has it taken away again afterwards.
+ *
+ * It is a LOAN, and restore() is not optional. A seeded actor left carrying an
+ * address is exactly the kind of leak that makes one file's tests depend on
+ * another having run first — which is how this helper came to exist: the vendor
+ * status suite used to read an email off `vendor1Staff` that only
+ * account-model.test.js had put there, so it passed in the full run and failed
+ * on its own.
+ *
+ * Attaching an address grants NO capability. Customer is a customer_profiles
+ * row and nothing else, so this identity still cannot order.
+ */
+export async function seededVendorSession(userId) {
+  const email = `session-seeded-vendor-${randomUUID().slice(0, 8)}@acity.edu.gh`;
+
+  const previous = await asService(async (c) => {
+    // Read first, then write. A subquery in RETURNING would see the statement's
+    // own snapshot, and reasoning about which value that is at every call site
+    // is not worth saving a round trip in a test helper.
+    const { rows } = await c.query('select email from auth.users where id = $1', [userId]);
+    if (rows.length === 0) throw new Error(`no auth.users row for ${userId}`);
+    await c.query('update auth.users set email = $2, email_confirmed_at = now() where id = $1', [
+      userId,
+      email,
+    ]);
+    return rows[0].email;
+  });
+
+  const cookies = sessionCookies(await otpSession(email));
+
+  return {
+    email,
+    cookies,
+    restore: () =>
+      asService((c) =>
+        c.query(
+          // Cast, because a bare $2 inside the CASE has no column to take its
+          // type from and Postgres refuses to guess.
+          `update auth.users
+              set email = $2::text,
+                  email_confirmed_at =
+                    case when $2::text is null then null else email_confirmed_at end
+            where id = $1`,
+          [userId, previous]
+        )
+      ),
+  };
+}
+
 /** Decodes a JWT payload without verifying it. For assertions only. */
 export function claimsOf(accessToken) {
   return JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf8'));

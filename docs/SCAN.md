@@ -1,75 +1,118 @@
-# Scan delivery
+# Meal scans
 
-A student already holds a prepaid campus meal entitlement — a "scan" — and does
-not want to walk to the restaurant. Campus Dash sends a Partner to redeem it and
-bring the food.
+A student holds a prepaid campus meal entitlement — a "scan". Some stores honour
+it; some of those honour it for some of their menu. Campus Dash puts the order
+on the store's board, charges a fee for doing so, and will send a Partner to
+carry it if the student would rather not walk.
 
-**Campus Dash does not sell the food. It sells the errand.** Every design
-decision below follows from that one sentence.
+**A scan is a way of PAYING, not a different product.** Every decision below
+follows from that one sentence, and from its immediate consequence: **the store
+is the redemption point.** A restaurant that is going to hand food to somebody
+has to know the order exists, know what was asked for, and be the party that
+checks the scan before anything leaves the counter.
 
-|                                  | Food order                        | Scan delivery                |
-| -------------------------------- | --------------------------------- | ---------------------------- |
-| Customer pays                    | food + service fee + delivery fee | service fee + delivery fee   |
-| Campus Dash food price           | the vendor's price                | **GH₵0**                     |
-| Vendor entitlement in our ledger | the food subtotal                 | **none — no row is written** |
-| Partner entitlement              | delivery fee                      | delivery fee                 |
-| Platform revenue                 | service fee                       | scan service fee             |
-| Fulfilment                       | pickup or delivery                | **delivery only**            |
-| Vendor acts in the app           | accepts, prepares, marks ready    | **never**                    |
+|                                 | Food order              | Scan order                         |
+| ------------------------------- | ----------------------- | ---------------------------------- |
+| Customer pays for the food      | yes                     | **no — the scan does**             |
+| Campus Dash food price          | the store's price       | **GH₵0**                           |
+| Store entitlement in our ledger | the food subtotal       | **none — no row is written**       |
+| Partner entitlement             | delivery fee            | delivery fee                       |
+| Platform revenue                | service fee (% of food) | **flat fee** (+ pack when charged) |
+| Fulfilment                      | pickup or Partner       | pickup or Partner                  |
+| On the store's board            | yes                     | **yes**                            |
+| Daily queue number              | yes                     | **yes**                            |
+| Who verifies the scan           | —                       | **the store**                      |
+| Handoff                         | four digits             | **four digits**                    |
 
 The meal entitlement is settled between the student and the university. Campus
-Dash is not a party to it and never records its value.
+Dash is not a party to it and never records its value as money owed.
 
-## The fee
+> **This supersedes the earlier "scan errand" model**, in which Campus Dash sold
+> the errand alone, no store ever saw the order, no queue number was allocated,
+> and the Partner reported the redemption themselves. That model was wrong about
+> the store's role, and everything that followed from it has been undone. See
+> `supabase/migrations/20261002000001_scan_is_a_store_order.sql`.
 
-`service_fee_bps` is a percentage of the food subtotal. A scan order has no
-subtotal, so that formula yields zero — and because
-`partner_share_of_delivery_bps` is 10000, the Partner already takes the whole
-delivery fee. A zero fee would mean running every scan order at a loss once
-Paystack takes its cut.
+## What a scan order costs
 
-So the scan fee is a **flat GH₵2.00 per errand**, held in its own column,
-`pricing_config.scan_service_fee_pesewas` (200 pesewas), editable at
-`/admin/pilot`. The migration installs that value, so a hosted project is priced
-correctly the moment it is applied.
+Every figure is read from `pricing_config`. Nothing is hard-coded, which is the
+point: the pilot retunes at `/admin/pilot` without a deploy.
 
-It is **not** a percentage of anything. There is no Campus Dash food value to
-take a percentage of, and the meal's face value belongs to the university's
-system rather than to our pricing. The errand is the same work whether the meal
-is worth GH₵10 or GH₵40.
+|                          | Collection, no pack        | Collection, with pack      | Campus Dash Partner             |
+| ------------------------ | -------------------------- | -------------------------- | ------------------------------- |
+| Food through Campus Dash | GH₵0.00                    | GH₵0.00                    | GH₵0.00                         |
+| Service fee              | `scan_service_fee_pesewas` | `scan_service_fee_pesewas` | `scan_service_fee_pesewas`      |
+|                          | GH₵2.00                    | GH₵2.00                    | GH₵2.00                         |
+| Pack fee                 | —                          | `scan_pack_fee_pesewas`    | `scan_pack_fee_pesewas`         |
+|                          | GH₵0.00                    | GH₵4.00                    | GH₵4.00, **compulsory**         |
+| Campus Dash Partner      | —                          | —                          | `delivery_fee_pesewas`, GH₵5.00 |
+| **Total**                | **GH₵2.00**                | **GH₵6.00**                | **GH₵11.00**                    |
+
+### The service fee is FLAT, and never a percentage
+
+**GH₵2.00 per scan order, on either fulfilment, whatever is in it.**
+`service_fee_bps` — the 6.95% — belongs to FOOD orders and is never read by
+`price_scan_order()`.
+
+The reason is worth stating rather than assuming. The "scanned value" on a scan
+order is the STORE'S menu price for food **Campus Dash did not sell**, settled
+between the student and the university. A percentage of it would be a commission
+on somebody else's transaction, and it would make the fee move with a number the
+customer is not paying — a GH₵40 meal costing more to put on a board than a
+GH₵10 one, for identical work.
+
+**The two pricing systems do not meet.** `price_order()` charges
+`service_fee_bps` of a real subtotal, because on a food order a real subtotal
+exists and Campus Dash genuinely sold it. `price_scan_order()` charges
+`scan_service_fee_pesewas` and reads `service_fee_bps` nowhere.
 
 **The column stays nullable, and null is not zero.** Null means nobody has set a
 price, and `price_scan_order()` refuses to quote rather than quietly giving the
-errand away. Zero would be a decision — a deliberately free errand.
+service away. Zero would be a decision — a deliberately free one.
 
-A scan order therefore costs:
+### The pack fee is a choice on a collection, and compulsory with a Partner
 
-| Line                     | Amount    |
-| ------------------------ | --------- |
-| Food through Campus Dash | GH₵0.00   |
-| Delivery fee             | GH₵5.00   |
-| Scan service fee         | GH₵2.00   |
-| Disposable pack fee      | admin-set |
-| **Customer pays**        | the sum   |
+**GH₵4.00, and always its own line when it is charged.** Campus Dash buys the
+containers a redeemed meal is carried in.
 
-## The disposable pack fee
+- **Collection:** the customer decides. Somebody walking to a counter can bring
+  their own container, and charging GH₵4.00 for one they refused is charging for
+  nothing. The checkout shows a checkbox, off by default.
+- **Campus Dash Partner:** compulsory, and there is no "no pack" option. A
+  Partner cannot carry a meal without something to carry it in, so the pack
+  comes with the choice rather than beside it.
 
-**Scan errands only.** Campus Dash buys the containers a meal scan is carried in;
-a normal food order arrives in the store's own packaging and is charged nothing
-for it. `orders_pack_fee_scan_only` is a CHECK constraint rather than a
-convention, so it cannot leak onto a food order however the calling code
-changes.
+`p_wants_pack` is a **request, not an instruction**. On a Partner order
+`price_scan_order()` ignores it and charges the pack regardless, so a request
+that skipped the screen is overruled rather than honoured. `quote_scan_order()`
+returns `pack_is_compulsory` so the checkout does not have to hold a second copy
+of that rule.
 
-The amount lives in `pricing_config.scan_pack_fee_pesewas`, editable at
-`/admin/pilot`. Nothing hard-codes it: `price_scan_order()` reads it,
-`quote_scan_order()` returns it as its own line, and the checkout prints it as
-its own line — a customer who is charged for something is entitled to see what.
+`orders_pack_fee_scan_only` is a CHECK constraint rather than a convention, so
+it cannot leak onto a food order however the calling code changes — a food order
+arrives in the store's own packaging and is charged nothing for it.
 
 It is **snapshotted onto the order** like every other figure, so raising it
-tomorrow does not change what somebody already agreed to pay. Zero is a real
-setting and means Campus Dash absorbs the cost; unlike the service fee, there is
-no "not configured" state, because packaging with no price is free packaging
-rather than an unpriced product.
+tomorrow does not change what somebody already agreed to pay.
+
+## Eligibility
+
+Two switches, and both are required:
+
+- `vendors.can_accept_scans` — the store honours meal scans at all. Set by an
+  administrator at **Admin → Vendors → the store → Scan delivery**, audited like
+  every other vendor change. Default false.
+- `menu_items.scan_eligible` — this item may be paid for with one. Default
+  false.
+
+So a store opts in, and then chooses what it will honour a scan for: the rice,
+yes; the imported drinks, no. `price_scan_order()` re-checks every item against
+the live menu, so a screen that only offered eligible items is a convenience
+rather than the enforcement.
+
+`scan_restaurants()` lists only stores with at least one eligible item available.
+A store with the switch on and nothing marked is a dead end, and listing it only
+sends somebody to an empty menu to find that out.
 
 ## State
 
@@ -77,140 +120,162 @@ Scan orders reuse `order_status`, `payment_status` and `delivery_status`
 unchanged, and add a **fourth independent dimension**, `scan_status`:
 
 ```
-UPLOADED → RELEASED → REDEEMED
-                   ↘ REFUSED
+UPLOADED → REDEEMED
+        ↘ REFUSED
 ```
 
-| Value      | Means                                                   |
-| ---------- | ------------------------------------------------------- |
-| `UPLOADED` | on file; only the customer and an admin can see it      |
-| `RELEASED` | an assigned Partner may read it, and only that Partner  |
-| `REDEEMED` | the assigned Partner reports the restaurant honoured it |
-| `REFUSED`  | the restaurant would not honour it. **No money moves.** |
+`RELEASED` sits between UPLOADED and REDEEMED on a Partner order and means the
+assigned Partner may read the image.
 
-It is a separate dimension because "the Partner has the food" and "the scan was
-redeemed" are different claims, and hard rule 2 forbids merging state
-dimensions.
+| Value      | Means                                                      |
+| ---------- | ---------------------------------------------------------- |
+| `UPLOADED` | on file; the customer, the store and an admin can see it   |
+| `RELEASED` | an assigned Partner may read it too, and only that Partner |
+| `REDEEMED` | **the store** has checked it and is honouring it           |
+| `REFUSED`  | the store would not honour it. **No money moves.**         |
+
+It is a separate dimension because "the scan was honoured" and "somebody has the
+food" are different claims, and hard rule 2 forbids merging state dimensions.
 
 ## The lifecycle
 
 ```
-customer uploads the scan          scan_status  UPLOADED
-picks restaurant + destination     order_status ACCEPTED   (no vendor involved)
-pays service + delivery fee        payment_status PAID
-  → confirm_payment() opens dispatch
-                                   order_status READY, delivery SEARCHING
-a Partner accepts                  delivery ASSIGNED, scan_status RELEASED
-Partner redeems at the counter     scan_status REDEEMED, delivery PICKED_UP
-Partner delivers, customer's code   delivery DELIVERED, order COMPLETED
+customer picks eligible items       scan_status  UPLOADED
+attaches the scan, picks fulfilment order_status ACCEPTED, queue number 001
+pays the fee                        payment_status PAID
+  → confirm_payment() reaches the store
+                                    order_status PREPARING
+                                    delivery SEARCHING, for a Partner order
+a Partner accepts (Partner only)    delivery ASSIGNED, scan_status RELEASED
+THE STORE CHECKS THE SCAN           scan_status REDEEMED
+store presses Ready for pickup      order_status READY, handoff code minted
+store reads the code out            whoever is collecting types it in
+  collection: customer               order COMPLETED
+  Partner:    partner_confirm_pickup delivery PICKED_UP
+              customer's code        delivery DELIVERED, order COMPLETED
 ```
 
 Two things are worth spelling out.
 
-**The order is born ACCEPTED with no vendor asked.** There is nothing for the
-restaurant to accept, cook or price. It never appears on a vendor board, and
-`vendor_order_board()` / `vendor_pending_count()` filter scan orders out.
+**Payment reaches the store, exactly as it does for a food order.**
+`confirm_payment()` has no scan branch at all any more — that is the smallest
+correct change, and one fewer path that can drift.
 
-**Payment opens dispatch.** A food order reaches `SEARCHING` when the vendor
-marks it READY. Nobody cooks for us here, so `confirm_payment()` moves a scan
-order to READY/SEARCHING itself. This preserves the invariant that a Partner
-never sees an unpaid order.
+**Ready is refused until the scan is settled.** `vendor_mark_ready()` will not
+move a scan order whose `scan_status` is still UPLOADED or RELEASED. Pressing
+Ready is what mints the four digits somebody will be asked for, and minting them
+before anybody has looked at the scan would put food on a counter for an
+entitlement that might not exist.
 
-## Redemption is not acceptance
+## Redemption is the store's act
 
-`partner_report_scan_redeemed()` is a separate, explicit act. It is also the
-scan order's only road to `PICKED_UP` — there is no vendor to press a pickup
-button — and `partner_complete_delivery()` still requires `PICKED_UP`. A Partner
-who never redeems therefore cannot complete the delivery.
+`vendor_redeem_scan()` is a deliberate, separate act by the restaurant. It used
+to be `partner_report_scan_redeemed()` — the Partner recording their own account
+of what a counter had done — and that was wrong twice over: the Partner cannot
+verify somebody else's system, and a second road to REDEEMED from the other side
+of the counter is exactly the asymmetry hard rule 11 exists to prevent. Both
+Partner functions are **dropped**, not merely revoked.
 
 Double redemption is refused by a conditional update guarded on
-`scan_status = 'RELEASED'`. The second attempt matches zero rows, returns
-`{ success: false }` and is logged as a rejection.
+`scan_status in ('UPLOADED', 'RELEASED')`. The second attempt matches zero rows,
+returns `{ success: false }` and is logged as a rejection.
 
 ### What Campus Dash does and does not guarantee
 
 **Campus Dash guarantees that its own order cannot be redeemed twice through
 this workflow.**
 
-It does **not** guarantee that the underlying entitlement is still valid, and it
-cannot. There is no integration with the university's scan system. A screenshot
-can be shown at a counter by anybody; the restaurant's own process is the
-authority on whether a scan is live. That is why the function is named
-`partner_report_scan_redeemed` — it records a person's account of what happened,
-not a verification. If an official integration ever exists, it can become
-authoritative and this becomes a fallback.
+It does **not** guarantee that the underlying entitlement is valid, and it
+cannot: there is no integration with the university's scan system. What the new
+model does buy is that the party making the judgement is now the party that can
+actually make it — the counter staff looking at the scan, with the food in front
+of them — rather than a student holding a phone.
 
-## What the customer has to say
+## What the customer may add
 
-An errand carries a **required** free-text field, `order_scans.details`, asked
-as "Give us details about your order". It is where the customer names the meal,
-the counter, and what to do if it has run out.
-
-It is required because the alternative is a Partner standing at a counter with
-somebody's scan and no idea what to ask for, ringing to find out. That phone
-call is what this field exists to prevent, and an optional field would not
-prevent it. `submit_scan_order()` refuses a blank one, so a screen is not the
-enforcement.
-
-The customer may attach the scan by **choosing a file or taking a photo**.
-Neither is privileged: a screenshot saved last week and a photograph taken now
-are the same evidence, and the upload endpoint could not tell them apart in any
-case.
+An optional free-text note, `order_scans.details`, asked as "Anything the store
+should know". It **used to be required**, because it was the only way anybody
+knew what to hand over. The order carries real items now, so the note is what it
+should always have been: context — "no pepper", "the far counter".
 
 ## Privacy
 
-The image lives in the private `scan-documents` bucket. Like
-`partner-documents`, it has **no policies on `storage.objects` at all**, so RLS
-denies every client read and write and only the service role can touch a file.
-Nobody ever receives a storage URL — only a short-lived signed URL minted
-server-side after the caller's right has been re-checked in SQL.
+The image lives in the private `scan-documents` bucket, which has **no policies
+on `storage.objects` at all**, so RLS denies every client read and write and only
+the service role can touch a file. Nobody ever receives a storage URL — only a
+short-lived signed URL minted server-side after the caller's right has been
+re-checked in SQL.
 
-The details ride on the same row under the same rule — `partner_scan_brief()`
-returns them only to the currently assigned Partner, so there is no second
-authorisation to keep in step with the image's.
+**Four readers, and two doors.**
 
-Exactly three readers, enforced in `scan_image_path()`, `partner_scan_brief()`
-and the `order_scans` RLS policy:
+| Reader                             | Door                       | Window                       |
+| ---------------------------------- | -------------------------- | ---------------------------- |
+| the customer who uploaded it       | `scan_image_path()`        | always                       |
+| the **currently** assigned Partner | `scan_image_path()`        | assignment → end of delivery |
+| the **store honouring it**         | `vendor_scan_image_path()` | paid → leaves their board    |
+| an administrator                   | `scan_image_path()`        | always                       |
 
-- the customer who uploaded it
-- the **currently** assigned Partner
-- an administrator
+The store's window opens when the order is paid for and closes when it leaves
+the board, for the same reason the Partner's does: an authorisation that
+outlives the thing it was granted for is not an authorisation, it is a copy.
+`vendor_may_read_scan()` is the single predicate behind both that function and
+the `order_scans` RLS policy, so the row and the image can never disagree about
+who may look. It is a SECURITY DEFINER function rather than a subquery because
+vendors read orders only through RPCs and hold no SELECT grant on
+`public.orders` — an `exists (select 1 from public.orders …)` inside a policy
+would evaluate against a table the vendor cannot see and be permanently false.
 
 `order_scans.released_to` is rewritten in the same statement that moves the
 assignment, so a Partner who loses the job loses the scan on their very next
-request. There is no window in which two Partners can read it. An offer carries
-no scan — a Partner sees restaurant, zone, payout and timing, and decides on
-that.
+request. An offer carries no scan — a Partner sees store, zone, payout and
+timing, and decides on that.
 
 Upload paths are `<user_id>/scans/<random>`, built from the session and never
-from the request. `submit_scan_order()` re-checks the prefix before attaching
-a scan, so a forged path fails twice.
+from the request. `submit_scan_order()` re-checks the prefix before attaching a
+scan, so a forged path fails twice.
+
+### What the store is NOT shown
+
+Putting a scan order on the board necessarily shows a store more than it saw
+before. The extra exposure is **the scan and the items, and nothing else**.
+`vendor_order_board()` and `vendor_order_detail()` return no destination, no
+destination note, no customer phone number and no customer total — and that is
+now true of food orders too. A store hands food across a counter to whoever
+reads back four digits; where it goes afterwards is the Partner's business and
+the customer's. The destination ZONE used to be returned as "useful context"; it
+was a customer's whereabouts shown to a room, and it went with the rest.
 
 ## The ledger
 
 `create_order_allocations()` writes **no VENDOR row** for a scan order — not a
 zero-value one. A zero-pesewa liability is still a liability on the books: it
-shows up in settlement queries and tells a reader the restaurant is owed
-something. It is not.
+shows up in settlement queries and tells a reader the store is owed something by
+Campus Dash. It is not; the university's system settles that.
 
 ```
-customer pays          GH₵7.00   service fee + delivery fee (+ any pack fee)
-PLATFORM allocation    GH₵7.00   at payment
+customer pays          GH₵11.00  GH₵2.00 fee + GH₵4.00 pack + GH₵5.00 Partner
+PLATFORM allocation    GH₵11.00  at payment
 PARTNER allocation     GH₵5.00   carved out of PLATFORM on delivery
-net platform           GH₵2.00   the scan service fee, plus the pack fee
+net platform           GH₵6.00   the flat fee, plus the pack
 VENDOR allocation      — no row is written at all —
 ```
 
-The pack fee rides in the PLATFORM row for the same reason the service fee does:
-`create_order_allocations()` computes it as `total − subtotal`, and Campus Dash
-is who actually buys the containers.
+**The same GH₵11.00 whatever was ordered.** A GH₵42.00 tilapia and a GH₵38.00
+waffle produce identical figures, because the fee is flat and the scanned value
+never enters the arithmetic. A collection with no pack is GH₵2.00 and a single
+PLATFORM row.
 
-**Paystack's processing fee is a platform expense, and it is a platform expense
-by construction rather than by policy.** `payments` records only the gross amount
-collected; there is no fee column anywhere in the schema, and allocations are
-derived from `orders.total_pesewas`. So nothing can deduct a processing fee from
-what the Partner or a vendor is owed — the cost lands on the platform's share
-because that is the only place left for it to land.
+The items on the order carry their menu prices so the counter can see what was
+asked for and what it is normally worth, but `orders.subtotal_pesewas` stays
+**zero** — nothing ties the two together, and `orders_scan_has_no_food_value`
+refuses any attempt to change that.
+
+**Paystack's processing fee is a platform expense by construction rather than by
+policy.** `payments` records only the gross amount collected; there is no fee
+column anywhere in the schema, and allocations are derived from
+`orders.total_pesewas`. So nothing can deduct a processing fee from what the
+Partner is owed — the cost lands on the platform's share because that is the
+only place left for it to land.
 
 ## Failure, and what is deliberately undecided
 
@@ -219,44 +284,43 @@ exist, because no refund policy has been decided.** This is not an oversight; it
 is the absence of a business rule, and inventing one in a database function
 would be the wrong place to invent it.
 
-| What happened                   | Recorded as                                         | Money                         |
-| ------------------------------- | --------------------------------------------------- | ----------------------------- |
-| Restaurant refuses the scan     | `scan_status = REFUSED`                             | untouched — admin resolves    |
-| Scan already redeemed elsewhere | `scan_status = REFUSED` + reason                    | untouched — admin resolves    |
-| No Partner accepts              | `delivery FAILED_NO_PARTNER`, scan stays `UPLOADED` | existing no-partner behaviour |
-| Partner loses the assignment    | scan un-released, back to `UPLOADED`                | order returns to search       |
-| Redeemed but delivery fails     | existing delivery-failure paths                     | unchanged                     |
-| Customer disputes receipt       | existing dispute paths                              | unchanged                     |
+| What happened                | Recorded as                                         | Money                      |
+| ---------------------------- | --------------------------------------------------- | -------------------------- |
+| Store refuses the scan       | `scan_status = REFUSED` + the store's reason        | untouched — admin resolves |
+| No Partner accepts           | `delivery FAILED_NO_PARTNER`, scan stays `UPLOADED` | existing no-partner path   |
+| Partner loses the assignment | scan un-released, back to `UPLOADED`                | order returns to search    |
+| Redeemed but delivery fails  | existing delivery-failure paths                     | unchanged                  |
+| Customer disputes receipt    | existing dispute paths                              | unchanged                  |
 
 An administrator resolves these with the existing `admin_mark_refunded()` and
-`admin_resolve_dispute()`, both of which append to `admin_actions`.
+`admin_resolve_dispute()`, both of which append to `admin_actions`. A refused
+scan appears in `admin_exceptions()` flagged as requiring a decision.
 
 **Cancellation before assignment is also undecided** and is not implemented. A
 customer cannot cancel a paid scan order themselves.
 
 ## Conflict of interest
 
-Unchanged and fully applied. A Partner cannot deliver their own scan order, and
-cannot deliver one from a restaurant they staff. Both predicates read
+Unchanged and fully applied. A Partner cannot carry their own scan order, and
+cannot carry one from a store they own. Both predicates read
 `orders.customer_id` and `orders.vendor_id`, which a scan order populates the
 same way, so no special case was needed or added.
 
-## Restaurants
-
-A vendor accepts scans only when `vendors.can_accept_scans` is true, set by an
-administrator at **Admin → Vendors → the stall → Scan delivery**, audited like
-every other vendor change. Default false: a scan errand sends a Partner to a
-counter expecting to be served without paying, and being wrong about that costs
-the Partner a walk and the customer their lunch.
+## Stores
 
 Wafflemania and Yellow Bar exist in the **local seed only**, as
 `Wafflemania (test)` and `Yellow Bar (test)`. `supabase/seed.sql` is never
-applied to a hosted project. The real restaurants are created in production
-through `/admin/vendors`, against the same vendor model.
+applied to a hosted project. The real stores are created in production through
+`/admin/vendors`, against the same vendor model.
+
+They are **owned** in the seed, and they have to be: a store that takes meal
+scans has a board to check them from, and none of that is possible for a
+catalogue entry with a NULL owner — which is what they used to be, when Campus
+Dash sold the errand and the store had no part in it.
 
 ## Not built, on purpose
 
 No integration with the university's scan system, no QR or barcode verification,
-no restaurant-side hardware, no automatic reconciliation, no GPS. For V1 the
-scan is a securely stored artifact the assigned Partner carries to the counter
-and uses through the process that already exists there.
+no store-side hardware, no automatic reconciliation, no GPS. For V1 the scan is
+a securely stored artifact that the person collecting carries to the counter and
+the store checks through the process that already exists there.

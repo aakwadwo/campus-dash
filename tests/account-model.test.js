@@ -150,21 +150,39 @@ describe('account model — identity and capabilities', () => {
    */
   async function onboard(
     userId,
-    { fullName = 'Test Student', studentId = null, level = '200', phone = null, termsId } = {}
+    {
+      fullName = 'Test Student',
+      // A GRADUATION YEAR RATHER THAN A LEVEL. A level is wrong for three of
+      // the four years it describes, because nobody comes back in September to
+      // move themselves up; the year somebody expects to finish stays true.
+      affiliation = 'STUDENT',
+      graduationYear = new Date().getFullYear() + 2,
+      gender = null,
+      phone = null,
+      termsId,
+      // LEGACY, and still passed through: the column and its unique index
+      // outlive the question, so an account created with one keeps it.
+      studentId = null,
+    } = {}
   ) {
     const terms = termsId ?? (await currentCustomerTermsId());
     return asUser(
       userId,
       async (c) =>
         (
-          await c.query('select * from public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
-            String(fullName).split(' ')[0] || 'Test',
-            String(fullName).split(' ').slice(1).join(' ') || 'Student',
-            level,
-            phone ?? nextPhone(),
-            terms,
-            studentId,
-          ])
+          await c.query(
+            'select * from public.complete_customer_onboarding($1,$2,$3,$4,$5,$6,$7,$8)',
+            [
+              String(fullName).split(' ')[0] || 'Test',
+              String(fullName).split(' ').slice(1).join(' ') || 'Student',
+              phone ?? nextPhone(),
+              affiliation,
+              affiliation === 'STAFF' ? null : graduationYear,
+              gender,
+              terms,
+              studentId,
+            ]
+          )
         ).rows[0],
       { commit: true }
     );
@@ -231,15 +249,18 @@ describe('account model — identity and capabilities', () => {
     const email = nextSchoolEmail();
     const id = await newEmailIdentity(email);
 
-    await onboard(id, { fullName: 'Ama Onboarded', studentId: 'TEST-STU-ONB-1', level: '300' });
+    await onboard(id, { fullName: 'Ama Onboarded', studentId: 'TEST-STU-ONB-1' });
 
     const caps = await capabilities(id);
     assert.equal(caps.user_id, id, 'the SAME auth user id — nothing new was created');
     assert.equal(caps.is_customer, true);
     assert.equal(caps.can_order, true);
     assert.equal(caps.customer_status, 'ONBOARDED');
-    assert.equal(caps.student_id_number, 'TEST-STU-ONB-1');
-    assert.equal(caps.level, '300');
+    assert.equal(caps.student_id_number, 'TEST-STU-ONB-1', 'a legacy value passed in is kept');
+    // `level` is HISTORICAL and is never written any more — a graduation year
+    // replaced it, because a level is wrong for three of the four years it
+    // describes. An account created now has none.
+    assert.equal(caps.level, null);
     assert.equal(caps.email, email, 'the VERIFIED address, read from auth rather than typed');
 
     const order = await asUser(
@@ -282,23 +303,27 @@ describe('account model — identity and capabilities', () => {
 
     // A STUDENT ID NUMBER IS NOT AMONG THEM any more, and its absence is
     // asserted separately below rather than by a missing row here.
+    //
+    // [first, last, phone, affiliation, graduationYear]
+    const thisYear = new Date().getFullYear();
     const cases = [
-      [['', 'Mensah', '200', '+233208880031'], /first name is required/],
-      [['Kwame', '', '200', '+233208880031'], /last name is required/],
-      [['Kwame', 'Mensah', '', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', 'Class of 2029', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', '500', '+233208880031'], /choose your level/],
-      [['Kwame', 'Mensah', '200', ''], /phone number is required/],
-      [['Kwame', 'Mensah', '200', '0201234567'], /valid phone number/],
+      [['', 'Mensah', '+233208880031', 'STUDENT', thisYear + 2], /first name is required/],
+      [['Kwame', '', '+233208880031', 'STUDENT', thisYear + 2], /last name is required/],
+      [['Kwame', 'Mensah', '', 'STUDENT', thisYear + 2], /phone number is required/],
+      [['Kwame', 'Mensah', '0201234567', 'STUDENT', thisYear + 2], /valid phone number/],
+      // A STUDENT MUST NAME A YEAR, and it has to be one that could be true.
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', null], /expect to graduate/],
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 1999], /does not look right/],
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', thisYear + 40], /does not look right/],
     ];
 
     for (const [args, expected] of cases) {
       const error = await expectRejection(
         asUser(id, (c) =>
-          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6)', [
+          c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6,$7)', [
             ...args,
-            terms,
             null,
+            terms,
           ])
         )
       );

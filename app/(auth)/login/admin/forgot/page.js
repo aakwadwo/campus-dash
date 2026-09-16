@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import ForgotPasswordForm from './forgot-form';
 
-export const metadata = { title: 'Reset your password · Campus Dash' };
+export const metadata = { title: 'Reset your password' };
 
 /**
  * Step one of administrator recovery.

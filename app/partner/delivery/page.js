@@ -52,10 +52,11 @@ export default async function PartnerDeliveryPage({ searchParams }) {
   const collecting = delivery.delivery_status === 'ASSIGNED';
   const isScan = delivery.order_type === 'SCAN';
 
-  // A scan errand has no vendor handover and therefore no pickup code — the
-  // scan image is what the Partner presents instead. The URL is short-lived and
-  // re-derived on every load, which is what makes losing the assignment revoke
-  // access rather than merely hide a link.
+  // The scan the Partner presents at the counter. The store checks it and then
+  // reads out the ordinary four digits, so this is what a Partner SHOWS rather
+  // than what they report on. The URL is short-lived and re-derived on every
+  // load, which is what makes losing the assignment revoke access rather than
+  // merely hide a link.
   const scanUrl = collecting && isScan ? await scanImageUrl(delivery.order_id) : null;
 
   // What the customer asked for. Gated on the same release as the image, so it
@@ -156,8 +157,9 @@ export default async function PartnerDeliveryPage({ searchParams }) {
             <p className="text-muted text-sm">{delivery.vendor_location}</p>
           </section>
 
-          {/* What to ask for. Written by the customer, and required of them, so
-              this is never empty on a new errand. */}
+          {/* The customer's optional note. The ITEMS say what the order is —
+              they are on the order like any other — so this is context rather
+              than the whole instruction it used to have to be. */}
           {brief?.details ? (
             <section className="rounded-card bg-brand-50 mt-3 p-4">
               <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
@@ -168,11 +170,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
           ) : null}
 
           <div className="mt-3">
-            <ScanCollection
-              orderId={delivery.order_id}
-              scanUrl={scanUrl}
-              restaurantName={delivery.vendor_name}
-            />
+            <ScanCollection scanUrl={scanUrl} restaurantName={delivery.vendor_name} />
           </div>
         </>
       ) : collecting ? (

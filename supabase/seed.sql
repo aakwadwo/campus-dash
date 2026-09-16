@@ -53,6 +53,12 @@ values
   ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000012', 'authenticated', 'authenticated',
    '233200000012', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Grill Owner (test)"}',
    now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000015', 'authenticated', 'authenticated',
+   '233200000053', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Waffle Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000016', 'authenticated', 'authenticated',
+   '233200000054', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Yellow Owner (test)"}',
+   now(), now(), '', '', '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '00000000-0000-4000-8000-000000000021', 'authenticated', 'authenticated',
    '233200000021', now(), '{"provider":"phone","providers":["phone"]}', '{"full_name":"Ama Test-Customer"}',
    now(), now(), '', '', '', '', '', '', '', ''),
@@ -138,6 +144,8 @@ insert into public.users (id, phone, email, first_name, last_name, is_admin) val
   ('00000000-0000-4000-8000-000000000001', null,            'admin@acity.edu.gh', 'Dev',   'Admin',           true),
   ('00000000-0000-4000-8000-000000000011', '+233200000011', null,                 'Muni',  'Owner (test)',    false),
   ('00000000-0000-4000-8000-000000000012', '+233200000012', null,                 'Grill', 'Owner (test)',    false),
+  ('00000000-0000-4000-8000-000000000015', '+233200000053', null,                 'Waffle', 'Owner (test)',   false),
+  ('00000000-0000-4000-8000-000000000016', '+233200000054', null,                 'Yellow', 'Owner (test)',   false),
   ('00000000-0000-4000-8000-000000000021', '+233200000021', 'ama@acity.edu.gh',   'Ama',   'Test-Customer',   false),
   ('00000000-0000-4000-8000-000000000022', '+233200000022', 'kwesi@acity.edu.gh', 'Kwesi', 'Test-Customer',   false),
   ('00000000-0000-4000-8000-000000000023', '+233200000023', 'efua@acity.edu.gh',  'Efua',  'Test-Customer',   false),
@@ -293,19 +301,23 @@ insert into public.vendors (
    'The store name and the description do not match. Resubmit with the real trading name.',
    now());
 
--- Scan-capable restaurants. DEVELOPMENT ONLY — this file is never applied to a
+-- Scan-capable stores. DEVELOPMENT ONLY — this file is never applied to a
 -- hosted project (`db:install` installs schema.sql alone), so these exist to
 -- make the scan flow walkable locally and nowhere else. The real Wafflemania
 -- and Yellow Bar are created in production by an administrator through
 -- /admin/vendors, against the same vendor model; nothing here is duplicated.
--- CATALOGUE-ONLY entries: owner_user_id is NULL. Campus Dash lists these so a
--- student can have a prepaid meal fetched from them. They have signed up for
--- nothing, operate no dashboard, and nobody can sign in as them — which is
--- exactly what a NULL owner means.
-insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, category_id, location_id, walk_minutes_to_campus) values
+--
+-- THEY ARE OWNED, and they have to be. A store that takes meal scans is the
+-- REDEMPTION POINT: it sees the order on its board, checks the scan, and reads
+-- out the handoff code. None of that is possible for a catalogue entry with a
+-- NULL owner, which is what these used to be when Campus Dash sold the errand
+-- and the store had no part in it.
+insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, owner_user_id, category_id, location_id, walk_minutes_to_campus) values
   ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000053', 'ACTIVE', true, true,
+   '00000000-0000-4000-8000-000000000015',
    '40000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000030', 3),
   ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)',  '+233200000054', 'ACTIVE', true, true,
+   '00000000-0000-4000-8000-000000000016',
    '40000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000040', 5);
 
 -- ---------------------------------------------------------------------------
@@ -330,6 +342,21 @@ insert into public.menu_items (id, vendor_id, name, description, price_pesewas, 
   ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce',                  4200, true, 1),
   ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice',              'Freshly pressed',                    1200, true, 2);
 
+-- WHAT A MEAL SCAN MAY BE SPENT ON. Store-level `can_accept_scans` opts the
+-- restaurant in; this decides which of its items. Both are required, so a store
+-- that takes scans still chooses what it will honour one for — the waffle, yes;
+-- the imported fruit juice, no.
+-- Each scan store deliberately has an INELIGIBLE item too (Waffle and Ice
+-- Cream, Fruit Juice), so the per-item rule is visible in the local data rather
+-- than only in a test: taking scans is not the same as taking them for
+-- everything on the board.
+update public.menu_items
+   set scan_eligible = true
+ where id in (
+   '30000000-0000-4000-8000-000000000021',  -- Chicken Waffle
+   '30000000-0000-4000-8000-000000000031'   -- Rice and Grilled Tilapia
+ );
+
 -- ---------------------------------------------------------------------------
 -- Pricing — PLACEHOLDER figures pending a commercial decision
 -- ---------------------------------------------------------------------------
@@ -350,11 +377,18 @@ update public.pricing_config
        partner_search_seconds = 1800,
        customer_absent_wait_seconds = 60,
        payment_pending_timeout_seconds = 300,
-       -- SCAN DELIVERY. GH₵2.00 flat per errand — an AGREED price, unlike the
-       -- placeholders above, and the same figure the migration installs into a
-       -- hosted project. Restated here only because this file rewrites the whole
-       -- pricing row; it is not a local-only override.
-       scan_service_fee_pesewas = 200
+       -- MEAL SCANS. Both AGREED prices, unlike the placeholders above, and the
+       -- same figures the migrations install into a hosted project. Restated
+       -- here only because this file rewrites the whole pricing row; neither is
+       -- a local-only override.
+       --
+       --   GH₵2.00  what a collection costs — putting the order on the board
+       --   GH₵4.00  the pack, compulsory and charged on every scan order
+       --
+       -- A scan order a Partner carries pays the ordinary percentage service
+       -- fee instead of the flat one, plus the Partner fee. See price_scan_order().
+       scan_service_fee_pesewas = 200,
+       scan_pack_fee_pesewas = 400
  where id;
 
 

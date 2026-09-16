@@ -1,6 +1,6 @@
 import { ButtonLink } from '@/app/ui';
 
-export const metadata = { title: 'Account suspended · Campus Dash' };
+export const metadata = { title: 'Account suspended' };
 
 /**
  * A dead end, made as un-hostile as possible.

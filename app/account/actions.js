@@ -56,8 +56,23 @@ export async function saveMyProfile(_prev, formData) {
   const firstName = String(formData.get('first_name') ?? '').trim();
   const lastName = String(formData.get('last_name') ?? '').trim();
   const phoneRaw = String(formData.get('phone') ?? '').trim();
+  const affiliation = formData.get('affiliation') === 'STAFF' ? 'STAFF' : 'STUDENT';
+  const gender = ['MALE', 'FEMALE'].includes(formData.get('gender'))
+    ? formData.get('gender')
+    : null;
 
   if (!firstName) return { ok: false, message: 'Enter your first name.' };
+
+  // A GRADUATION YEAR IS A STUDENT'S FACT. Staff do not graduate, so the field
+  // is not asked of them and is sent as null; the database says the same thing
+  // in a CHECK constraint rather than trusting this.
+  let graduationYear = null;
+  if (affiliation === 'STUDENT') {
+    graduationYear = Number(String(formData.get('graduation_year') ?? '').trim());
+    if (!Number.isInteger(graduationYear) || graduationYear < 2000 || graduationYear > 2100) {
+      return { ok: false, message: 'Choose the year you expect to graduate.' };
+    }
+  }
 
   // Normalised here so somebody typing 020 123 4567 is not told off by a
   // regular expression in the database. An unusable value is refused before a
@@ -76,6 +91,9 @@ export async function saveMyProfile(_prev, formData) {
       p_first_name: firstName,
       p_last_name: lastName || null,
       p_phone: phone,
+      p_affiliation: affiliation,
+      p_graduation_year: graduationYear,
+      p_gender: gender,
     });
     if (error) throw new Error(error.message);
   } catch (error) {

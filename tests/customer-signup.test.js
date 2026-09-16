@@ -1,7 +1,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LEVELS,
+  AFFILIATIONS,
+  GENDERS,
+  graduationYears,
   RESEND_COOLDOWN_SECONDS,
   SCHOOL_DOMAIN,
   isOtpShape,
@@ -26,11 +28,14 @@ import { normaliseSchoolEmail } from '../lib/auth/school-email.js';
  * give somebody a sentence before a round trip.
  */
 describe('customer sign-up decisions', () => {
+  const THIS_YEAR = new Date().getFullYear();
+
   const VALID = {
     firstName: 'Kwame',
     lastName: 'Mensah',
     email: 'kwame.mensah@acity.edu.gh',
-    level: '200',
+    affiliation: 'STUDENT',
+    graduationYear: String(THIS_YEAR + 2),
     phoneRaw: '020 123 4567',
     accepted: true,
   };
@@ -100,27 +105,91 @@ describe('customer sign-up decisions', () => {
     assert.ok(!('studentIdNumber' in validateSignUpDetails(VALID)));
   });
 
-  test('the level must be one of the four, and nothing else', () => {
-    for (const level of LEVELS) {
-      assert.equal(validateSignUpDetails({ ...VALID, level }).ok, true, level);
-    }
-    for (const level of ['', '500', '150', 'Class of 2029', 'one hundred', '1oo']) {
-      const result = validateSignUpDetails({ ...VALID, level });
-      assert.equal(result.ok, false, `${level} must be refused`);
-      assert.match(result.error, /level/i);
+  /**
+   * A GRADUATION YEAR RATHER THAN A LEVEL, and the reason is the whole point:
+   * `level` was wrong for three of the four years it described. Nobody comes
+   * back in September to move themselves from 100 to 200, so an account created
+   * in first year claimed to be a first year for ever. The year somebody
+   * expects to finish is the same fact stated so that it stays true.
+   */
+  test('a student must choose a graduation year from the offered window', () => {
+    for (const year of graduationYears()) {
+      const result = validateSignUpDetails({ ...VALID, graduationYear: String(year) });
+      assert.equal(result.ok, true, String(year));
+      assert.equal(result.graduationYear, year, 'and it comes back as a number');
     }
 
-    // Surrounding space is trimmed rather than refused, which is what the
-    // database does too — btrim() before the IN check in
-    // complete_customer_onboarding(). Somebody who pasted a value with a
-    // trailing space has not made a mistake worth stopping for.
-    const padded = validateSignUpDetails({ ...VALID, level: ' 300 ' });
-    assert.equal(padded.ok, true);
-    assert.equal(padded.level, '300');
+    for (const year of ['', '1999', String(THIS_YEAR - 1), String(THIS_YEAR + 20), 'next year']) {
+      const result = validateSignUpDetails({ ...VALID, graduationYear: year });
+      assert.equal(result.ok, false, `${year} must be refused`);
+      assert.match(result.error, /graduate/i);
+    }
   });
 
-  test('the four levels are exactly 100, 200, 300 and 400', () => {
-    assert.deepEqual(LEVELS, ['100', '200', '300', '400']);
+  test('the window is computed, so it never needs editing in September', () => {
+    const years = graduationYears(new Date('2031-03-01T00:00:00Z'));
+    assert.equal(years[0], 2031, 'somebody finishing this academic year');
+    assert.equal(years.at(-1), 2037, 'and a first year on a long programme');
+    assert.ok(
+      years.every((y, i) => i === 0 || y === years[i - 1] + 1),
+      'contiguous'
+    );
+  });
+
+  /**
+   * STAFF EAT LUNCH, AND STAFF CAN BE PARTNERS. Asking them for a year group
+   * was asking them to claim something untrue in order to buy a sandwich.
+   */
+  test('staff are not asked to graduate, and anything they send is discarded', () => {
+    const result = validateSignUpDetails({
+      ...VALID,
+      affiliation: 'STAFF',
+      graduationYear: '',
+    });
+    assert.equal(result.ok, true, 'no year is required of staff');
+    assert.equal(result.graduationYear, null);
+
+    // Even if a form sends one, it is not carried forward — the database has a
+    // CHECK constraint saying staff have no graduation year.
+    const sneaky = validateSignUpDetails({
+      ...VALID,
+      affiliation: 'STAFF',
+      graduationYear: String(THIS_YEAR + 3),
+    });
+    assert.equal(sneaky.ok, true);
+    assert.equal(sneaky.graduationYear, null);
+  });
+
+  test('the affiliation must be one of exactly two', () => {
+    assert.deepEqual(AFFILIATIONS, ['STUDENT', 'STAFF']);
+
+    for (const affiliation of ['', 'ALUMNI', 'student', 'Staff', 'VISITOR']) {
+      const result = validateSignUpDetails({ ...VALID, affiliation });
+      assert.equal(result.ok, false, `${affiliation} must be refused`);
+      assert.match(result.error, /student or staff/i);
+    }
+  });
+
+  /**
+   * OPTIONAL, AND IT STAYS OPTIONAL. Nobody is stopped from buying lunch for
+   * declining to say, which is why a blank is a pass rather than an error.
+   */
+  test('gender is exactly male or female, or nothing at all', () => {
+    assert.deepEqual(GENDERS, ['MALE', 'FEMALE']);
+
+    for (const gender of GENDERS) {
+      const result = validateSignUpDetails({ ...VALID, gender });
+      assert.equal(result.ok, true, gender);
+      assert.equal(result.gender, gender);
+    }
+
+    const blank = validateSignUpDetails({ ...VALID, gender: '' });
+    assert.equal(blank.ok, true, 'declining to say is not an error');
+    assert.equal(blank.gender, null);
+
+    const nonsense = validateSignUpDetails({ ...VALID, gender: 'OTHER' });
+    assert.equal(nonsense.ok, false);
+    assert.match(nonsense.error, /male or female/i);
   });
 
   test('a Ghanaian phone number is required, and is normalised to E.164', () => {

@@ -5,25 +5,30 @@ import { usePathname } from 'next/navigation';
 import MenuDisclosure from '@/app/menu-disclosure';
 
 /**
- * The console's navigation: seven destinations, and nothing else.
+ * The console's navigation: nine destinations, and nothing else.
  *
- * WHAT CAME OFF, AND WHERE IT WENT. None of it was deleted — every one of these
- * is still a working page, still reachable by URL, and every backend function
- * behind them is untouched. They came off the bar because an administrator
- * running a campus food service does not navigate by them:
+ * THE TEST FOR THE BAR is "would somebody open this during a normal shift".
  *
- *   Disputes      → an order state. The Orders board already sorts problems
- *                   first and the dashboard links to what needs a decision.
- *   Community     → a rewards report, not an operational destination.
- *   Payouts       → the payout RUN is a finance task, reached from Configuration
- *                   and surfaced on the dashboard as one number.
- *   Money/Finance → the same allocation figures the dashboard already states.
- *   System, Audit,
- *   Notifications → internals. A scheduler and a webhook log are things you go
- *                   looking for when something is wrong, not things you steer by.
+ * WHAT WAS DELETED, AND WHY IT WAS NOT ENOUGH TO UNLINK IT. Disputes, Community,
+ * Money, Finance, System, Notifications and Audit were taken off this bar in an
+ * earlier pass because nobody steers by them — and then left in the codebase,
+ * unlinked but still routable, still rendering, and in the case of Money and
+ * Finance still two more views of figures the dashboard already states.
  *
- * The test for the primary bar is "would somebody click this during a normal
- * shift". Seven things pass it.
+ * An unlinked page is worse than a deleted one. It rots: nobody opens it, so
+ * nobody notices when a read model behind it goes stale, and it is exactly
+ * where a schema change survives unnoticed. They are gone now.
+ *
+ * THE BACKEND IS UNTOUCHED, and that distinction is the important one.
+ * `admin_actions` is still written to by every administrative override,
+ * `admin_list_actions()` still exists, and `tests/audit.test.js` still holds
+ * the whole audit trail to account. REMOVING A PAGE IS NOT REMOVING A RECORD —
+ * the security infrastructure is the thing that matters, and a screen that
+ * nobody reads was never it.
+ *
+ * WHAT CAME BACK ON. Money (the settlement runs) is a real weekly task now that
+ * Partners are settled by hand, and Categories are the vocabulary the whole
+ * marketplace is filed under.
  */
 const NAV = [
   { href: '/admin', label: 'Dashboard' },
@@ -31,7 +36,9 @@ const NAV = [
   { href: '/admin/customers', label: 'Customers' },
   { href: '/admin/vendors', label: 'Vendors' },
   { href: '/admin/partners', label: 'Partners' },
+  { href: '/admin/categories', label: 'Categories' },
   { href: '/admin/locations', label: 'Locations' },
+  { href: '/admin/settlements', label: 'Money' },
   { href: '/admin/pilot', label: 'Configuration' },
 ];
 

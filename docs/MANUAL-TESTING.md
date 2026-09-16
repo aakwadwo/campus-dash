@@ -203,14 +203,14 @@ and never pays for is CANCELLED by the sweep once it passes — set it short at
 
 ## The full lifecycle
 
-Prices: **5% Campus Dash fee** on the food, **GH₵5** flat delivery.
-A Jollof (GH₵35) delivered costs GH₵35.00 + GH₵1.75 + GH₵5.00 = **GH₵41.75**.
-Collected, it costs **GH₵36.75** — the delivery fee is added when, and only
-when, the customer asks for a delivery.
+Prices: **6.95% Campus Dash fee** on the food, **GH₵5** flat for a Partner.
+A Jollof (GH₵35) carried by a Partner costs GH₵35.00 + GH₵2.43 + GH₵5.00 =
+**GH₵42.43**. Collected, it costs **GH₵37.43** — the GH₵5 is added when, and
+only when, the customer asks for a Partner.
 
 1. **Customer** `/order` → Test Kitchen One → add items → **Checkout**. Choose
    **Campus Dash Partner** and a room (Room 101/102/204/205). The total moves to
-   GH₵41.75 as you choose; collecting instead reads GH₵36.75. Press **Pay**.
+   GH₵42.43 as you choose; collecting instead reads GH₵37.43. Press **Pay**.
 2. **Payment** opens, and the fake provider settles itself after ~2 seconds.
    Stay on the order page — the page poll is what delivers its callback.
 3. **Vendor** `/vendor` → the order appears **already paid**, in **To prepare**,
@@ -256,8 +256,28 @@ when, the customer asks for a delivery.
 - **Partner delivery switched off** — Admin `/admin/pilot` → untick **Partner
   delivery is available**. New checkouts offer collection only; an order already
   paid for is untouched and still completes.
-- **Disposable pack fee** — Admin `/admin/pilot` → set it, then place a scan
-  errand at `/scan`. It appears as its own line; a food order never shows one.
+- **Scan pricing** — a meal scan is priced by its OWN rules, and the 6.95% food
+  percentage is never part of it. Every scan order pays a flat **GH₵2.00**
+  service fee whatever the meal is worth. Place three at `/scan` and watch the
+  total:
+
+  | What you choose                | Fees                        | Total    |
+  | ------------------------------ | --------------------------- | -------- |
+  | Collect it yourself, no pack   | GH₵2.00                     | GH₵2.00  |
+  | Collect it yourself, with pack | GH₵2.00 + GH₵4.00           | GH₵6.00  |
+  | Campus Dash Partner            | GH₵2.00 + GH₵4.00 + GH₵5.00 | GH₵11.00 |
+
+  The food itself is GH₵0.00 on all three — the scan pays the store for that.
+
+- **Pack fee** — GH₵4.00, and whether it is a choice depends on how the order
+  is being collected. On **collect it yourself** there is a checkbox, off by
+  default: leave it off if you are bringing your own container and the pack line
+  does not appear. With a **Campus Dash Partner** it is compulsory and there is
+  no "no pack" option to find — a Partner needs something to carry. Tick the box
+  on a collection, then switch to a Partner and back, and watch the control
+  change. When it is charged it is always its own line on the checkout and on
+  the order. A food order never shows one, and a CHECK constraint is what says
+  so.
 - **Stuck payment** — restart `npm run dev` while a payment is pending. The
   fake provider's in-memory record is lost, so it hangs; after the payment
   timeout the customer can abandon it and retry, and a sweep runs every 15 min.

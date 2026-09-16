@@ -10,10 +10,27 @@ import { Container, ImagePlaceholder, Callout, BackLink } from '../../ui';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * A STORE PAGE IS PUBLIC AND WORTH FINDING. Somebody searching for a restaurant
+ * by name should land on its menu, so this is the one dynamic route in the
+ * sitemap and the one that earns a real description.
+ */
 export async function generateMetadata({ params }) {
   const { vendorId } = await params;
   const result = await getVendorWithMenu(vendorId).catch(() => null);
-  return { title: result ? `${result.vendor.name} · Campus Dash` : 'Vendor · Campus Dash' };
+  if (!result) return { title: 'Store' };
+
+  const { vendor } = result;
+  const description =
+    vendor.description?.trim() ||
+    `Order from ${vendor.name} around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.`;
+
+  return {
+    title: vendor.name,
+    description,
+    alternates: { canonical: `/order/${vendorId}` },
+    openGraph: { title: vendor.name, description, url: `/order/${vendorId}` },
+  };
 }
 
 /**
@@ -37,7 +54,13 @@ export default async function VendorMenuPage({ params }) {
     getPlatformConfig(),
   ]);
 
-  const { vendor, menu } = result;
+  const { vendor } = result;
+  // The dish photographs, resolved here: a client component has no business
+  // reading configuration, and a server component cannot hand it a function.
+  const menu = result.menu.map((item) => ({
+    ...item,
+    image_url: vendorImageUrl(item.image_path),
+  }));
   const available = menu.filter((item) => item.is_available).length;
   const images = (vendor.images ?? []).map((image) => ({
     ...image,

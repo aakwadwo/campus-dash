@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { safeNext } from '@/lib/auth/landing';
 import AdminLoginForm from './admin-login-form';
 
-export const metadata = { title: 'Administrator sign-in · Campus Dash' };
+export const metadata = { title: 'Administrator sign-in' };
 
 /** Why requireAdmin() sent somebody back here, in words. */
 const SESSION_NOTICES = {

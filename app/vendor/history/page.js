@@ -7,7 +7,7 @@ import { formatPesewas } from '@/lib/util/money';
 import { PageHeader, Card, EmptyState, Unavailable, ChevronRightIcon, ClockIcon } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Order history · Campus Dash' };
+export const metadata = { title: 'Order history' };
 
 const DAYS = 30;
 

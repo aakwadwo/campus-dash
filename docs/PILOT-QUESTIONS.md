@@ -13,9 +13,12 @@ Last reviewed: 2026-09-06
 ## Pricing
 
 **1. What service fee will students accept?**
-Currently 5% of the food subtotal (`service_fee_bps = 500`), reduced from 10%
-before the pilot. Still a guess — and being a percentage, it is the number that
-decides whether a GH₵80 group order is worth placing.
+Currently 6.95% of the food subtotal (`service_fee_bps = 695`), settled after
+trying 10% and 5% before the pilot. Still a guess — and being a percentage, it
+is the number that decides whether a GH₵80 group order is worth placing.
+It applies to FOOD orders only: a meal scan pays a flat GH₵2.00 and never a
+percentage, because there is no Campus Dash subtotal to take one of. See
+`docs/SCAN.md`.
 
 **2. What delivery fee will Partners accept for a campus walk?**
 Currently GH₵5.00, all of it to the Partner

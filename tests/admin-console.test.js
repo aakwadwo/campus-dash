@@ -19,6 +19,7 @@ import {
   partnerAccept,
   completeDelivery,
   orderReadyForDispatch,
+  submitScanOrder,
   expectRejection,
 } from './helpers/flow.js';
 
@@ -36,10 +37,15 @@ import {
  *      admin read model, only whether a document exists.
  */
 describe('the admin console', () => {
-  const SCAN_FEE = 200; // GH₵2.00 flat
   const DELIVERY_FEE = 500; // GH₵5.00
   const JOLLOF = 3500; // GH₵35.00
   const FOOD_FEE = 175; // 5% of the food
+  const WAFFLE = 3800; // GH₵38.00, the scan-eligible item these tests order
+  // EVERY SCAN ORDER PAYS THE SAME FLAT FEE, on either fulfilment and whatever
+  // the meal was worth — see price_scan_order(). The pack fee is zeroed in this
+  // file's configuration so the ledger arithmetic below stays about the service
+  // fee; the pack has its own tests in scan-delivery.test.js.
+  const SCAN_FEE = 200; // GH₵2.00
 
   before(resetTransactionalState);
   beforeEach(async () => {
@@ -48,7 +54,8 @@ describe('the admin console', () => {
       c.query(`
         update public.pricing_config
            set service_fee_bps = 500, delivery_fee_pesewas = 500,
-               scan_service_fee_pesewas = 200, partner_share_of_delivery_bps = 10000,
+               scan_service_fee_pesewas = 200, scan_pack_fee_pesewas = 0,
+               partner_share_of_delivery_bps = 10000,
                partner_search_seconds = 600
          where id
       `)
@@ -89,22 +96,7 @@ describe('the admin console', () => {
   }
 
   async function scanOrder({ customer = ACTORS.customerAma, vendorId = VENDORS.wafflemania } = {}) {
-    const row = await asUser(
-      customer,
-      async (c) =>
-        (
-          await c.query('select * from public.submit_scan_order($1, $2, $3, $4, $5, $6, $7)', [
-            vendorId,
-            LOCATIONS.room204,
-            `${customer}/scans/scan-1.jpg`,
-            'image/jpeg',
-            120000,
-            'Jollof with chicken from the hot counter.',
-            null,
-          ])
-        ).rows[0],
-      { commit: true }
-    );
+    const row = await submitScanOrder({ customer, vendorId });
     return row.order_id;
   }
 
@@ -504,7 +496,10 @@ describe('the admin console', () => {
 
       const waffle = rows.find((v) => v.vendor_id === VENDORS.wafflemania);
       assert.equal(waffle.can_accept_scans, true);
-      assert.equal(waffle.owner_user_id, null, 'a catalogue entry has no owner');
+      assert.ok(
+        waffle.owner_user_id,
+        'a store that honours meal scans is operated — it has a board to check them from'
+      );
 
       const kitchen = rows.find((v) => v.vendor_id === VENDORS.one);
       assert.equal(kitchen.can_accept_scans, false);
@@ -870,10 +865,12 @@ describe('the admin console', () => {
       const orderId = await scanOrder();
       await payScan(orderId);
       await partnerAccept(orderId);
+      // THE STORE REFUSES IT, not the Partner. The restaurant is the only
+      // party that can judge whether an entitlement is honoured.
       await asUser(
-        ACTORS.partnerYaw,
+        ACTORS.wafflemaniaStaff,
         (c) =>
-          c.query('select * from public.partner_report_scan_refused($1, $2)', [
+          c.query('select * from public.vendor_refuse_scan($1, $2)', [
             orderId,
             'the counter said it was already used',
           ]),
@@ -895,8 +892,8 @@ describe('the admin console', () => {
       await payScan(orderId);
       await partnerAccept(orderId);
       await asUser(
-        ACTORS.partnerYaw,
-        (c) => c.query('select * from public.partner_report_scan_refused($1, $2)', [orderId, 'no']),
+        ACTORS.wafflemaniaStaff,
+        (c) => c.query('select * from public.vendor_refuse_scan($1, $2)', [orderId, 'no']),
         { commit: true }
       );
 
@@ -1647,9 +1644,8 @@ describe('the admin console', () => {
     test('the pages that had no fetch handling now render Unavailable instead of throwing', async () => {
       for (const page of [
         'app/admin/settlements/page.js',
-        'app/admin/audit/page.js',
         'app/admin/locations/page.js',
-        'app/admin/money/page.js',
+        'app/admin/customers/page.js',
         'app/admin/vendors/[id]/page.js',
       ]) {
         const source = await read(page);

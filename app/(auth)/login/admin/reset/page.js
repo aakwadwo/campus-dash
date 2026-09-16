@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import ResetPasswordForm from './reset-form';
 
-export const metadata = { title: 'Choose a new password · Campus Dash' };
+export const metadata = { title: 'Choose a new password' };
 
 /**
  * Step two: the form itself.

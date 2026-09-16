@@ -1,86 +1,98 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { listScanRestaurants, quoteScanOrder } from '@/lib/scan';
-import { listDeliverableLocations } from '@/lib/customer';
-import ScanForm from './scan-form';
+import { listScanRestaurants } from '@/lib/scan';
+import { vendorImageUrl } from '@/lib/verification/documents';
 import SiteHeader from '@/app/site-header';
-import { Container } from '@/app/ui';
+import SiteFooter from '@/app/site-footer';
+import { Container, Callout, BackLink, VendorCard } from '@/app/ui';
 
-export const metadata = { title: 'Scan delivery · Campus Dash' };
+export const metadata = {
+  title: 'Use a meal scan',
+  description:
+    'Order with your campus meal scan from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.',
+  robots: { index: false, follow: false },
+};
 export const dynamic = 'force-dynamic';
 
 /**
- * Scan delivery.
- *
- * "I already have prepaid food. I want someone to go and get it."
+ * Stores that take a meal scan.
  *
  * WHY THIS PAGE IS GATED WHEN /order IS NOT. Browsing a menu costs nobody
- * anything, so the marketplace is open. This page's first act is to take a
+ * anything, so the marketplace is open. This route's whole purpose is to take a
  * private document off somebody's phone, and there is no version of that which
- * makes sense for a visitor with no account. So the gate is here, at the upload,
- * rather than at the price — which is also why the restaurant list below is
- * public and this screen is not.
+ * makes sense for a visitor with no account. The gate is here rather than at
+ * the price, which is also why scan_restaurants() itself stays public.
+ *
+ * A store appears only when it has something eligible on its menu. A store with
+ * the switch on and nothing marked is a dead end, and listing it sends somebody
+ * to an empty menu to find that out.
  */
 export default async function ScanPage() {
   const me = await getCapabilities();
 
   if (!me.authenticated) redirect('/login?next=%2Fscan');
-  // Same rule as ordering: a verified phone is an identity, ordering is a
+  // Same rule as ordering: a verified address is an identity, ordering is a
   // capability, and it is acquired by completing student onboarding.
   if (!me.can_order) redirect('/signup?next=%2Fscan');
 
-  const [restaurants, locations] = await Promise.all([
-    listScanRestaurants(),
-    listDeliverableLocations(),
-  ]);
-
-  const open = restaurants.filter((r) => r.is_accepting_orders);
-
-  // PRICED HERE, NOT AFTER THE PAGE LOADS.
-  //
-  // The form used to mount with no quote and fire a server action for one, so
-  // the first thing anybody saw on this screen was a disabled button and a
-  // "working out the price" line — a whole extra round trip, on a phone, before
-  // the page was usable. The default selection is known right here, where two
-  // queries are already in flight, so the price ships WITH the page and the
-  // form is live on first paint. A re-quote still happens, but only when
-  // somebody actually changes the restaurant or the destination.
-  const first = open[0] ?? null;
-  const firstLocation = (locations ?? [])[0] ?? null;
-  const initialQuote =
-    first && firstLocation
-      ? await quoteScanOrder({
-          vendorId: first.id,
-          destinationLocationId: firstLocation.location_id,
-        }).catch(() => null)
-      : null;
+  const restaurants = await listScanRestaurants().catch(() => []);
+  const stores = restaurants.map((store) => ({
+    ...store,
+    image_url: vendorImageUrl(store.image_path),
+  }));
+  const open = stores.filter((store) => store.is_accepting_orders);
 
   return (
-    <div className="min-h-dvh">
-      <SiteHeader active="browse" />
-      <main className="pb-24 sm:pb-16">
-        <Container size="narrow" className="pt-8 sm:pt-12">
-          <h1 className="text-display text-3xl font-semibold sm:text-4xl">Scan delivery</h1>
-          <p className="text-muted mt-2 text-sm leading-relaxed">
-            Already have a meal scan? Send a Partner to redeem it and bring the food to you. You
-            have paid for the food already, so Campus Dash charges only for the errand.
+    <div className="flex min-h-dvh flex-col">
+      <SiteHeader />
+
+      <main className="flex-1 pb-24 sm:pb-16">
+        <Container size="wide" className="pt-6 sm:pt-10">
+          <BackLink href="/order" className="mb-4 sm:mb-5">
+            All stores
+          </BackLink>
+
+          <h1 className="text-display text-2xl font-semibold sm:text-4xl">Use a meal scan</h1>
+          <p className="text-muted mt-2 max-w-prose leading-relaxed">
+            Your scan pays the store for the food. Campus Dash charges only for putting the order
+            through and, if you want it, for a Partner to bring it to you.
           </p>
 
-          {restaurants.length === 0 ? (
-            <p className="text-muted rounded-card bg-surface ring-line mt-8 p-4 text-sm ring-1">
-              No restaurants are set up for scan delivery yet. Check back soon.
-            </p>
+          {stores.length === 0 ? (
+            <Callout className="mt-8">
+              No stores are set up for meal scans yet. Check back shortly.
+            </Callout>
           ) : open.length === 0 ? (
-            <p className="rounded-card bg-warn-bg text-warn mt-8 p-4 text-sm">
-              Every scan restaurant is closed right now, so a Partner cannot redeem anything. Try
-              again when one reopens.
-            </p>
+            <Callout tone="warn" className="mt-8">
+              Every store that takes meal scans is closed right now. Try again when one reopens.
+            </Callout>
           ) : (
-            <ScanForm restaurants={open} locations={locations ?? []} initialQuote={initialQuote} />
+            <ul className="mt-7 grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-4">
+              {stores.map((store) => (
+                <li key={store.id}>
+                  {/* The same card the marketplace uses. A closed store still
+                      appears, desaturated and unlinked, because knowing a place
+                      exists but is shut is useful and a store that vanishes at
+                      9pm reads as one that has left. */}
+                  <VendorCard
+                    vendor={{ name: store.name, is_accepting_orders: store.is_accepting_orders }}
+                    href={`/scan/${store.id}`}
+                    imageUrl={store.image_url}
+                    meta={
+                      <span>
+                        {store.eligible_item_count}{' '}
+                        {store.eligible_item_count === 1 ? 'item' : 'items'} on scan
+                      </span>
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
           )}
         </Container>
       </main>
+
+      <SiteFooter />
     </div>
   );
 }

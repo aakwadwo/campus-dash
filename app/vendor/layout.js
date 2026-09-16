@@ -5,7 +5,16 @@ import { UserIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
 import { VendorTabs, VendorBottomBar } from './vendor-nav';
 
-export const metadata = { title: 'Vendor · Campus Dash' };
+/**
+ * NEVER INDEXED. Everything under this route needs a session, so a crawler
+ * would only ever reach a sign-in bounce — but the URLs themselves say things
+ * (which store an order belongs to), and robots.txt is a request rather than a rule. This is the layer a
+ * crawler that already has the URL actually honours.
+ */
+export const metadata = {
+  title: 'Vendor',
+  robots: { index: false, follow: false },
+};
 
 /**
  * Guards the SESSION here, and membership one level down.

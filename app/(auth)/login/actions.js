@@ -138,6 +138,26 @@ export async function verifyEmailCode(_prevState, formData) {
 
 // --- Vendor: a code to the store's phone -------------------------------------
 
+/**
+ * Vendor sign-in: a code to the number that IS the store's credential.
+ *
+ * THIS DOOR IS FOR ACCOUNTS THAT EXIST. It used to send an SMS to whatever
+ * number was typed into it, which did three bad things at once: it spent
+ * Arkesel credit on strangers, it made Supabase provision an auth identity for
+ * somebody with no store, and it told whoever typed a number that Campus Dash
+ * was expecting them. None of that is sign-in; the first two are side effects
+ * of GoTrue's `signInWithOtp` creating a user when it does not find one.
+ *
+ * REGISTRATION IS A DIFFERENT DOOR and is untouched. /vendor/signup verifies a
+ * number in order to CREATE a store, which is precisely when a code should go
+ * to a number with nothing behind it.
+ *
+ * The refusal names the problem rather than hiding it. Enumeration is not worth
+ * guarding here: the customer sign-in screen already says "no account uses that
+ * address", the alternative is a store owner waiting for an SMS that is never
+ * coming, and anybody probing learns only whether a number they already typed
+ * runs a shop on one campus.
+ */
 export async function requestOtp(_prevState, formData) {
   const phone = normaliseGhanaPhone(formData.get('phone'));
   if (!phone) {
@@ -149,6 +169,30 @@ export async function requestOtp(_prevState, formData) {
 
   const supabase = await createClient();
   trace('client.ready');
+
+  // ASKED BEFORE A CODE IS SENT. phone_can_sign_in_as_vendor() returns a bare
+  // boolean about a number the caller already has, and nothing else — no name,
+  // no store, no account id.
+  //
+  // A LOOKUP THAT FAILS DOES NOT BLOCK SIGN-IN. If the database cannot be
+  // reached, a real vendor must still be able to get in and deal with whatever
+  // is broken; the cost of failing open is an SMS to a number that has no
+  // store, which is the situation that existed before this check.
+  const { data: isVendor, error: lookupError } = await supabase.rpc('phone_can_sign_in_as_vendor', {
+    p_phone: phone,
+  });
+
+  if (lookupError) {
+    console.error('[auth] vendor lookup failed, allowing the code:', lookupError.message);
+  } else if (!isVendor) {
+    trace('requestOtp.refused', { reason: 'not a vendor' });
+    return {
+      step: 'phone',
+      phone,
+      error: 'No Campus Dash store uses that number. Register your store first.',
+      registerHref: '/vendor/signup',
+    };
+  }
 
   const { error } = await supabase.auth.signInWithOtp({ phone });
   trace('signInWithOtp.done', { ok: !error, status: error?.status ?? 200, code: error?.code });

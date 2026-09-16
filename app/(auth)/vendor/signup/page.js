@@ -6,7 +6,7 @@ import { listCategories, getMyApplication } from '@/lib/vendor';
 import { Card, TextLink, ArrowLeftIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
 
-export const metadata = { title: 'Register your store · Campus Dash' };
+export const metadata = { title: 'Register your store' };
 
 /**
  * Vendor registration.

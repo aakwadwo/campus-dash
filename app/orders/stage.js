@@ -45,6 +45,17 @@ export const STAGE = {
     badge: 'brand',
     detail: 'Your order is being made.',
   },
+  // PAID, BEING MADE, AND A PARTNER IS ALREADY BEING LOOKED FOR. Dispatch opens
+  // at payment rather than at ready, so this is most of the wait on a Partner
+  // order and it used to read simply "Being prepared" — which was true and told
+  // somebody nothing about the half of the process they were actually waiting
+  // on. The countdown belongs here as much as it does after the food is made.
+  PREPARING_SEARCHING: {
+    label: 'Being prepared',
+    tone: 'text-brand-700',
+    badge: 'brand',
+    detail: 'Your order is being made, and we are finding a Partner to bring it.',
+  },
   // Paid, cooking, and somebody has already agreed to bring it. Worth its own
   // wording: "a Partner has it" is the reassurance a customer is waiting for,
   // and it arrives long before the food is ready.
@@ -63,11 +74,15 @@ export const STAGE = {
 
   // Delivery, described as STEPS. There is no GPS, so the customer is never
   // told where the Partner is — only what has happened so far.
+  // THE FOOD IS MADE. Leading with that matters: this stage used to say
+  // "Finding a Partner" alone, and somebody reading it had no idea whether
+  // their lunch was still on a hotplate or sitting on a counter going cold.
+  // What is outstanding is the Partner, and the label now says both.
   SEARCHING_PARTNER: {
-    label: 'Finding a Partner',
+    label: 'Your order is ready',
     tone: 'text-brand-700',
     badge: 'brand',
-    detail: 'Your order is made and waiting. We are looking for someone to bring it.',
+    detail: 'It is made and waiting at the store. We are finding a Partner to bring it.',
   },
   PARTNER_ASSIGNED: {
     label: 'Your Partner is collecting it',
@@ -79,7 +94,7 @@ export const STAGE = {
     label: 'On the way to you',
     tone: 'text-brand-700',
     badge: 'brand',
-    detail: 'Have your delivery code ready. The Partner will ask for it.',
+    detail: 'Have your code ready. Your Partner will ask for it on arrival.',
   },
   NO_PARTNER: {
     label: 'No Partner available',
@@ -143,6 +158,7 @@ export const LIVE_STAGES = new Set([
   'PAYMENT_PROCESSING',
   'PAID_AWAITING_KITCHEN',
   'PREPARING',
+  'PREPARING_SEARCHING',
   'PREPARING_PARTNER_ASSIGNED',
   'READY',
   'SEARCHING_PARTNER',

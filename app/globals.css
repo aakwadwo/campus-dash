@@ -245,6 +245,39 @@ h3 {
   }
 }
 
+/* THE ONLY LOOPING ANIMATION IN THE PRODUCT, and it is load-bearing: it is the
+   difference between "we are looking for somebody" and "this page has frozen",
+   on the one screen where a customer is waiting on other people and has nothing
+   else to read. Three dots, staggered, on a slow cycle — slow enough not to
+   nag at the edge of vision while somebody stares at it for ten minutes.
+
+   Nothing else in Campus Dash pulses. A permanent animation is a claim that
+   something is happening, so it may only appear where something is. */
+@keyframes cd-search-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A stage on the tracking screen has changed. Short and once — the point is to
+   catch the eye of somebody who was already looking, not to announce. */
+@keyframes cd-stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .animate-fade-up {
   animation: cd-fade-up 0.24s var(--ease-out-soft) both;
 }
@@ -253,6 +286,12 @@ h3 {
 }
 .animate-sheet {
   animation: cd-sheet-up 0.22s var(--ease-out-soft) both;
+}
+.animate-search-dot {
+  animation: cd-search-dot 1.4s ease-in-out infinite;
+}
+.animate-stage-in {
+  animation: cd-stage-in 0.26s var(--ease-out-soft) both;
 }
 
 /* The skeleton: a moving highlight over a neutral block. */

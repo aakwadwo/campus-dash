@@ -7,6 +7,16 @@ import { Container } from '../ui';
 import AccountNav from './account-nav';
 
 /**
+ * NEVER INDEXED. Everything under /account is one person's own record, reachable
+ * only with their session. robots.txt asks a crawler not to come; this is the
+ * layer a crawler that already has the URL actually honours.
+ */
+export const metadata = {
+  title: 'Your account',
+  robots: { index: false, follow: false },
+};
+
+/**
  * The account area.
  *
  * A VENDOR-ONLY ACCOUNT NEVER SEES THIS. Somebody who runs a store off campus
@@ -26,10 +36,10 @@ export default async function AccountLayout({ children }) {
   if (vendorHome) redirect(vendorHome);
 
   return (
-    <div className="min-h-dvh">
+    <div className="flex min-h-dvh flex-col">
       <SiteHeader active="account" />
 
-      <main className="pb-24 sm:pb-0">
+      <main className="flex-1 pb-24 sm:pb-0">
         <Container className="pt-6 sm:pt-10">
           <div className="grid gap-6 lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-10">
             <AccountNav items={navFor(me)} />

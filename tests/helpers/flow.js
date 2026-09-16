@@ -1,4 +1,4 @@
-import { asService, asUser, ACTORS, VENDORS, MENU, LOCATIONS } from './db.js';
+import { asService, asUser, ACTORS, VENDORS, MENU, SCAN_MENU, LOCATIONS } from './db.js';
 
 /**
  * Helpers that walk an order through the happy path, so each test can start
@@ -50,6 +50,67 @@ export async function submitOrder({
  * Returns the transition envelope so a test can assert on a refusal rather than
  * only on a success.
  */
+/**
+ * Submits a MEAL SCAN order.
+ *
+ * The same shape as submitOrder() because a scan order IS a store order: real
+ * items, a fulfilment choice, a queue number. The scan is the extra argument,
+ * and the optional note is genuinely optional.
+ *
+ * Here rather than copied into five files, because the signature has changed
+ * once already and every copy of it had to be found by running the suite.
+ */
+export async function submitScanOrder({
+  customer = ACTORS.customerAma,
+  vendorId = VENDORS.wafflemania,
+  items = null,
+  fulfilment = 'DELIVERY',
+  destination = LOCATIONS.room204,
+  path = null,
+  details = null,
+  note = null,
+  wantsPack = false,
+} = {}) {
+  const chosen =
+    items ??
+    (vendorId === VENDORS.yellowBar
+      ? [{ menu_item_id: SCAN_MENU.tilapia, quantity: 1 }]
+      : [{ menu_item_id: SCAN_MENU.waffle, quantity: 1 }]);
+
+  return asUser(
+    customer,
+    async (c) =>
+      (
+        await c.query(
+          `select * from public.submit_scan_order(
+             $1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            vendorId,
+            JSON.stringify(chosen),
+            fulfilment,
+            path ?? `${customer}/scans/scan-1.jpg`,
+            'image/jpeg',
+            120000,
+            fulfilment === 'DELIVERY' ? destination : null,
+            details,
+            note,
+            wantsPack,
+          ]
+        )
+      ).rows[0],
+    { commit: true }
+  );
+}
+
+/** The store checks a meal scan. Redemption is the store's act, not a Partner's. */
+export async function vendorRedeemScan(orderId, staff = ACTORS.wafflemaniaStaff) {
+  return asUser(
+    staff,
+    async (c) => (await c.query('select * from public.vendor_redeem_scan($1)', [orderId])).rows[0],
+    { commit: true }
+  );
+}
+
 export async function chooseFulfilment(
   orderId,
   {

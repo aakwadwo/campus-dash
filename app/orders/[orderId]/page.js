@@ -6,6 +6,7 @@ import { orderLabel } from '@/lib/orders/state';
 import SiteHeader from '../../site-header';
 import { STAGE } from '../stage';
 import OrderStatus from './order-status';
+import PartnerSearch from './partner-search';
 import RatePartner from './rate-partner';
 import {
   Container,
@@ -94,6 +95,7 @@ function stepsFor(order) {
     PAYMENT_PROCESSING: 'placed',
     PAID_AWAITING_KITCHEN: 'paid',
     PREPARING: 'preparing',
+    PREPARING_SEARCHING: 'preparing',
     PREPARING_PARTNER_ASSIGNED: 'assigned',
     READY: 'ready',
     SEARCHING_PARTNER: 'ready',
@@ -145,6 +147,7 @@ export default async function CustomerOrderPage({ params }) {
 
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
   const live = !['COMPLETED', 'REJECTED', 'EXPIRED', 'CANCELLED'].includes(order.stage);
+  const searching = ['PREPARING_SEARCHING', 'SEARCHING_PARTNER'].includes(order.stage);
 
   return (
     <div className="min-h-dvh">
@@ -179,12 +182,20 @@ export default async function CustomerOrderPage({ params }) {
           ) : (
             <header className="text-center">
               <p className="text-muted text-sm">{order.vendor_name}</p>
-              <h1 className={`text-display mt-2 text-3xl font-semibold sm:text-4xl ${stage.tone}`}>
-                {stage.label}
-              </h1>
-              {stage.detail ? (
-                <p className="text-muted mx-auto mt-3 max-w-sm leading-relaxed">{stage.detail}</p>
-              ) : null}
+              {/* KEYED ON THE STAGE, so React replaces the node when the order
+                  moves and the animation runs once, on a change. Without the
+                  key it would re-run on every poll — a heading that twitches
+                  every six seconds while nothing is happening. */}
+              <div key={order.stage} className="animate-stage-in">
+                <h1
+                  className={`text-display mt-2 text-3xl font-semibold sm:text-4xl ${stage.tone}`}
+                >
+                  {stage.label}
+                </h1>
+                {stage.detail ? (
+                  <p className="text-muted mx-auto mt-3 max-w-sm leading-relaxed">{stage.detail}</p>
+                ) : null}
+              </div>
               {order.cancellation_reason ? (
                 <p className="mt-3 text-sm">Reason: {order.cancellation_reason}</p>
               ) : null}
@@ -194,6 +205,22 @@ export default async function CustomerOrderPage({ params }) {
               </p>
             </header>
           )}
+
+          {/* THE SEARCH, WITH THE REAL DEADLINE UNDER IT.
+              Shown for both stages where a Partner is being looked for — while
+              the food is still being made, and after it is ready — because the
+              search runs across both and a customer waiting on it should not
+              have to wait for the kitchen before being told it is happening.
+              The countdown is anchored on the server's clock; see
+              PartnerSearch. */}
+          {searching ? (
+            <div className="mt-7">
+              <PartnerSearch
+                secondsRemaining={order.seconds_until_partner_search_expires}
+                serverNow={order.server_now}
+              />
+            </div>
+          ) : null}
 
           {/* Whatever the customer can DO right now — pay, give a code, decide
               what happens when nobody took the delivery. */}
@@ -243,11 +270,11 @@ export default async function CustomerOrderPage({ params }) {
             <dl className="border-line mt-4 border-t pt-4">
               <Line label="Food" value={order.subtotal_pesewas} />
               <Line label="Service fee" value={order.service_fee_pesewas} />
-              {order.delivery_fee_pesewas > 0 ? (
-                <Line label="Partner delivery" value={order.delivery_fee_pesewas} />
-              ) : null}
               {order.pack_fee_pesewas > 0 ? (
-                <Line label="Disposable pack" value={order.pack_fee_pesewas} />
+                <Line label="Pack fee" value={order.pack_fee_pesewas} />
+              ) : null}
+              {order.delivery_fee_pesewas > 0 ? (
+                <Line label="Campus Dash Partner" value={order.delivery_fee_pesewas} />
               ) : null}
               <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
                 <dt className="font-semibold">Total</dt>
@@ -267,7 +294,7 @@ export default async function CustomerOrderPage({ params }) {
                 label="How you get it"
                 value={
                   <Badge tone="neutral">
-                    {order.fulfilment_type === 'PICKUP' ? 'You collect' : 'Partner delivery'}
+                    {order.fulfilment_type === 'PICKUP' ? 'You collect' : 'Campus Dash Partner'}
                   </Badge>
                 }
               />
@@ -279,10 +306,9 @@ export default async function CustomerOrderPage({ params }) {
               ) : null}
             </Facts>
 
-            {order.fulfilment_type === 'DELIVERY' && order.delivery_status === 'SEARCHING' ? (
+            {searching ? (
               <Callout className="mt-4">
-                We are finding a Partner to bring this to you. You will see their name here as soon
-                as somebody takes it.
+                You will see your Partner&apos;s name here as soon as somebody takes it.
               </Callout>
             ) : null}
           </Card>

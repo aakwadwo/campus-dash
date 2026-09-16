@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { withRequestCookies } from './helpers/stubs/next-headers.mjs';
 import {
   otpSession,
+  seededVendorSession,
   sessionCookies,
   temporaryCustomer,
   temporaryVendor,
@@ -123,7 +124,7 @@ describe('a payment webhook still confirms first and notifies once', () => {
     resetPaymentWebhookThrottle();
   });
 
-  test('PAID, then the store and the customer are told, and a replay tells nobody again', async () => {
+  test('PAID, then the store is told, and a replay tells nobody again', async () => {
     const order = await submitOrder({ fulfilment: 'PICKUP', destination: null });
     const payment = await asService(async (c) => {
       const { rows } = await c.query("select * from public.create_payment_intent($1, 'fake', $2)", [
@@ -168,11 +169,14 @@ describe('a payment webhook still confirms first and notifies once', () => {
     const afterFirst = await state();
     assert.equal(afterFirst.payment_status, 'PAID');
     assert.equal(afterFirst.order_status, 'PREPARING');
-    assert.deepEqual(afterFirst.audiences, ['CUSTOMER', 'VENDOR']);
+    // THE STORE ONLY. The customer is looking at the screen that just confirmed
+    // the payment as this would arrive, so they are no longer texted about it —
+    // a phone on a counter, with nobody watching it, is a different case.
+    assert.deepEqual(afterFirst.audiences, ['VENDOR']);
 
     const replay = await deliver();
     assert.equal(replay.status, 200, 'a redelivery is acknowledged');
-    assert.deepEqual((await state()).audiences, ['CUSTOMER', 'VENDOR'], 'and sends nothing twice');
+    assert.deepEqual((await state()).audiences, ['VENDOR'], 'and sends nothing twice');
   });
 });
 
@@ -180,6 +184,7 @@ describe('a payment webhook still confirms first and notifies once', () => {
 // 2. The vendor order-status read
 // ============================================================================
 describe('the vendor order status endpoint', () => {
+  let vendor;
   let vendorCookies;
   let otherVendor;
   let otherVendorCookies;
@@ -187,13 +192,14 @@ describe('the vendor order status endpoint', () => {
   let customerCookies;
 
   before(async () => {
-    const vendorEmail = await asService(async (c) => {
-      const { rows } = await c.query('select email from auth.users where id = $1', [
-        ACTORS.vendor1Staff,
-      ]);
-      return rows[0].email;
-    });
-    vendorCookies = sessionCookies(await otpSession(vendorEmail));
+    // The store whose board these orders land on is the seeded one, so the
+    // session has to belong to ITS owner and not to a throwaway. That identity
+    // signs in by phone, which no test can receive — seededVendorSession()
+    // lends it an address and after() gives it back. It used to read an email
+    // that only another FILE had attached, so this suite passed in the full run
+    // and failed when run alone.
+    vendor = await seededVendorSession(ACTORS.vendor1Staff);
+    vendorCookies = vendor.cookies;
     otherVendor = await temporaryVendor();
     otherVendorCookies = sessionCookies(await otpSession(otherVendor.email));
     customer = await temporaryCustomer();
@@ -204,6 +210,7 @@ describe('the vendor order status endpoint', () => {
   after(async () => {
     await otherVendor?.remove();
     await customer?.remove();
+    await vendor?.restore();
   });
 
   const ask = (cookies, orderId) =>
@@ -225,7 +232,7 @@ describe('the vendor order status endpoint', () => {
     return order.order_id;
   }
 
-  test('the store reads four state fields, and no money at all', async () => {
+  test('the store reads five state fields, and no money at all', async () => {
     const orderId = await orderAtTheCounter();
     const { status, body, response } = await ask(vendorCookies, orderId);
 
@@ -235,6 +242,9 @@ describe('the vendor order status endpoint', () => {
       'handoff_code_available',
       'order_status',
       'payment_status',
+      // The store's OWN completion, which is not the order's: handing a bag to
+      // a Partner ends the store's part while order_status stays READY.
+      'vendor_completed_at',
     ]);
     assert.equal(body.order_status, 'READY');
     assert.equal(body.handoff_code_available, true);

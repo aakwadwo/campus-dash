@@ -160,7 +160,7 @@ export async function chooseFulfilmentAction(_prev, formData) {
         message:
           fulfilmentType === 'PICKUP'
             ? 'You will collect this order yourself.'
-            : 'A Partner will bring it. The delivery fee has been added.',
+            : 'A Campus Dash Partner will bring it. The GH₵5 fee has been added.',
       }
     : { ok: false, message: result.reason ?? 'That is no longer possible.' };
 }

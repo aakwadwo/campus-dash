@@ -1,7 +1,19 @@
 import Link from 'next/link';
-import { listPartnerApplications, partners as listPartners } from '@/lib/admin';
+import { listPartnerApplications, partnerActivity } from '@/lib/admin';
 import { getPartnerDocumentUrl } from '@/lib/admin/documents';
-import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
+import {
+  Panel,
+  Badge,
+  Empty,
+  Unavailable,
+  Table,
+  Row,
+  Cell,
+  Cedis,
+  Stat,
+  StatGrid,
+  when,
+} from '../ui';
 import PartnerReviewForm from './partner-review-form';
 
 export const dynamic = 'force-dynamic';
@@ -17,8 +29,16 @@ const TONE = {
 export default async function PartnersPage() {
   const [applications, roster] = await Promise.all([
     listPartnerApplications(),
-    listPartners().catch(() => null),
+    // MEASURED, not inferred. Online time is summed from partner_sessions rows
+    // clipped to the window — a session that began last night counts only
+    // today's share of itself against today. Deriving it from page visits would
+    // measure whether somebody looked at their phone.
+    partnerActivity().catch(() => null),
   ]);
+
+  const online = (roster ?? []).filter((p) => p.is_online).length;
+  const onDelivery = (roster ?? []).filter((p) => Number(p.active_deliveries) > 0).length;
+  const owed = (roster ?? []).reduce((sum, p) => sum + Number(p.owed_pesewas ?? 0), 0);
 
   // Signed URLs are minted per render and live for two minutes. The bucket is
   // private with no policies, so this is the only way an image is ever exposed.
@@ -42,10 +62,23 @@ export default async function PartnersPage() {
         this screen. Images live in a private bucket and are shown through short-lived signed URLs.
       </p>
 
-      {/* THE ROSTER, above the queue. The queue answers "who is waiting for me";
-          this answers "who is actually out there delivering", which is the
-          question an operator has on every day that is not a review day. */}
-      <Panel title="All Partners" description={roster ? `${roster.length} accounts` : undefined}>
+      {/* SUPPLY, RIGHT NOW. The question an operator has on every day that is
+          not a review day: is there anybody out there. */}
+      {roster ? (
+        <StatGrid>
+          <Stat label="Online now" value={online} hint={`${roster.length} approved`} />
+          <Stat label="On a delivery" value={onDelivery} />
+          <Stat label="Owed to Partners" value={<Cedis pesewas={owed} />} hint="Unsettled" />
+        </StatGrid>
+      ) : null}
+
+      {/* THE ROSTER, above the queue. The queue answers "who is waiting for
+          me"; this answers "who is actually out there", which is the operational
+          question. */}
+      <Panel
+        title="Partner activity"
+        description={roster ? `${roster.length} accounts` : undefined}
+      >
         {roster === null ? (
           <Unavailable>The Partner roster could not be loaded.</Unavailable>
         ) : roster.length === 0 ? (
@@ -54,15 +87,15 @@ export default async function PartnersPage() {
           <Table
             head={[
               'Name',
-              'Phone',
-              'Class',
-              'Status',
-              'Available',
+              'Now',
+              'Today',
+              'This week',
+              'Last online',
+              'Last offline',
               'Deliveries',
               'Owed',
-              'Applied',
             ]}
-            minWidth="52rem"
+            minWidth="58rem"
           >
             {roster.map((p) => (
               <Row key={p.user_id}>
@@ -73,19 +106,42 @@ export default async function PartnersPage() {
                   >
                     {p.full_name ?? '-'}
                   </Link>
+                  <span className="text-faint block font-mono text-xs">{p.phone}</span>
+                  {p.status !== 'APPROVED' || p.is_suspended ? (
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      <Badge tone={TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
+                      {p.is_suspended ? <Badge tone="bad">suspended</Badge> : null}
+                    </span>
+                  ) : null}
                 </Cell>
-                <Cell mono>{p.phone}</Cell>
-                <Cell muted>{p.level ?? '-'}</Cell>
                 <Cell>
-                  <Badge tone={TONE[p.status] ?? 'neutral'}>{p.status}</Badge>
-                  {p.is_suspended ? <Badge tone="bad">account suspended</Badge> : null}
+                  {p.is_online ? (
+                    <>
+                      <Badge tone="good">Online</Badge>
+                      {/* HOW LONG THIS SESSION HAS BEEN OPEN, which is the
+                          difference between somebody who just came on and
+                          somebody who has been available all afternoon. */}
+                      <span className="text-faint mt-1 block text-xs tabular-nums">
+                        {duration(p.current_session_seconds)}
+                      </span>
+                    </>
+                  ) : (
+                    <Badge>Offline</Badge>
+                  )}
+                  {Number(p.active_deliveries) > 0 ? (
+                    <span className="text-brand-800 mt-1 block text-xs font-semibold">
+                      Carrying {p.active_deliveries}
+                    </span>
+                  ) : null}
                 </Cell>
-                <Cell>{p.is_available ? 'online' : 'offline'}</Cell>
-                <Cell numeric>{p.deliveries}</Cell>
+                <Cell numeric>{duration(p.online_seconds_today)}</Cell>
+                <Cell numeric>{duration(p.online_seconds_this_week)}</Cell>
+                <Cell muted>{when(p.last_online_at)}</Cell>
+                <Cell muted>{when(p.last_offline_at)}</Cell>
+                <Cell numeric>{p.deliveries_completed}</Cell>
                 <Cell numeric>
                   <Cedis pesewas={p.owed_pesewas} />
                 </Cell>
-                <Cell muted>{when(p.applied_at)}</Cell>
               </Row>
             ))}
           </Table>
@@ -182,4 +238,20 @@ function Document({ label, url, path }) {
       )}
     </div>
   );
+}
+
+/**
+ * Seconds as something a person reads at a glance.
+ *
+ * "3h 12m", not "11520s" and not "3.2 hours". An operator scanning a column of
+ * these is comparing them, so the unit has to be obvious without arithmetic.
+ */
+function duration(seconds) {
+  const total = Number(seconds ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return '—';
+
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${String(minutes).padStart(2, '0')}m`;
 }

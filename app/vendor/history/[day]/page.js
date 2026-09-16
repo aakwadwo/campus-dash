@@ -8,7 +8,7 @@ import { formatPesewas } from '@/lib/util/money';
 import { PageHeader, Card, Stat, EmptyState, Unavailable, ChevronRightIcon } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Orders on a day · Campus Dash' };
+export const metadata = { title: 'Orders on a day' };
 
 /**
  * One day's orders: the summary first, then every order, each opening to its

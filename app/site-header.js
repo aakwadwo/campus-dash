@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
 import AreaSwitcher from './area-switcher';
-import { BagIcon, ReceiptIcon, StoreIcon, UserIcon } from './ui';
+import { BagIcon, ReceiptIcon, UserIcon } from './ui';
 import { CampusDashLogo } from './brand';
 
 /**
@@ -24,12 +24,14 @@ import { CampusDashLogo } from './brand';
 export default async function SiteHeader({ active = null }) {
   const me = await getCapabilities();
 
-  const links = [
-    { href: '/order', label: 'Browse', icon: StoreIcon, key: 'browse' },
-    ...(me.can_order
-      ? [{ href: '/orders', label: 'My orders', icon: ReceiptIcon, key: 'orders' }]
-      : []),
-  ];
+  // THE BROWSE ENTRY IS GONE, deliberately. The logo goes home, the home page
+  // leads with one button that goes to the marketplace, and every order screen
+  // carries a back link to it — so browsing was reachable three ways and listed
+  // a fourth time in a bar with only two things in it. What is left in the
+  // navigation is the thing you cannot get to any other way.
+  const links = me.can_order
+    ? [{ href: '/orders', label: 'My orders', icon: ReceiptIcon, key: 'orders' }]
+    : [];
 
   return (
     <>
@@ -107,9 +109,10 @@ export default async function SiteHeader({ active = null }) {
         </div>
       </header>
 
-      {/* Mobile primary navigation. Only worth showing when there is more than
-          one destination — a bottom bar with a single item is a bar of nothing. */}
-      {links.length > 1 ? (
+      {/* Mobile primary navigation. Only worth showing when there is somewhere
+          to go: the Account entry below is always present, so one link plus it
+          is a bar of two, and no links at all is no bar. */}
+      {links.length > 0 ? (
         <nav
           aria-label="Main"
           className="border-line bg-canvas fixed inset-x-0 bottom-0 z-40 border-t pb-[env(safe-area-inset-bottom)] sm:hidden"

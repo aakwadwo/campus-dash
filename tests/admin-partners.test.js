@@ -129,12 +129,20 @@ describe('admin — Partner approval and suspension', () => {
     assert.ok(audit.some((a) => a.action === 'PARTNER_APPROVED' && a.reason === 'ID verified'));
   });
 
-  test('an approved Partner starts offline and must opt in', async () => {
+  /**
+   * APPROVAL PUTS A PARTNER ONLINE, and it used to do the opposite.
+   *
+   * Somebody who has just been told they are a Partner is willing to take work;
+   * making them find a toggle first was a step that existed only because the
+   * flag defaulted to false. Going offline is still entirely theirs to do.
+   */
+  test('approval puts a Partner online and opens a session', async () => {
     await admin('select * from public.admin_review_partner($1, $2, $3)', [
       ACTORS.applicantKofi,
       'APPROVED',
       'verified',
     ]);
+
     const profile = await asService(
       async (c) =>
         (
@@ -143,7 +151,53 @@ describe('admin — Partner approval and suspension', () => {
           ])
         ).rows[0]
     );
-    assert.equal(profile.is_available, false, 'approval does not put someone on shift');
+    assert.equal(profile.is_available, true, 'approval is what puts somebody on shift');
+
+    // ONLINE TIME IS MEASURED, so there is a row rather than only a boolean.
+    const open = await asService(
+      async (c) =>
+        (
+          await c.query(
+            'select * from public.partner_sessions where user_id = $1 and ended_at is null',
+            [ACTORS.applicantKofi]
+          )
+        ).rows
+    );
+    assert.equal(open.length, 1, 'exactly one open session, never two');
+  });
+
+  test('withdrawing approval takes them offline and closes the session', async () => {
+    await admin('select * from public.admin_review_partner($1, $2, $3)', [
+      ACTORS.applicantKofi,
+      'APPROVED',
+      'verified',
+    ]);
+    await admin('select * from public.admin_review_partner($1, $2, $3)', [
+      ACTORS.applicantKofi,
+      'SUSPENDED',
+      'under review',
+    ]);
+
+    const profile = await asService(
+      async (c) =>
+        (
+          await c.query('select is_available from public.partner_profiles where user_id = $1', [
+            ACTORS.applicantKofi,
+          ])
+        ).rows[0]
+    );
+    assert.equal(profile.is_available, false);
+
+    const open = await asService(
+      async (c) =>
+        (
+          await c.query(
+            'select count(*)::int as n from public.partner_sessions where user_id = $1 and ended_at is null',
+            [ACTORS.applicantKofi]
+          )
+        ).rows[0].n
+    );
+    assert.equal(open, 0, 'a suspended Partner does not go on accruing online time');
   });
 
   // --- rejection and suspension --------------------------------------------
@@ -218,7 +272,11 @@ describe('admin — Partner approval and suspension', () => {
       async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
     );
     assert.equal(caps.is_partner, true);
-    assert.equal(caps.partner_available, false, 'they must go online again themselves');
+    assert.equal(
+      caps.partner_available,
+      true,
+      'reinstatement is an approval, and an approval puts somebody back on shift'
+    );
   });
 
   // --- authorisation --------------------------------------------------------

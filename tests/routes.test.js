@@ -301,24 +301,34 @@ describe('route health', { skip: running ? false : `dev server not running at ${
   // Admin
   // =====================================================================
 
+  /**
+   * THE WHOLE CONSOLE, and it is now the same list as the navigation bar plus
+   * settlements.
+   *
+   * WHAT WENT, AND WHY. /admin/audit, /admin/money, /admin/finance,
+   * /admin/system, /admin/notifications, /admin/disputes and /admin/community
+   * were all unlinked — trimmed off the bar because an operator running a
+   * campus food service does not navigate by them — but still reachable by URL,
+   * still rendering, and still four overlapping views of the same money.
+   *
+   * An unlinked page is worse than a deleted one: it rots, nobody tests it by
+   * hand, and it is exactly where a stale read model survives a schema change.
+   *
+   * THE BACKEND IS UNTOUCHED. admin_actions, admin_list_actions() and every
+   * reconciliation function still exist and are still written to — removing a
+   * page does not remove an audit trail, and tests/audit.test.js holds that.
+   */
   const ADMIN = [
     '/admin',
     '/admin/orders',
     '/admin/orders?type=SCAN',
-    '/admin/disputes',
     '/admin/vendors',
     '/admin/customers',
     '/admin/partners',
-    '/admin/community',
     '/admin/payments',
-    '/admin/finance',
     '/admin/settlements',
     '/admin/locations',
-    '/admin/notifications',
     '/admin/pilot',
-    '/admin/audit',
-    '/admin/system',
-    '/admin/money',
   ];
 
   for (const path of ADMIN) {

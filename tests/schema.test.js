@@ -236,10 +236,20 @@ describe('schema invariants', () => {
       'is_admin',
       'is_customer',
       'is_vendor_staff',
+      'location_floor',
       'location_path',
       'location_zone',
       'my_vendor_ids',
+      // Asked BEFORE a vendor sign-in code is sent, which is by definition
+      // before anybody is signed in. Returns a bare boolean about a number the
+      // caller already typed — strictly less than the screen's own error
+      // message tells them either way — and stops /login/vendor being used to
+      // send an SMS to an arbitrary number.
+      'phone_can_sign_in_as_vendor',
       'platform_config',
+      // The scan catalogue. What a store will honour a meal scan for is not a
+      // secret, and hiding it only means somebody finding out at the counter.
+      'scan_menu',
       'scan_restaurants',
       'storefront_vendor',
       'storefront_vendors',
@@ -282,6 +292,7 @@ describe('schema invariants', () => {
       'admin_create_vendor_category',
       'admin_customer_detail',
       'admin_customer_rewards',
+      'admin_customer_summary',
       'admin_customers',
       'admin_dashboard',
       'admin_dashboard_totals',
@@ -299,6 +310,7 @@ describe('schema invariants', () => {
       'admin_order_board',
       'admin_order_board_summary',
       'admin_order_money',
+      'admin_partner_activity',
       'admin_partner_detail',
       'admin_partner_documents_due_for_purge',
       'admin_partner_balances',
@@ -308,6 +320,10 @@ describe('schema invariants', () => {
       'admin_payout_destinations',
       'admin_payout_readiness',
       'admin_payout_history',
+      // The weekly Partner settlement, done by hand. A run creates the payouts
+      // and stops; a person sends the money and records the reference, which
+      // appends to admin_actions.
+      'admin_payouts_awaiting_settlement',
       'admin_pending_settlement',
       'admin_pilot_metrics',
       'admin_provider_transaction_ids',
@@ -322,6 +338,7 @@ describe('schema invariants', () => {
       'admin_set_location_active',
       'admin_set_menu_item_available',
       'admin_set_payout_destination',
+      'admin_settle_payout_manually',
       'admin_set_user_suspended',
       'admin_set_vendor_scans',
       'admin_set_vendor_status',
@@ -361,6 +378,7 @@ describe('schema invariants', () => {
       'my_order_summary',
       'my_outstanding_terms',
       'my_partner_application',
+      'my_partner_activity',
       'my_partner_payouts',
       'my_partner_rating',
       'my_payout_destination',
@@ -377,9 +395,13 @@ describe('schema invariants', () => {
       'partner_confirm_pickup',
       'partner_delivery_history',
       'partner_earnings_summary',
+      // Whether the caller is the Partner CURRENTLY carrying a scan order.
+      // Reachable because the order_scans policy evaluates as the caller, and
+      // it is the same predicate scan_image_path() uses — so the row and the
+      // image cannot disagree about who may look. It answers only about the
+      // caller's own assignment and returns a bare boolean.
+      'partner_may_read_scan',
       'partner_report_customer_absent',
-      'partner_report_scan_redeemed',
-      'partner_report_scan_refused',
       'partner_scan_brief',
       // A pure read of one configured number. It leaks nothing: the threshold
       // is a published product policy, shown on the Partner dashboard.
@@ -398,8 +420,29 @@ describe('schema invariants', () => {
       'vendor_earnings_summary',
       'vendor_handoff_code',
       'vendor_mark_ready',
+      // A STORE OWNS ITS OWN MENU. Adding, pricing and photographing items used
+      // to be an administrator's job, which put a support queue between a cook
+      // and their own board for no protection — price_order() snapshots every
+      // figure onto the order at submission, so an edit reaches the next quote
+      // and nothing that already exists.
+      'vendor_menu',
+      'vendor_create_menu_item',
+      'vendor_update_menu_item',
+      'vendor_delete_menu_item',
+      'vendor_set_menu_item_image',
+      'vendor_clear_menu_item_image',
+      // THE STORE IS THE REDEMPTION POINT. It sees the scan while the order is
+      // live on its board, says whether the entitlement is good, and reads out
+      // the same four digits every other order uses. vendor_may_read_scan is
+      // the predicate behind both the image and the order_scans policy, and is
+      // reachable because a policy evaluates as the caller.
+      'vendor_may_read_scan',
       'vendor_order_board',
       'vendor_order_bucket',
+      'vendor_order_bucket_for',
+      'vendor_redeem_scan',
+      'vendor_refuse_scan',
+      'vendor_scan_image_path',
       'vendor_order_detail',
       'vendor_daily_sales',
       'vendor_orders_on_day',

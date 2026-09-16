@@ -247,9 +247,10 @@ person whose next step depends on it.
 There is **no function that returns a handoff code to a Partner**. The claim
 does not hand one back either. That asymmetry is the whole mechanism.
 
-A scan errand has no vendor handover and therefore no pickup code: its
-equivalent moment is the redemption report, which is a deliberate act and not a
-side effect of having accepted the job. See `docs/SCAN.md`.
+A MEAL SCAN ORDER IS NO DIFFERENT. It used to have no handover to prove — the
+Partner reported the redemption themselves — but the store checks the scan on
+its own board now, hands the food over and reads out the same four digits. One
+collection path, not two. See `docs/SCAN.md`.
 
 ## Cancellation
 

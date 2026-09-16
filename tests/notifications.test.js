@@ -72,7 +72,8 @@ describe('order notifications', () => {
     const cases = [
       [NOTIFICATION_EVENT.ORDER_ACCEPTED, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_REJECTED, AUDIENCE.CUSTOMER],
-      [NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.CUSTOMER],
+      // The customer is NOT here: they are looking at the screen that just
+      // confirmed their payment as this would arrive.
       [NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR],
       [NOTIFICATION_EVENT.ORDER_PREPARING, AUDIENCE.CUSTOMER],
       [NOTIFICATION_EVENT.ORDER_READY, AUDIENCE.CUSTOMER],
@@ -90,7 +91,9 @@ describe('order notifications', () => {
       itemCount: 2,
       orderSummary: 'Jollof Rice and 1 more item',
       appUrl: 'https://example.test',
-      isPickup: false,
+      // ORDER_READY to a customer is collection-only copy, so the context has
+      // to be a collection for that case to render at all.
+      isPickup: true,
     };
 
     for (const [event, audience] of cases) {
@@ -168,6 +171,10 @@ describe('order notifications', () => {
       for (const audience of Object.keys(audiences)) {
         for (const isPickup of [true, false]) {
           const message = renderSms(event, audience, { ...context, isPickup });
+          // A TEMPLATE MAY DECLINE for one shape and not the other — ORDER_READY
+          // writes to a collecting customer and says nothing to one whose order
+          // a Partner is bringing. A skip is not a rendering failure.
+          if (message === null) continue;
           assert.ok(
             isGsm7(message),
             `${event} -> ${audience} leaves GSM-7: ${JSON.stringify(
@@ -181,19 +188,28 @@ describe('order notifications', () => {
     assert.ok(rendered > 20, 'the loop reached the templates');
   });
 
-  test('the self-pickup NEW PAID ORDER SMS to the store is one plain GSM-7 segment', () => {
-    const vendor = renderSms(NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR, {
-      orderNumber: '001',
-      itemCount: 1,
-      isPickup: true,
-      appUrl: 'http://localhost:3000',
-    });
-    assert.equal(
-      vendor,
-      'Campus Dash: NEW PAID ORDER #001 - 1 item, collection. Start preparing: http://localhost:3000/vendor'
-    );
-    assert.ok(isGsm7(vendor));
-    assert.ok(vendor.length <= 160, `${vendor.length} chars is more than one segment`);
+  /**
+   * THE STORE IS NOT TOLD WHO IS COLLECTING. It used to say "collection" or
+   * "delivery", which is something a counter has no use for — the work is the
+   * same either way — and which quietly told the store something about the
+   * customer. The message is identical for both now, and shorter for it.
+   */
+  test('the NEW PAID ORDER SMS is one plain GSM-7 segment and names no recipient', () => {
+    const expected =
+      'Campus Dash: NEW PAID ORDER #001 - 1 item. Start preparing: http://localhost:3000/vendor';
+
+    for (const isPickup of [true, false]) {
+      const vendor = renderSms(NOTIFICATION_EVENT.PAYMENT_CONFIRMED, AUDIENCE.VENDOR, {
+        orderNumber: '001',
+        itemCount: 1,
+        isPickup,
+        appUrl: 'http://localhost:3000',
+      });
+      assert.equal(vendor, expected, 'the same message whoever is collecting');
+      assert.ok(isGsm7(vendor));
+      assert.ok(vendor.length <= 160, `${vendor.length} chars is more than one segment`);
+      assert.doesNotMatch(vendor, /collection|delivery|partner/i);
+    }
   });
 
   test('typographic characters fold to plain ones, and names are left alone', () => {
@@ -219,7 +235,11 @@ describe('order notifications', () => {
     // out, and the message that says the food is ready is the one place to
     // explain that before they walk to a counter expecting to be handed it.
     assert.match(pickup, /4-digit code/);
-    assert.match(delivery, /Partner is collecting/);
+
+    // AND A PARTNER ORDER SENDS THE CUSTOMER NOTHING AT ALL. They are not
+    // walking anywhere, their tracking page has already moved, and a text
+    // saying "it is ready" about food they are not collecting is noise.
+    assert.equal(delivery, null);
   });
 
   test('the vendor is never told a pickup code by SMS', () => {

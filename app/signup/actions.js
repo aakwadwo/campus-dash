@@ -53,7 +53,11 @@ function collect(formData) {
     firstName: String(formData.get('first_name') ?? '').trim(),
     lastName: String(formData.get('last_name') ?? '').trim(),
     email: String(formData.get('email') ?? '').trim(),
-    level: String(formData.get('level') ?? '').trim(),
+    // STUDENT OR STAFF. Staff eat lunch and staff can be Partners; there was
+    // previously no way to be either without claiming a year group.
+    affiliation: String(formData.get('affiliation') ?? 'STUDENT').trim(),
+    graduationYear: String(formData.get('graduation_year') ?? '').trim(),
+    gender: String(formData.get('gender') ?? '').trim(),
     phoneRaw: String(formData.get('phone') ?? '').trim(),
     accepted: formData.get('accept_terms') === 'on',
     next: safeNext(formData.get('next')) ?? '/order',
@@ -66,7 +70,9 @@ function carry(details) {
     firstName: details.firstName,
     lastName: details.lastName,
     email: details.email,
-    level: details.level,
+    affiliation: details.affiliation,
+    graduationYear: details.graduationYear,
+    gender: details.gender,
     phoneRaw: details.phoneRaw,
   };
 }
@@ -102,8 +108,10 @@ async function grantCustomer(details) {
   await completeOnboarding({
     firstName: checked.firstName,
     lastName: checked.lastName,
-    level: checked.level,
     phone: checked.phone,
+    affiliation: checked.affiliation,
+    graduationYear: checked.graduationYear,
+    gender: checked.gender,
     termsId,
   });
 }

@@ -2,7 +2,17 @@
 
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import { quoteAction, submitOrderAction } from '../actions';
-import { Card, Money, ErrorNote, EmptyState, Skeleton, ArrowLeftIcon, BagIcon } from '../../ui';
+import FulfilmentChoice from '../../fulfilment-choice';
+import {
+  Card,
+  Money,
+  ErrorNote,
+  EmptyState,
+  Skeleton,
+  Spinner,
+  ArrowLeftIcon,
+  BagIcon,
+} from '../../ui';
 
 /**
  * Menu, basket and checkout.
@@ -39,6 +49,12 @@ export default function MenuAndBasket({
   const [quoting, startQuoting] = useTransition();
   const [submitState, submit, submitting] = useActionState(submitOrderAction, {});
 
+  // THE FEE FOR A PARTNER ORDER, remembered across re-quotes. Only a quote that
+  // was actually priced for a Partner may set it, which is what stops a
+  // collection quote's zero being shown against the Partner option — see
+  // FulfilmentChoice for the full account of that bug.
+  const [quotedPartnerFee, setQuotedPartnerFee] = useState(null);
+
   const items = Object.entries(quantities)
     .filter(([, quantity]) => quantity > 0)
     .map(([menuItemId, quantity]) => ({ menuItemId, quantity }));
@@ -73,6 +89,9 @@ export default function MenuAndBasket({
       if (result.ok) {
         setQuote(result.quote);
         setQuoteError(null);
+        if (fulfilmentChoice === 'DELIVERY') {
+          setQuotedPartnerFee(Number(result.quote.delivery_fee_pesewas ?? 0));
+        }
       } else {
         setQuote(null);
         setQuoteError(result.message);
@@ -114,6 +133,7 @@ export default function MenuAndBasket({
         locations={locations}
         deliveryAvailable={deliveryAvailable}
         deliveryFeePesewas={deliveryFeePesewas}
+        quotedPartnerFee={quotedPartnerFee}
         fulfilment={fulfilmentChoice}
         onFulfilment={setFulfilment}
         destination={destination}
@@ -155,42 +175,65 @@ export default function MenuAndBasket({
           return (
             <li key={item.id}>
               <Card
-                className={`h-full p-3.5 transition-colors sm:p-5 ${
+                className={`flex h-full gap-3.5 p-3.5 transition-colors sm:p-5 ${
                   item.is_available ? '' : 'bg-surface-2/60'
                 } ${chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''}`}
               >
-                <div className="flex items-baseline justify-between gap-4">
-                  <h3
-                    className={`font-semibold break-words ${item.is_available ? '' : 'text-muted'}`}
-                  >
-                    {item.name}
-                  </h3>
-                  <span
-                    className={`shrink-0 font-semibold ${item.is_available ? '' : 'text-muted'}`}
-                  >
-                    <Money pesewas={item.price_pesewas} />
-                  </span>
-                </div>
-
-                {item.description ? (
-                  <p className="text-muted mt-1.5 text-sm leading-relaxed">{item.description}</p>
+                {/* THE DISH, WHEN THERE IS A PHOTOGRAPH OF IT. Lazy and
+                    explicitly sized, so a menu of twenty items does not cost
+                    twenty blocking requests on a campus connection, and the
+                    layout does not jump as each one lands. A store that has not
+                    added photographs gets a text menu rather than twenty grey
+                    boxes — the absence is not worth reserving space for. */}
+                {item.image_url ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={item.image_url}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    width={80}
+                    height={80}
+                    className={`rounded-card size-20 shrink-0 object-cover ${
+                      item.is_available ? '' : 'opacity-50 saturate-50'
+                    }`}
+                  />
                 ) : null}
 
-                {item.is_available ? (
-                  <Stepper
-                    value={chosen}
-                    onChange={(next) => setQuantity(item.id, next)}
-                    label={item.name}
-                  />
-                ) : (
-                  /* SOLD OUT, SHOWN. A dish that vanishes when it runs out
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-4">
+                    <h3
+                      className={`font-semibold break-words ${item.is_available ? '' : 'text-muted'}`}
+                    >
+                      {item.name}
+                    </h3>
+                    <span
+                      className={`shrink-0 font-semibold ${item.is_available ? '' : 'text-muted'}`}
+                    >
+                      <Money pesewas={item.price_pesewas} />
+                    </span>
+                  </div>
+
+                  {item.description ? (
+                    <p className="text-muted mt-1.5 text-sm leading-relaxed">{item.description}</p>
+                  ) : null}
+
+                  {item.is_available ? (
+                    <Stepper
+                      value={chosen}
+                      onChange={(next) => setQuantity(item.id, next)}
+                      label={item.name}
+                    />
+                  ) : (
+                    /* SOLD OUT, SHOWN. A dish that vanishes when it runs out
                      reads as a store that has stopped selling it; a dish marked
                      sold out reads as a store that is busy. */
-                  <p className="text-muted mt-3 inline-flex items-center gap-1.5 text-sm font-semibold">
-                    <span className="bg-surface-3 size-1.5 rounded-full" aria-hidden />
-                    Sold out
-                  </p>
-                )}
+                    <p className="text-muted mt-3 inline-flex items-center gap-1.5 text-sm font-semibold">
+                      <span className="bg-surface-3 size-1.5 rounded-full" aria-hidden />
+                      Sold out
+                    </p>
+                  )}
+                </div>
               </Card>
             </li>
           );
@@ -304,6 +347,7 @@ function Checkout({
   locations,
   deliveryAvailable,
   deliveryFeePesewas,
+  quotedPartnerFee,
   fulfilment,
   onFulfilment,
   destination,
@@ -388,34 +432,14 @@ function Checkout({
           How you want it
         </h3>
 
-        <div className="grid gap-2.5 sm:grid-cols-2">
-          <Choice
-            selected={fulfilment === 'PICKUP'}
-            onSelect={() => onFulfilment('PICKUP')}
-            title="Collect it yourself"
-            detail={`Walk to ${vendor.name}. No delivery fee.`}
-            price={0}
-          />
-          <Choice
-            selected={fulfilment === 'DELIVERY'}
-            onSelect={() => onFulfilment('DELIVERY')}
-            disabled={!canDeliver}
-            title="Campus Dash Partner"
-            detail={
-              canDeliver
-                ? 'A verified student brings it to you.'
-                : 'No Partners are available right now.'
-            }
-            // THE PRICE OF THIS OPTION, not of the current choice. A quote for
-            // collection carries a delivery fee of 0, and that used to label
-            // the Partner option "Free" until it was tapped.
-            price={
-              quote && fulfilment === 'DELIVERY'
-                ? quote.delivery_fee_pesewas
-                : (deliveryFeePesewas ?? null)
-            }
-          />
-        </div>
+        <FulfilmentChoice
+          value={fulfilment}
+          onChange={onFulfilment}
+          vendorName={vendor.name}
+          partnerAvailable={canDeliver}
+          feePesewas={deliveryFeePesewas}
+          quotedFee={quotedPartnerFee}
+        />
 
         {fulfilment === 'DELIVERY' && canDeliver ? (
           <div className="mt-4 space-y-3">
@@ -465,7 +489,7 @@ function Checkout({
             <Line label="Food" value={quote.subtotal_pesewas} />
             <Line label="Service fee" value={quote.service_fee_pesewas} />
             {quote.delivery_fee_pesewas > 0 ? (
-              <Line label="Partner delivery" value={quote.delivery_fee_pesewas} />
+              <Line label="Campus Dash Partner" value={quote.delivery_fee_pesewas} />
             ) : null}
             <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
               <dt className="font-semibold">Total</dt>
@@ -499,7 +523,7 @@ function Checkout({
         >
           {busy ? (
             <span className="inline-flex items-center justify-center gap-2">
-              <Spinner />
+              <Spinner className="size-4" />
               Taking you to pay…
             </span>
           ) : quote ? (
@@ -517,44 +541,6 @@ function Checkout({
         </p>
       ) : null}
     </form>
-  );
-}
-
-/** A fulfilment option. A whole-card target, because a radio dot is 12px. */
-function Choice({ selected, onSelect, title, detail, price, disabled = false }) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      aria-pressed={selected}
-      className={`rounded-card press w-full border p-3.5 text-left transition-colors ${
-        disabled
-          ? 'border-line bg-surface-2/60 cursor-not-allowed'
-          : selected
-            ? 'border-brand-600 bg-brand-50 ring-brand-600/25 ring-1'
-            : 'border-line-strong hover:bg-surface-2'
-      }`}
-    >
-      <span className="flex items-baseline justify-between gap-2">
-        <span className={`font-semibold ${disabled ? 'text-muted' : ''}`}>{title}</span>
-        {!disabled && price !== null ? (
-          <span className="shrink-0 text-sm font-semibold">
-            {price > 0 ? <Money pesewas={price} /> : 'Free'}
-          </span>
-        ) : null}
-      </span>
-      <span className="text-muted mt-1 block text-xs leading-relaxed">{detail}</span>
-    </button>
-  );
-}
-
-function Spinner() {
-  return (
-    <span
-      aria-hidden
-      className="inline-block size-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
-    />
   );
 }
 

@@ -1,15 +1,62 @@
 import { Suspense } from 'react';
+import { config } from '@/lib/config';
 import './globals.css';
 import NavigationProgress from './navigation-progress';
 
+const DESCRIPTION =
+  'Order from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.';
+
 export const metadata = {
+  /**
+   * EVERY RELATIVE URL BELOW RESOLVES AGAINST THIS, including the canonical and
+   * Open Graph ones each page sets. Without it Next emits relative canonicals,
+   * which are not valid in a <link rel="canonical"> and which social scrapers
+   * simply drop.
+   *
+   * config.canonicalOrigin() refuses to return a *.vercel.app host, so a
+   * preview deployment can never declare itself canonical — which is how a
+   * staging URL ends up in search results competing with the real site.
+   */
+  metadataBase: new URL(config.canonicalOrigin()),
   title: {
-    default: 'Campus Dash',
+    // Used by any page that sets no title of its own. app/page.js sets the same
+    // string explicitly, because the template below does not reach the root
+    // segment and the two must not be able to drift apart.
+    default: 'Campus Dash | Food & More at Academic City',
     template: '%s · Campus Dash',
   },
-  description:
-    'Order from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.',
+  description: DESCRIPTION,
   applicationName: 'Campus Dash',
+  alternates: { canonical: '/' },
+  openGraph: {
+    type: 'website',
+    siteName: 'Campus Dash',
+    locale: 'en_GH',
+    url: '/',
+    title: 'Campus Dash | Food & More at Academic City',
+    description: DESCRIPTION,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Campus Dash | Food & More at Academic City',
+    description: DESCRIPTION,
+  },
+  /**
+   * THE DEFAULT IS "DO NOT INDEX ANYTHING PRIVATE", and it is expressed the
+   * other way round: this allows indexing, and every authenticated route sets
+   * its own `robots: { index: false }`. robots.js refuses the whole tree of
+   * them a second time.
+   *
+   * Two layers because they fail differently. robots.txt is a request a crawler
+   * may ignore and cannot stop a page already discovered through a link; a
+   * noindex on the page itself is honoured by the crawler that actually fetched
+   * it. Neither alone is enough for a page showing somebody's order.
+   */
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, 'max-image-preview': 'large' },
+  },
   // Generated from info/logo2.PNG — see app/brand.js. The square variation is
   // deliberate: a wide transparent runner in a 16px tab is a smudge on whatever
   // colour the browser paints behind it.
