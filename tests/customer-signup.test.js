@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   AFFILIATIONS,
   GENDERS,
+  GRADUATION_YEARS,
   graduationYears,
   RESEND_COOLDOWN_SECONDS,
   SCHOOL_DOMAIN,
@@ -35,7 +36,8 @@ describe('customer sign-up decisions', () => {
     lastName: 'Mensah',
     email: 'kwame.mensah@acity.edu.gh',
     affiliation: 'STUDENT',
-    graduationYear: String(THIS_YEAR + 2),
+    graduationYear: '2028',
+    gender: 'MALE',
     phoneRaw: '020 123 4567',
     accepted: true,
   };
@@ -112,28 +114,38 @@ describe('customer sign-up decisions', () => {
    * in first year claimed to be a first year for ever. The year somebody
    * expects to finish is the same fact stated so that it stays true.
    */
-  test('a student must choose a graduation year from the offered window', () => {
+  test('a student must choose one of the four offered graduation years', () => {
     for (const year of graduationYears()) {
       const result = validateSignUpDetails({ ...VALID, graduationYear: String(year) });
       assert.equal(result.ok, true, String(year));
       assert.equal(result.graduationYear, year, 'and it comes back as a number');
     }
 
-    for (const year of ['', '1999', String(THIS_YEAR - 1), String(THIS_YEAR + 20), 'next year']) {
+    // The years either side of the list are the interesting refusals: a rolling
+    // window would have accepted both, and the whole point of fixing the list
+    // is that a cohort is four years and not seven.
+    for (const year of ['', '1999', '2026', '2031', String(THIS_YEAR + 20), 'next year']) {
       const result = validateSignUpDetails({ ...VALID, graduationYear: year });
       assert.equal(result.ok, false, `${year} must be refused`);
       assert.match(result.error, /graduate/i);
     }
   });
 
-  test('the window is computed, so it never needs editing in September', () => {
-    const years = graduationYears(new Date('2031-03-01T00:00:00Z'));
-    assert.equal(years[0], 2031, 'somebody finishing this academic year');
-    assert.equal(years.at(-1), 2037, 'and a first year on a long programme');
-    assert.ok(
-      years.every((y, i) => i === 0 || y === years[i - 1] + 1),
-      'contiguous'
-    );
+  /**
+   * FOUR YEARS, FIXED. This was a rolling window computed from the current date
+   * so it never needed editing in September, which was right when the question
+   * was "roughly when do you finish". The pilot asks which of four cohorts
+   * somebody is in, and five of the seven years that window offered belonged to
+   * nobody on campus.
+   *
+   * complete_customer_onboarding() holds the same four literal years. There is
+   * no way to assert that from here without a database, which is exactly why
+   * the SQL says so in its own test — this pins the list the FORM offers.
+   */
+  test('the list is exactly 2027 through 2030', () => {
+    assert.deepEqual(GRADUATION_YEARS, [2027, 2028, 2029, 2030]);
+    assert.deepEqual(graduationYears(), [2027, 2028, 2029, 2030]);
+    assert.notEqual(graduationYears(), GRADUATION_YEARS, 'a copy, so a caller cannot edit it');
   });
 
   /**
@@ -171,10 +183,12 @@ describe('customer sign-up decisions', () => {
   });
 
   /**
-   * OPTIONAL, AND IT STAYS OPTIONAL. Nobody is stopped from buying lunch for
-   * declining to say, which is why a blank is a pass rather than an error.
+   * TWO ANSWERS, AND ONE OF THEM IS REQUIRED. Gender used to be optional, with
+   * "prefer not to say" storing a null — and the only reason the column exists
+   * is to be counted, which a column a third of the rows decline cannot be.
+   * The form offers no third option and neither does this.
    */
-  test('gender is exactly male or female, or nothing at all', () => {
+  test('gender is exactly male or female, and one of them is answered', () => {
     assert.deepEqual(GENDERS, ['MALE', 'FEMALE']);
 
     for (const gender of GENDERS) {
@@ -183,13 +197,16 @@ describe('customer sign-up decisions', () => {
       assert.equal(result.gender, gender);
     }
 
-    const blank = validateSignUpDetails({ ...VALID, gender: '' });
-    assert.equal(blank.ok, true, 'declining to say is not an error');
-    assert.equal(blank.gender, null);
+    for (const gender of ['', '   ', 'OTHER', 'male']) {
+      const result = validateSignUpDetails({ ...VALID, gender });
+      assert.equal(result.ok, false, `${gender || '(blank)'} must be refused`);
+      assert.match(result.error, /male or female/i);
+    }
 
-    const nonsense = validateSignUpDetails({ ...VALID, gender: 'OTHER' });
-    assert.equal(nonsense.ok, false);
-    assert.match(nonsense.error, /male or female/i);
+    // And staff are asked the same question, because it is not a student fact.
+    const staff = validateSignUpDetails({ ...VALID, affiliation: 'STAFF', gender: '' });
+    assert.equal(staff.ok, false);
+    assert.match(staff.error, /male or female/i);
   });
 
   test('a Ghanaian phone number is required, and is normalised to E.164', () => {

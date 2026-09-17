@@ -267,7 +267,11 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
   student names an **expected graduation year**, which replaced `level` because
   100/200/300/400 was wrong for three of the four years it described — nobody
   comes back in September to move themselves up. `level` survives as a
-  historical column nothing writes. Gender is MALE or FEMALE and optional.
+  historical column nothing writes. The offered years are exactly **2027, 2028,
+  2029 and 2030** — the cohorts on campus — held in `GRADUATION_YEARS` in
+  `lib/auth/customer-signup.js` and in `complete_customer_onboarding()`, which
+  move together. Gender is **MALE or FEMALE and required**: there is no third
+  option, because the only reason to hold the column is to count it.
 - Customers sign in with a code emailed to their school address at `/login`;
   vendors with an SMS code at `/login/vendor`; administrators with a password at
   `/login/admin`, which is deliberately not linked from any public page.

@@ -89,8 +89,10 @@ describe('customer profile', () => {
                 ? null
                 : 'graduationYear' in overrides
                   ? overrides.graduationYear
-                  : THIS_YEAR + 2,
-              overrides.gender ?? null,
+                  : 2028,
+              // MALE by default because gender is no longer a question that may
+              // be skipped; a test that means to omit it passes null explicitly.
+              'gender' in overrides ? overrides.gender : 'MALE',
               terms,
               null,
             ]
@@ -116,10 +118,10 @@ describe('customer profile', () => {
   describe('student or staff', () => {
     test('a student records the year they expect to finish', async () => {
       const id = await newIdentity(nextEmail());
-      const profile = await onboard(id, { graduationYear: THIS_YEAR + 3 });
+      const profile = await onboard(id, { graduationYear: 2029 });
 
       assert.equal(profile.affiliation, 'STUDENT');
-      assert.equal(profile.graduation_year, THIS_YEAR + 3);
+      assert.equal(profile.graduation_year, 2029);
     });
 
     /**
@@ -172,7 +174,7 @@ describe('customer profile', () => {
       const error = await expectRejection(
         asService((c) =>
           c.query('update public.customer_profiles set graduation_year = $1 where user_id = $2', [
-            THIS_YEAR + 2,
+            2028,
             id,
           ])
         )
@@ -186,11 +188,25 @@ describe('customer profile', () => {
       assert.match(error.message, /expect to graduate/i);
     });
 
-    test('a graduation year in the past or the far future is refused', async () => {
-      for (const year of [1999, THIS_YEAR - 1, THIS_YEAR + 40]) {
+    /**
+     * FOUR YEARS, AND THE SAME FOUR THE FORM OFFERS. This used to be a range —
+     * this year to this year plus ten — which accepted five years belonging to
+     * nobody on campus. The years immediately either side of the list are the
+     * ones worth asserting: a range would have taken both.
+     */
+    test('a graduation year outside the four offered is refused', async () => {
+      for (const year of [1999, 2026, 2031, THIS_YEAR + 40]) {
         const id = await newIdentity(nextEmail());
         const error = await expectRejection(onboard(id, { graduationYear: year }));
-        assert.match(error.message, /does not look right/i, String(year));
+        assert.match(error.message, /years offered/i, String(year));
+      }
+    });
+
+    test('each of the four is accepted', async () => {
+      for (const year of [2027, 2028, 2029, 2030]) {
+        const id = await newIdentity(nextEmail());
+        const profile = await onboard(id, { graduationYear: year });
+        assert.equal(profile.graduation_year, year);
       }
     });
   });
@@ -207,16 +223,31 @@ describe('customer profile', () => {
       }
     });
 
-    test('is optional, and nobody is blocked for declining to say', async () => {
+    /**
+     * IT USED TO BE OPTIONAL, with a "prefer not to say" that stored a null.
+     * The only reason to hold the column is to count it, and a column a third
+     * of the rows decline cannot be counted — so the third option is gone from
+     * the form and the null is refused here.
+     *
+     * THE COLUMN STAYS NULLABLE. An account created before this change has no
+     * gender and is still a valid row; nothing backfills one nobody stated.
+     */
+    test('is required — declining to say is no longer an option', async () => {
       const id = await newIdentity(nextEmail());
-      const profile = await onboard(id, { gender: null });
-      assert.equal(profile.gender, null);
+      const error = await expectRejection(onboard(id, { gender: null }));
+      assert.match(error.message, /male or female/i);
 
       const caps = await asUser(
         id,
         async (c) => (await c.query('select public.my_capabilities() as c')).rows[0].c
       );
-      assert.equal(caps.can_order, true, 'ordering does not depend on it');
+      assert.equal(caps.can_order, false, 'and the capability was not granted');
+    });
+
+    test('a staff member is asked the same question', async () => {
+      const id = await newIdentity(nextEmail());
+      const error = await expectRejection(onboard(id, { affiliation: 'STAFF', gender: null }));
+      assert.match(error.message, /male or female/i);
     });
 
     test('anything else is refused by the enum', async () => {
@@ -232,7 +263,7 @@ describe('customer profile', () => {
   describe('changing it later', () => {
     test('a student who becomes staff loses the graduation year', async () => {
       const id = await newIdentity(nextEmail());
-      await onboard(id, { graduationYear: THIS_YEAR + 2 });
+      await onboard(id, { graduationYear: 2028 });
 
       await asUser(
         id,
@@ -289,7 +320,7 @@ describe('customer profile', () => {
             'Admin',
             null,
             'STUDENT',
-            THIS_YEAR + 2,
+            2028,
             'MALE',
           ]),
         { commit: true }

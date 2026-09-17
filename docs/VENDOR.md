@@ -56,6 +56,44 @@ same identity, corrected facts, back in the queue with the old decision cleared.
 orders is the vendor's own decision, made when they are actually standing behind
 the counter. The owner is texted a link to their dashboard.
 
+### The other door: an administrator creates the account
+
+A store recruited in person will not go home and fill in a form. So
+`admin_create_vendor_account()` takes the same facts at the counter and makes
+the same application: a store with an `owner_user_id`, `PENDING_APPROVAL`, with
+`submitted_at` set. It lands in the **existing** review queue, is approved by
+the **existing** `admin_review_vendor()`, and the owner gets the **existing**
+welcome SMS. Creating a store and approving one stay two decisions and two audit
+rows; an administrator does not get to be the record of their own approval.
+
+The identity is not made in SQL. `auth.users` belongs to GoTrue, so
+`lib/admin/createVendorAccount()` provisions it through the auth admin API with
+the number confirmed — an administrator standing in front of the owner is the
+verification — and hands the id to the function. **A number Campus Dash already
+knows is reused, never duplicated**: that is the whole lesson of the phone
+collision that once presented as `500 Error confirming user`. If the store
+cannot then be created, an identity made for it is removed again, because an
+account that can sign in and owns nothing is the orphan this is avoiding.
+
+### Deleting a store
+
+`admin_delete_vendor()` removes a store that **never traded**, with its menu,
+its photographs, its daily queue counter and its payout destination — and the
+owner's identity too, but only if the store was the only thing that identity
+held. Somebody who also buys lunch keeps their account and simply stops having a
+store.
+
+It **refuses** a store with orders against it, and says how many. Those orders
+carry payments and allocations, and those are what reconcile the bank account;
+the control for a store that has traded is SUSPENSION, which takes it off the
+marketplace and keeps the history. A genuine pilot reset is
+`scripts/purge-test-accounts`, which runs as the database owner and is
+deliberately not reachable from a browser.
+
+Storage is not deleted in SQL — `storage.objects` refuses a SQL delete by design
+— so the function returns the object paths it saw and `lib/admin` removes them
+through the Storage API after the transaction commits.
+
 ## The store itself
 
 A vendor owns their own facts and does not have to email anybody to fix a typo

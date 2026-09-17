@@ -117,10 +117,26 @@ function pickStep({ detailsState, codeState, resendState, completeState }) {
   return steps.includes('code') ? 'code' : 'details';
 }
 
-/** Later states win, so a correction survives a failed round trip. */
+/**
+ * Later states win, so a correction survives a failed round trip.
+ *
+ * THE KEYS ARE THE ONES THE ACTIONS ACTUALLY CARRY. This listed `level`, which
+ * no step has returned since a graduation year replaced it, and omitted the
+ * three fields that replaced it — so a failure on the last step handed somebody
+ * back a form with their affiliation, year and gender blank. Gender is now a
+ * required answer, which turns that from untidy into a second question.
+ */
 function mergeValues(states) {
   return states.reduce((acc, s) => {
-    for (const key of ['firstName', 'lastName', 'email', 'level', 'phoneRaw']) {
+    for (const key of [
+      'firstName',
+      'lastName',
+      'email',
+      'affiliation',
+      'graduationYear',
+      'gender',
+      'phoneRaw',
+    ]) {
       if (s?.[key] !== undefined && s[key] !== '') acc[key] = s[key];
     }
     return acc;
@@ -428,10 +444,15 @@ function WhoYouAre({ values }) {
         <input type="hidden" name="graduation_year" value="" />
       )}
 
-      {/* OPTIONAL, AND SAYS SO. Nobody is stopped from buying lunch over it. */}
-      <Field label="Gender" hint="Optional.">
-        <Select name="gender" defaultValue={values.gender ?? ''}>
-          <option value="">Prefer not to say</option>
+      {/* MALE OR FEMALE, AND ONE OF THEM IS CHOSEN. The third option used to be
+          "prefer not to say", which stored a null — and a column that cannot be
+          counted is a column with no reason to be asked for. The placeholder is
+          `disabled`, so it is a prompt rather than a fourth answer. */}
+      <Field label="Gender">
+        <Select name="gender" required defaultValue={values.gender ?? ''}>
+          <option value="" disabled>
+            Choose
+          </option>
           <option value="MALE">Male</option>
           <option value="FEMALE">Female</option>
         </Select>
