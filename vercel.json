@@ -1,4 +1,4 @@
-{
+claude{
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["dub1"]
 }

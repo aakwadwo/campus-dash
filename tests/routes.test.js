@@ -1,6 +1,8 @@
 import { test, after, before, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { asService, closePools, ACTORS, VENDORS } from './helpers/db.js';
+import { asService, closePools, resetTransactionalState, ACTORS, VENDORS } from './helpers/db.js';
+import { seededVendorSession } from './helpers/sessions.js';
+import { paidOrder } from './helpers/flow.js';
 
 /**
  * Every major route, actually requested.
@@ -264,6 +266,97 @@ describe('route health', { skip: running ? false : `dev server not running at ${
 
   test('a vendor order board route is intact', async () => {
     await check(`/vendor/${ids.vendor}`, { allow404: true });
+  });
+
+  /**
+   * THE BUG THIS CATCHES. Every other test in this repository can be green
+   * while this screen 500s, and one was: the store's order detail rendered
+   * `handedToPartner`, an identifier a refactor had renamed out of existence,
+   * so opening any order from the board threw a ReferenceError and the vendor
+   * read "Something went wrong".
+   *
+   * NOTHING ELSE COULD SEE IT. The SQL suites prove vendor_order_detail()
+   * returns the right row, and it always did; the signed-out route checks above
+   * only ever reach the sign-in bounce, which is intact whatever the page does
+   * afterwards. The failure lived in a CLIENT component, which executes only
+   * when the whole pipeline actually renders it for a signed-in store.
+   *
+   * It was reported as a STUDENT vendor's problem, so both are asserted here.
+   * "Student" is the CUSTOMER capability — a customer_profiles row on the same
+   * identity — and it is granted below rather than assumed, because the seeded
+   * vendor identities hold no such row. The point of the pair is that the
+   * screen does not care: a store is a store.
+   */
+  describe('the store can open an order from its own board', () => {
+    const sessions = [];
+    let orderId = null;
+
+    before(async () => {
+      const order = await paidOrder({ vendorId: VENDORS.one, staff: ACTORS.vendor1Staff });
+      orderId = order.order_id;
+      // A STUDENT VENDOR: the same identity, plus the Customer capability.
+      await asService((c) =>
+        c.query(
+          `insert into public.customer_profiles (user_id, level) values ($1, '100')
+           on conflict (user_id) do nothing`,
+          [ACTORS.vendor1Staff]
+        )
+      );
+    });
+
+    after(async () => {
+      await asService((c) =>
+        c.query('delete from public.customer_profiles where user_id = $1', [ACTORS.vendor1Staff])
+      );
+      await Promise.all(sessions.map((session) => session.restore()));
+      // Orders are not DELETEd — order_events is append-only and the cascade
+      // trips its trigger. Truncating is how this suite keeps runs independent.
+      await resetTransactionalState();
+    });
+
+    /** The route as a signed-in browser would request it. */
+    async function checkAs(userId, path) {
+      const session = await seededVendorSession(userId);
+      sessions.push(session);
+      const res = await fetch(`${APP}${path}`, {
+        headers: {
+          cookie: Object.entries(session.cookies)
+            .map(([name, value]) => `${name}=${value}`)
+            .join('; '),
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(20000),
+      });
+      const body = res.status === 200 ? await res.text() : '';
+      return { status: res.status, body };
+    }
+
+    test('a student vendor opens their own order detail', async () => {
+      const { status, body } = await checkAs(
+        ACTORS.vendor1Staff,
+        `/vendor/${VENDORS.one}/orders/${orderId}`
+      );
+      assert.equal(status, 200, 'the store that owns this order must be able to read it');
+      assert.ok(
+        !ERROR_BOUNDARY.test(body),
+        'the order detail rendered the error boundary, which Next serves with a 200'
+      );
+      assert.ok(body.includes('Ready for pickup'), 'the one button a store has is missing');
+    });
+
+    /**
+     * ORDER DETAIL IS STILL SOMEBODY ELSE'S BUSINESS. vendor_order_detail()
+     * returns nothing to a store that does not own the order, so the page
+     * 404s rather than answering a permissions message that would confirm the
+     * order exists. Fixing the render must not have widened that by an inch.
+     */
+    test('another vendor cannot open it, and is not told it exists', async () => {
+      const { status } = await checkAs(
+        ACTORS.vendor2Staff,
+        `/vendor/${VENDORS.one}/orders/${orderId}`
+      );
+      assert.equal(status, 404, "a store must not reach another store's order");
+    });
   });
 
   /**

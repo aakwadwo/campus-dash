@@ -151,8 +151,6 @@ export default function OrderActions({ order, vendorId, handoffCode, scanUrl = n
         </Callout>
       ) : null}
 
-      {handedToPartner ? <Callout tone="good">Handed over. Nothing more to do.</Callout> : null}
-
       {completed ? (
         <div className="bg-good-bg rounded-card py-6">
           <Completion title={handoffLabel}>
