@@ -115,6 +115,8 @@ export default async function AdminCustomerPage({ params }) {
           name={c.full_name ?? c.phone}
           isSelf={c.user_id === me.user_id}
           orderCount={c.order_count ?? 0}
+          isAdmin={Boolean(c.is_admin)}
+          storeNames={c.vendor_names ?? []}
         />
       </Panel>
 

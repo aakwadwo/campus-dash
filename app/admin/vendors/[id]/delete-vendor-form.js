@@ -16,6 +16,12 @@ import { ConfirmButton } from '../../confirm';
  * history. A genuine pilot reset is scripts/purge-test-accounts, which runs as
  * the database owner and is deliberately not reachable from a browser.
  *
+ * WHICH IS WHY A STORE THAT HAS TRADED IS NOT OFFERED THE FORM AT ALL. The
+ * order count is already on the page, so the refusal can be read before the
+ * press rather than after it. The database still decides — it re-checks the
+ * orders and the settlement records this screen cannot see — and this only
+ * stops an admin spending a confirmation on a certain "no".
+ *
  * The owner's account goes with the store only if the store was the only thing
  * it held. Somebody who also orders lunch keeps their account and simply stops
  * having a store.
@@ -23,14 +29,27 @@ import { ConfirmButton } from '../../confirm';
 export default function DeleteVendorForm({ vendor, hasOwner, orderCount = 0 }) {
   const [state, action, pending] = useActionState(deleteVendorAction, {});
 
+  if (orderCount > 0) {
+    return (
+      <p className="text-muted text-sm">
+        {vendor.name} cannot be deleted because it has order or financial history: {orderCount}{' '}
+        order{orderCount === 1 ? '' : 's'} against it. The payment and settlement records behind
+        them are what reconcile the money. Set the status to SUSPENDED instead. It comes off the
+        marketplace and the records stay.
+      </p>
+    );
+  }
+
   return (
     <form action={action} className="grid gap-3 sm:max-w-xl">
       <input type="hidden" name="vendor_id" value={vendor.id} />
 
       <p className="text-sm">
-        {orderCount > 0
-          ? `${vendor.name} has ${orderCount} order${orderCount === 1 ? '' : 's'} against it, so it cannot be deleted. Set the status to SUSPENDED instead — it comes off the marketplace and the records stay.`
-          : `Deleting ${vendor.name} removes its menu, its photographs and its daily queue counter.${hasOwner ? ' The owner’s account goes too, unless it also orders or carries deliveries.' : ''} This cannot be undone.`}
+        Deleting {vendor.name} removes its menu, its photographs and its daily queue counter.
+        {hasOwner
+          ? ' The owner’s account goes too, unless it also orders or carries deliveries.'
+          : ''}{' '}
+        This cannot be undone.
       </p>
 
       <Field
