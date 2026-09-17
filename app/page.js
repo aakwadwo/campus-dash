@@ -51,8 +51,9 @@ export const dynamic = 'force-dynamic';
  * every vendor card, the runner is the one the Partner screens use, the receipt
  * is the one on the price breakdown. A person who has seen the rest of the
  * product has seen all three, which is the only thing an icon here is for.
- * Nothing moves, nothing is in a coloured circle, and the numbers still carry
- * the ordering — the mark is beside the step, not instead of it.
+ * Nothing moves and nothing is in a coloured circle. The list is still an <ol>,
+ * so the ordering is carried by the markup and by the reading order rather than
+ * by a printed number beside each mark.
  */
 const HOW_IT_WORKS = [
   [StoreIcon, 'Pick a vendor', 'Stores around campus, with what they have right now.'],
@@ -164,16 +165,12 @@ export default async function Home() {
         <Container size="wide" className="border-line mt-8 border-t pt-8 sm:mt-11 sm:pt-9">
           <h2 className="text-lg font-semibold tracking-tight sm:text-2xl">How it works</h2>
           <ol className="mt-5 grid gap-x-10 gap-y-5 sm:grid-cols-3">
-            {HOW_IT_WORKS.map(([Icon, title, body], index) => (
+            {HOW_IT_WORKS.map(([Icon, title, body]) => (
               <li key={title} className="flex gap-3.5 sm:block">
-                {/* The number and the mark read as one thing: same colour, same
-                    line, and on a phone they sit in the gutter the text is
-                    already indented past. */}
+                {/* The mark alone, in the gutter the text is already indented
+                    past on a phone. */}
                 <span className="text-brand-700 flex shrink-0 flex-col items-center gap-2 sm:mb-2 sm:flex-row sm:gap-2.5">
                   <Icon className="size-5" />
-                  <span className="text-sm font-semibold tabular-nums">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
                 </span>
                 <div className="min-w-0">
                   <h3 className="font-semibold">{title}</h3>
