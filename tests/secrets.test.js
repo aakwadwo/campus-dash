@@ -49,6 +49,9 @@ describe('server-only credentials', () => {
     // redirect checkout never talks to Paystack from the browser, and a
     // NEXT_PUBLIC_ copy would only invite an inline flow that skips the server.
     'PAYSTACK_PUBLIC_KEY',
+    // Sends mail at our cost, under our domain. Operational email is composed
+    // and sent entirely on the server; nothing client-side has any use for it.
+    'RESEND_API_KEY',
   ];
 
   test('none of them is ever read under a NEXT_PUBLIC_ name', () => {
@@ -68,6 +71,7 @@ describe('server-only credentials', () => {
       'SUPABASE_SERVICE_ROLE_KEY',
       'PAYSTACK_SECRET_KEY',
       'PAYSTACK_PUBLIC_KEY',
+      'RESEND_API_KEY',
     ]) {
       assert.match(
         config,
@@ -92,7 +96,7 @@ describe('server-only credentials', () => {
         else if (entry.endsWith('.js')) {
           const source = readFileSync(full, 'utf8');
           if (
-            /process\.env\.(ARKESEL_|PAYSTACK_|SUPABASE_SERVICE_ROLE_KEY|SEND_SMS_HOOK_SECRET)/.test(
+            /process\.env\.(ARKESEL_|PAYSTACK_|RESEND_|SUPABASE_SERVICE_ROLE_KEY|SEND_SMS_HOOK_SECRET)/.test(
               source
             )
           ) {
@@ -136,6 +140,8 @@ describe('server-only credentials', () => {
         '@/lib/payments',
         'paystack',
         'lib/settlement',
+        'lib/email',
+        '@/lib/email',
         'supabase/admin',
       ]) {
         assert.doesNotMatch(

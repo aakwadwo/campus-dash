@@ -137,6 +137,73 @@ mobile money or in cash, and naming the wrong one is worse than naming none.
 The capability decisions carry a `dedupeSubject` rather than an order id, so a
 double-clicked admin button cannot send the same congratulations twice.
 
+## Operational email, which is not an SMS and not for a customer
+
+One message goes out by **email**, and it is the only one: a vendor's Paystack
+subaccount was created. It is not addressed to a customer, a vendor or a
+Partner — it tells whoever runs the pilot that a store's payout plumbing now
+exists, so their share of every later charge is routed to them at the moment the
+customer pays.
+
+```
+syncPayoutSubaccount()            lib/settlement/destinations.js
+  → Paystack issues a code
+  → attachPayoutSubaccount()      the code is stored
+  → deferNotification(...)        after the response
+  → notifyAdminSubaccountCreated() lib/notifications/admin-email.js
+  → EmailProvider.send()          lib/email/
+  → notification_events           channel EMAIL, audience ADMIN
+```
+
+**It is a separate path from `notify()` on purpose.** That function is SMS end
+to end — it renders from `SMS_TEMPLATES`, skips a recipient with no phone
+number, and records every row as `CHANNEL.SMS`. Teaching it a second transport
+would mean rewriting the path every order notification already takes, to carry a
+message no order depends on.
+
+**Where it fires is the whole design.** `syncPayoutSubaccount()` has four exits
+and only one of them is a creation: a destination that is already registered
+returns early, a Paystack refusal is recorded and returns, and a provider with
+no subaccounts returns too. The email sits after the code has been stored and
+before success is returned, so it goes out once per subaccount that actually
+came into existence — never on a failure, and never again on a retry. The dedupe
+key is the subaccount code itself, which is the second belt: a genuinely NEW
+code (a vendor changed their number, so the old one was cleared) is a genuinely
+new notification, because that is a thing worth hearing about.
+
+**The recipient is `ADMIN_NOTIFICATION_EMAIL`, deliberately not an
+administrator's sign-in address.** That is a credential; who receives
+operational mail is a different concern and should be changeable without
+touching who can sign in. Unset, nothing is sent and nothing is recorded — a
+quiet deployment rather than a broken one.
+
+The account number is masked to its last three digits, exactly as
+`my_payout_destination()` and `admin_payout_readiness()` mask it. An email sits
+in an inbox for years.
+
+### Setting it up, which is two variables
+
+`EMAIL_PROVIDER=fake` prints the message to the server console and costs
+nothing. That is the default and is enough for development.
+
+To send for real, the whole setup is:
+
+```
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_...
+```
+
+**No domain to verify and no sending address to configure.** `EMAIL_FROM_ADDRESS`
+defaults to Resend's shared onboarding sender, which needs neither. The one
+string attached is that this sender may only deliver to the address the Resend
+account was created with — anything else is a 403 — so sign up to Resend with
+the same address as `ADMIN_NOTIFICATION_EMAIL`. For a pilot notifying one
+person, that is the setup rather than a limitation. Set `EMAIL_FROM_ADDRESS`
+only once a real domain is verified on the account.
+
+Swapping providers is one new file in `lib/email/` and one case in the factory,
+exactly as it is for SMS.
+
 ## Two things that must never be in an SMS
 
 **A customer's phone number.** It was in `PARTNER_PICKED_UP`. An SMS is
