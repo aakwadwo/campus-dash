@@ -14,6 +14,7 @@ import {
   FilterChip,
 } from '../ui';
 import CreateVendorForm from './create-vendor-form';
+import CreateVendorAccountForm from './create-vendor-account-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -198,6 +199,17 @@ export default async function VendorsPage({ searchParams }) {
         </Link>
         .
       </p>
+
+      {/* TWO WAYS TO ADD A STORE, AND THEY ARE NOT THE SAME THING. The first
+          gives somebody a dashboard and a sign-in; the second is a name on a
+          list. Keeping them apart on the screen is what stops a catalogue entry
+          being created for a store that is waiting to be able to trade. */}
+      <Panel
+        title="Add a vendor account"
+        description="For a store recruited in person. It gets an account the owner signs in to with their phone, and lands in the queue above awaiting approval — approve it on its own page, which is also what texts the owner."
+      >
+        <CreateVendorAccountForm locations={locations ?? []} categories={categories} />
+      </Panel>
 
       <Panel
         title="Add a catalogue entry"

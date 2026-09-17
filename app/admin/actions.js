@@ -96,6 +96,90 @@ export async function createVendorAction(_prev, formData) {
   );
 }
 
+/**
+ * Creates a store that HAS AN ACCOUNT, for a vendor recruited in person.
+ *
+ * The other door, /vendor/signup, is unchanged and is still how a business
+ * registers itself. This is for the store that will never type its own details
+ * in: an administrator takes them at the counter, the owner signs in with the
+ * number that was verified there, and the store lands PENDING_APPROVAL in the
+ * SAME queue — so approval, the audit row and the welcome SMS are the existing
+ * ones rather than a second path that skips them.
+ */
+export async function createVendorAccountAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  const phone = normaliseGhanaPhone(str(formData, 'phone') ?? '');
+  if (!phone) {
+    return { ok: false, message: 'Enter a valid Ghanaian phone number, e.g. 020 123 4567.' };
+  }
+
+  return run(
+    () =>
+      admin.createVendorAccount({
+        storeName: str(formData, 'name'),
+        ownerPhone: phone,
+        applicantName: str(formData, 'applicant_name'),
+        categoryId: str(formData, 'category_id'),
+        description: str(formData, 'description'),
+        ownerIsStudent: formData.get('owner_is_student') === 'yes',
+        locationId: str(formData, 'location_id'),
+        locationNote: str(formData, 'location_note'),
+        walkMinutes: num(formData, 'walk_minutes'),
+        reason: str(formData, 'reason'),
+      }),
+    (v) => `Created ${v.name}. It is awaiting approval — approve it on its own page.`,
+    ['/admin/vendors']
+  );
+}
+
+/**
+ * Deletes a store that has never traded, and the owner identity if the store
+ * was the only thing it held.
+ *
+ * WHAT IT WILL NOT DO IS DECIDED IN SQL. admin_delete_vendor() refuses a store
+ * with orders or settlement records and says how many, because those rows are
+ * what reconciles the money. Suspension is the control for a store that has
+ * traded.
+ */
+export async function deleteVendorAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  return run(
+    () =>
+      admin.deleteVendor({
+        vendorId: str(formData, 'vendor_id'),
+        reason: str(formData, 'reason'),
+      }),
+    (result) => `Deleted ${result?.name ?? 'the store'}.`,
+    ['/admin/vendors']
+  );
+}
+
+/**
+ * Deletes an account that has never ordered, with every capability row on it.
+ *
+ * The same refusals, in the same place: an administrator, the caller, a store
+ * owner, or anybody with an order, a settlement record or a rating against
+ * them is refused by the database with a sentence saying why.
+ */
+export async function deleteCustomerAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  return run(
+    () =>
+      admin.deleteCustomer({
+        userId: str(formData, 'user_id'),
+        reason: str(formData, 'reason'),
+      }),
+    (result) => `Deleted ${result?.name ?? 'the account'}.`,
+    ['/admin/customers']
+  );
+}
+
 export async function updateVendorAction(_prev, formData) {
   const denied = await authoriseAdminAction();
   if (denied) return denied;

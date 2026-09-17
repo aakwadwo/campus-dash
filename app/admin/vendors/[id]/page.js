@@ -10,6 +10,7 @@ import VendorScansForm from './vendor-scans-form';
 import VendorReviewForm from './vendor-review-form';
 import VendorImageForms from './vendor-image-forms';
 import MenuForms from './menu-forms';
+import DeleteVendorForm from './delete-vendor-form';
 import { vendorImageUrl } from '@/lib/verification/documents';
 
 export const dynamic = 'force-dynamic';
@@ -54,20 +55,25 @@ export default async function VendorDetailPage({ params }) {
   }
   if (!vendor) notFound();
 
-  const [menuResult, locationsResult, imagesResult, categoriesResult] = await Promise.all([
-    supabase.from('menu_items').select('*').eq('vendor_id', id).order('sort_order'),
-    supabase.from('locations').select('id, name, kind, is_active').order('sort_order'),
-    supabase
-      .from('vendor_images')
-      .select('id, storage_path, caption, sort_order')
-      .eq('vendor_id', id)
-      .order('sort_order'),
-    supabase.from('vendor_categories').select('id, name, is_active').order('sort_order'),
-  ]);
+  const [menuResult, locationsResult, imagesResult, categoriesResult, orderCountResult] =
+    await Promise.all([
+      supabase.from('menu_items').select('*').eq('vendor_id', id).order('sort_order'),
+      supabase.from('locations').select('id, name, kind, is_active').order('sort_order'),
+      supabase
+        .from('vendor_images')
+        .select('id, storage_path, caption, sort_order')
+        .eq('vendor_id', id)
+        .order('sort_order'),
+      supabase.from('vendor_categories').select('id, name, is_active').order('sort_order'),
+      // Only the COUNT: whether this store has ever traded is the one thing the
+      // delete panel needs, and admin_delete_vendor() checks it again anyway.
+      supabase.from('orders').select('id', { count: 'exact', head: true }).eq('vendor_id', id),
+    ]);
 
   const menu = menuResult.error ? null : (menuResult.data ?? []);
   const locations = locationsResult.error ? null : (locationsResult.data ?? []);
   const categories = categoriesResult.error ? [] : (categoriesResult.data ?? []);
+  const orderCount = orderCountResult.error ? 0 : (orderCountResult.count ?? 0);
   const images = imagesResult.error
     ? null
     : (imagesResult.data ?? []).map((image) => ({
@@ -207,6 +213,19 @@ export default async function VendorDetailPage({ params }) {
             }))}
           />
         )}
+      </Panel>
+
+      {/* LAST ON THE PAGE, and not next to the status control. Suspension and
+          deletion look similar in a list of buttons and are nothing alike. */}
+      <Panel
+        title="Delete this store"
+        description="For a store that never traded. One that has orders against it is suspended, never deleted — the payment and settlement records behind those orders are what reconcile the money."
+      >
+        <DeleteVendorForm
+          vendor={vendor}
+          hasOwner={Boolean(vendor.owner_user_id)}
+          orderCount={orderCount}
+        />
       </Panel>
     </>
   );

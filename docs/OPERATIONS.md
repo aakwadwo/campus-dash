@@ -61,6 +61,25 @@ are confirming is that they are the student the account says they are.
 
 Reject anything you are unsure about. A rejected applicant can re-apply.
 
+## Adding and removing accounts
+
+**A store recruited in person.** `/admin/vendors` → _Add a vendor account_. It
+takes the owner's phone number, creates the sign-in identity and puts the store
+in the review queue above — so approving it is the ordinary approval, and the
+owner gets the ordinary welcome SMS. _Add a catalogue entry_ underneath is a
+different thing and stays one: a restaurant a scan is fetched from, with no
+account and no dashboard.
+
+**Removing one.** The delete panel at the bottom of a vendor's page and of a
+customer's page removes an account that never traded — a duplicate, a test, a
+sign-up from the wrong address. Both **refuse** an account with orders against
+it and say how many, because the payments and allocations behind those orders
+are what reconcile the money. For anyone who has traded the control is
+SUSPENSION, on the same pages.
+
+A real pilot reset is `node scripts/purge-test-accounts.mjs`, which needs the
+database owner's credentials and is not reachable from the console at all.
+
 ## What runs by itself
 
 | Job                                 | Every  | Does                                                                   |

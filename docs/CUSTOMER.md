@@ -16,8 +16,9 @@ Placing an order needs the **CUSTOMER capability**, which is a
 
 - first and last name
 - school email — it must end **exactly** `@acity.edu.gh` — and a code sent to it
-- **student or staff**, and for a student the year they expect to graduate
-- gender, which is optional
+- **student or staff**, and for a student the year they expect to graduate —
+  one of **2027, 2028, 2029, 2030**
+- gender, **male or female**, which is required
 - a phone number
 - acceptance of the current customer terms
 
@@ -31,6 +32,24 @@ to move themselves up, so an account created in first year claimed to be a first
 year for ever. The year somebody expects to finish is the same fact stated so
 that it stays true for as long as they are here. The column survives, nullable
 and unwritten, so an older row still says what it said.
+
+**Four years, not a window.** The offered years were once computed from the
+current date — this year through this year plus six — so the list never needed
+editing in September. That was right when the question was "roughly when do you
+finish"; the pilot asks which of four cohorts somebody is in, and five of those
+seven years belonged to nobody on campus. `GRADUATION_YEARS` in
+`lib/auth/customer-signup.js` and the literal list in
+`complete_customer_onboarding()` hold the same four and move together. The CHECK
+constraint on the table is deliberately wider (2000–2100), because an account
+created before the change carries a year outside the list and a constraint that
+refused it would make that row unwritable.
+
+**Gender is male or female, and it is asked.** It used to be optional, with a
+"prefer not to say" option that stored a null — and the only reason to hold the
+column is to be counted, which a column a third of the rows decline cannot be.
+The enum was always exactly those two values; what changed is that the question
+may no longer be skipped. The column stays nullable, so a row written before the
+change is still a valid row, and nothing backfills a gender nobody stated.
 
 `complete_customer_onboarding()` writes all of it in one transaction, including
 the terms acceptance — a capability granted before the agreement it depends on

@@ -289,6 +289,11 @@ describe('schema invariants', () => {
       'admin_create_location',
       'admin_create_menu_item',
       'admin_create_vendor',
+      // Creates a store WITH an owner, for one recruited in person. The
+      // identity itself is provisioned through the auth admin API by the
+      // server; this only attaches it to a PENDING_APPROVAL store, so the
+      // existing review queue and welcome SMS still apply.
+      'admin_create_vendor_account',
       'admin_create_vendor_category',
       'admin_customer_detail',
       'admin_customer_rewards',
@@ -297,8 +302,14 @@ describe('schema invariants', () => {
       'admin_dashboard',
       'admin_dashboard_totals',
       'admin_purge_test_history',
+      // DELETION FROM THE CONSOLE, and both are narrow on purpose: each refuses
+      // an account or a store with orders, settlement records or ratings, so
+      // nothing that reconciles money can be removed by a button. The sweeping
+      // version — admin_purge_test_accounts — is still reachable by nobody.
+      'admin_delete_customer',
       'admin_delete_location',
       'admin_delete_menu_item',
+      'admin_delete_vendor',
       'admin_exceptions',
       'admin_failed_notifications',
       'admin_ledger',

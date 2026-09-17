@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { uploadVerificationDocument, uploadScan } from '@/lib/verification/documents';
+import { toUserError } from '@/lib/errors';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,7 +41,14 @@ export async function POST(request) {
     return NextResponse.json({ path });
   } catch (error) {
     // Detail stays in the log; the person gets something they can act on.
-    console.error('[verification-documents] upload failed:', error.message);
-    return NextResponse.json({ error: error.message }, { status: 400 });
+    //
+    // THROUGH toUserError(), not straight out. Half of what this can throw is
+    // ours and written for a person — "Please use a JPEG, PNG or WebP image."
+    // — and the other half is a storage client's own text, which has no place
+    // in a response. The one vetting list decides which is which, and it also
+    // decides the status: a file that is too large is the caller's to fix, a
+    // storage outage is not.
+    const { message, status } = toUserError(error, 'document upload');
+    return NextResponse.json({ error: message }, { status });
   }
 }

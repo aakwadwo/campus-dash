@@ -156,8 +156,11 @@ describe('account model — identity and capabilities', () => {
       // the four years it describes, because nobody comes back in September to
       // move themselves up; the year somebody expects to finish stays true.
       affiliation = 'STUDENT',
-      graduationYear = new Date().getFullYear() + 2,
-      gender = null,
+      graduationYear = 2028,
+      // REQUIRED SINCE THE FOUR-YEAR INTAKE LANDED. Gender used to be optional,
+      // with a "prefer not to say" that stored a null; the only reason to hold
+      // the column is to count it.
+      gender = 'MALE',
       phone = null,
       termsId,
       // LEGACY, and still passed through: the column and its unique index
@@ -304,17 +307,21 @@ describe('account model — identity and capabilities', () => {
     // A STUDENT ID NUMBER IS NOT AMONG THEM any more, and its absence is
     // asserted separately below rather than by a missing row here.
     //
-    // [first, last, phone, affiliation, graduationYear]
-    const thisYear = new Date().getFullYear();
+    // [first, last, phone, affiliation, graduationYear, gender]
     const cases = [
-      [['', 'Mensah', '+233208880031', 'STUDENT', thisYear + 2], /first name is required/],
-      [['Kwame', '', '+233208880031', 'STUDENT', thisYear + 2], /last name is required/],
-      [['Kwame', 'Mensah', '', 'STUDENT', thisYear + 2], /phone number is required/],
-      [['Kwame', 'Mensah', '0201234567', 'STUDENT', thisYear + 2], /valid phone number/],
-      // A STUDENT MUST NAME A YEAR, and it has to be one that could be true.
-      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', null], /expect to graduate/],
-      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 1999], /does not look right/],
-      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', thisYear + 40], /does not look right/],
+      [['', 'Mensah', '+233208880031', 'STUDENT', 2028, 'MALE'], /first name is required/],
+      [['Kwame', '', '+233208880031', 'STUDENT', 2028, 'MALE'], /last name is required/],
+      [['Kwame', 'Mensah', '', 'STUDENT', 2028, 'MALE'], /phone number is required/],
+      [['Kwame', 'Mensah', '0201234567', 'STUDENT', 2028, 'MALE'], /valid phone number/],
+      // A STUDENT MUST NAME ONE OF THE FOUR OFFERED YEARS. The list is fixed
+      // rather than a rolling window, because the pilot asks which of four
+      // cohorts somebody is in — see lib/auth/customer-signup.js.
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', null, 'MALE'], /expect to graduate/],
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 1999, 'MALE'], /years offered/],
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 2026, 'MALE'], /years offered/],
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 2031, 'MALE'], /years offered/],
+      // AND A GENDER, which is no longer a question that may be skipped.
+      [['Kwame', 'Mensah', '+233208880031', 'STUDENT', 2028, null], /male or female/],
     ];
 
     for (const [args, expected] of cases) {
@@ -322,7 +329,6 @@ describe('account model — identity and capabilities', () => {
         asUser(id, (c) =>
           c.query('select public.complete_customer_onboarding($1,$2,$3,$4,$5,$6,$7)', [
             ...args,
-            null,
             terms,
           ])
         )

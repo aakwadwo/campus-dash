@@ -5,6 +5,7 @@ import { customerDetail } from '@/lib/admin';
 import { requireAdmin } from '@/lib/auth/session';
 import { Panel, Badge, Facts, Fact, Table, Row, Cell, Cedis, Empty, when } from '../../ui';
 import AccountSuspension from '../../account-suspension';
+import DeleteCustomerForm from './delete-customer-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,10 +26,11 @@ export const dynamic = 'force-dynamic';
  * (A PARTNER application is different — a reviewer there checks a photographed
  * ID card against the account, and that check is untouched.)
  *
- * THE ONE EXCEPTION to "no forms here" is suspension, and it is not an edit to
- * the customer's identity: it flips `users.is_suspended`, which is an account
- * fact rather than a profile field, through an audited admin function that
- * re-checks is_admin() in the database.
+ * THE TWO EXCEPTIONS to "no forms here" are suspension and deletion, and
+ * neither is an edit to the customer's identity. Suspension flips
+ * `users.is_suspended`, an account fact rather than a profile field. Deletion
+ * removes the identity outright, and only for an account that never ordered —
+ * both through audited admin functions that re-check is_admin() in the database.
  */
 export default async function AdminCustomerPage({ params }) {
   const { userId } = await params;
@@ -101,6 +103,18 @@ export default async function AdminCustomerPage({ params }) {
               ? 'ordering AND carrying deliveries'
               : 'ordering, and anything else this account can do'
           }
+        />
+      </Panel>
+
+      <Panel
+        title="Delete this account"
+        description="For a sign-up that should not have happened. An account that has ordered is suspended, never deleted — the payment and settlement records behind those orders are what reconcile the money."
+      >
+        <DeleteCustomerForm
+          userId={c.user_id}
+          name={c.full_name ?? c.phone}
+          isSelf={c.user_id === me.user_id}
+          orderCount={c.order_count ?? 0}
         />
       </Panel>
 

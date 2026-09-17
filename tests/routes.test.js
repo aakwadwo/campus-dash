@@ -162,7 +162,7 @@ describe('route health', { skip: running ? false : `dev server not running at ${
   test('/signup renders the whole customer sign-up form', async () => {
     // NOT A STATUS CHECK. /signup answering 200 says nothing about whether a
     // student can sign up: the page could render an empty card, be missing the
-    // level options, or have lost the terms checkbox, and a status assertion
+    // graduation years, or have lost the terms checkbox, and a status assertion
     // would call all three healthy. Every field the flow requires is named.
     const { body } = await check('/signup');
 
@@ -170,18 +170,30 @@ describe('route health', { skip: running ? false : `dev server not running at ${
       'name="first_name"',
       'name="last_name"',
       'name="email"',
-      'name="level"',
+      // A GRADUATION YEAR RATHER THAN A LEVEL. `level` was wrong for three of
+      // the four years it described, because nobody comes back in September to
+      // move themselves up; this test asked for the field long after the form
+      // stopped having it.
+      'name="affiliation"',
+      'name="graduation_year"',
+      'name="gender"',
       'name="phone"',
       'name="accept_terms"',
     ]) {
       assert.ok(body.includes(field), `the sign-up form is missing ${field}`);
     }
 
-    // All four levels. A missing one is a whole year group that cannot sign
+    // All four cohorts. A missing one is a whole year group that cannot sign
     // up, and nothing else in the suite would notice.
-    for (const level of ['100', '200', '300', '400']) {
-      assert.ok(new RegExp(`value=\\"${level}\\"`).test(body), `level ${level} is not offered`);
+    for (const year of ['2027', '2028', '2029', '2030']) {
+      assert.ok(new RegExp(`value=\\"${year}\\"`).test(body), `${year} is not offered`);
     }
+
+    // And both answers to a question that no longer has a third.
+    for (const gender of ['MALE', 'FEMALE']) {
+      assert.ok(new RegExp(`value=\\"${gender}\\"`).test(body), `${gender} is not offered`);
+    }
+    assert.ok(!/Prefer not to say/i.test(body), 'there is no third option');
 
     assert.match(body, /@acity\.edu\.gh/, 'the school domain is stated on the form');
     assert.match(body, /Send verification code/i, 'the next step is a code, not a password');

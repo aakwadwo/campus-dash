@@ -855,6 +855,81 @@ $$;
 ALTER FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text" DEFAULT NULL::"text", "p_category_id" "uuid" DEFAULT NULL::"uuid", "p_description" "text" DEFAULT NULL::"text", "p_owner_is_student" boolean DEFAULT NULL::boolean, "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_owner  public.users%rowtype;
+  v_vendor public.vendors%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if nullif(btrim(coalesce(p_store_name, '')), '') is null then
+    raise exception 'a store name is required' using errcode = 'check_violation';
+  end if;
+  if nullif(btrim(coalesce(p_reason, '')), '') is null then
+    raise exception 'a reason is required — it is what the audit log shows'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_owner from public.users where id = p_owner_user_id;
+  if not found then
+    raise exception 'no such account' using errcode = 'no_data_found';
+  end if;
+  if coalesce(v_owner.phone, '') = '' then
+    raise exception 'the owner account has no phone number to sign in with'
+      using errcode = 'check_violation';
+  end if;
+
+  -- ONE ACCOUNT, ONE STORE. vendors_owner_unique says the same thing; this is
+  -- the sentence an operator reads instead of a constraint name.
+  if exists (select 1 from public.vendors v where v.owner_user_id = p_owner_user_id) then
+    raise exception 'that account already owns a store' using errcode = 'unique_violation';
+  end if;
+
+  -- An administrator is not a shopkeeper. Operational access must not depend on
+  -- an SMS, and an admin row is the one the audit trail keys off.
+  if v_owner.is_admin then
+    raise exception 'an administrator account cannot own a store'
+      using errcode = 'check_violation';
+  end if;
+
+  insert into public.vendors (
+    name, phone, status, is_accepting_orders,
+    owner_user_id, category_id, description, applicant_name, owner_is_student,
+    location_id, location_note, walk_minutes_to_campus, submitted_at
+  )
+  values (
+    btrim(p_store_name), v_owner.phone, 'PENDING_APPROVAL', false,
+    p_owner_user_id,
+    coalesce(p_category_id, '40000000-0000-4000-8000-000000000001'),
+    nullif(btrim(coalesce(p_description, '')), ''),
+    coalesce(nullif(btrim(coalesce(p_applicant_name, '')), ''), v_owner.full_name),
+    p_owner_is_student,
+    p_location_id, nullif(btrim(coalesce(p_location_note, '')), ''),
+    p_walk_minutes_to_campus, now()
+  )
+  returning * into v_vendor;
+
+  perform public.log_admin_action(
+    'VENDOR_ACCOUNT_CREATE', 'vendor', v_vendor.id, p_reason, null, to_jsonb(v_vendor),
+    jsonb_build_object('owner_user_id', p_owner_user_id)
+  );
+
+  return v_vendor;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text", "p_category_id" "uuid", "p_description" "text", "p_owner_is_student" boolean, "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text", "p_category_id" "uuid", "p_description" "text", "p_owner_is_student" boolean, "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) IS 'Creates a store that has an OWNER, for a vendor recruited in person. The identity is provisioned by the caller through the auth admin API and passed in; this attaches it to a new PENDING_APPROVAL store so the existing review queue, approval and welcome SMS all apply unchanged. Administrator only, re-checked in the body, audited.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."vendor_categories" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "slug" "text" NOT NULL,
@@ -1247,6 +1322,145 @@ ALTER FUNCTION "public"."admin_dashboard_totals"() OWNER TO "postgres";
 COMMENT ON FUNCTION "public"."admin_dashboard_totals"() IS 'Lifetime totals for the operations dashboard — orders, sales, the vendor and Partner shares, and the pending Partner payout — summed from the existing payments, allocations and payouts ledger. Returns NULL for a non-administrator. Administrator only.';
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_user   public.users%rowtype;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_orders integer;
+  v_paths  jsonb;
+  v_counts jsonb := '{}'::jsonb;
+  v_n      integer;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if v_reason is null then
+    raise exception 'a reason is required — it is what the audit log shows'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_user from public.users where id = p_user_id;
+  if not found then
+    raise exception 'no such account' using errcode = 'no_data_found';
+  end if;
+
+  if p_user_id = auth.uid() then
+    raise exception 'an administrator cannot delete their own account'
+      using errcode = 'check_violation';
+  end if;
+
+  if v_user.is_admin
+     or exists (select 1 from public.admin_actions a where a.admin_user_id = p_user_id) then
+    raise exception 'an administrator account cannot be deleted here'
+      using errcode = 'check_violation';
+  end if;
+
+  if exists (select 1 from public.vendors v where v.owner_user_id = p_user_id) then
+    raise exception 'this account owns a store. Delete the store first.'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  select count(*) into v_orders
+    from public.orders o
+   where o.customer_id = p_user_id or o.partner_id = p_user_id;
+  if v_orders > 0 then
+    raise exception
+      'cannot delete: % order(s) involve this account, and deleting them would delete the money records that reconcile them. Suspend the account instead.',
+      v_orders using errcode = 'foreign_key_violation';
+  end if;
+
+  if exists (select 1 from public.allocations a where a.payee_id = p_user_id)
+     or exists (select 1 from public.payouts p where p.payee_id = p_user_id) then
+    raise exception
+      'cannot delete: this account has settlement records. Suspend it instead.'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  -- A rating is somebody else's statement about a delivery. With no orders
+  -- there can be none, and if there is one it is not this call's to erase.
+  if exists (
+    select 1 from public.partner_ratings r
+     where r.partner_id = p_user_id or r.customer_id = p_user_id
+  ) then
+    raise exception 'cannot delete: this account has delivery ratings against it.'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  -- The object paths, read before the rows that name them are gone. Both
+  -- Partner document columns: a current application has only a student ID, but
+  -- an older one also has a face photograph, and the one that is missed stays
+  -- in storage for ever once the row naming it is deleted.
+  select jsonb_build_object(
+    'partner-documents',
+      coalesce((select jsonb_agg(x.path)
+                  from public.partner_profiles pp,
+                       lateral (values (pp.student_id_image_path), (pp.face_image_path)) as x(path)
+                 where pp.user_id = p_user_id and x.path is not null), '[]'::jsonb),
+    'scan-documents',
+      coalesce((select jsonb_agg(s.image_path) from public.order_scans s
+                 where s.customer_id = p_user_id and s.image_path is not null), '[]'::jsonb)
+  ) into v_paths;
+
+  -- The append-only rows, through the existing audited mechanism. It opens and
+  -- closes its own transaction-local door; nothing here touches it.
+  v_n := public.admin_purge_test_history(array[p_user_id], '{}'::uuid[], v_reason);
+  v_counts := v_counts || jsonb_build_object('notification_events', v_n);
+
+  delete from public.order_scans s where s.customer_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('order_scans', v_n);
+
+  delete from public.idempotency_keys k where k.user_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('idempotency_keys', v_n);
+
+  delete from public.customer_rewards r where r.user_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('customer_rewards', v_n);
+
+  delete from public.terms_acceptances t where t.user_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('terms_acceptances', v_n);
+
+  -- PARTNER BEFORE CUSTOMER. The foreign key between them is RESTRICT.
+  delete from public.partner_profiles p where p.user_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('partner_profiles', v_n);
+
+  delete from public.customer_profiles c where c.user_id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('customer_profiles', v_n);
+
+  -- The identity. public.users cascades from auth.users, and so do the
+  -- account's sessions, identities and factors.
+  delete from auth.users u where u.id = p_user_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('auth_users', v_n);
+
+  perform public.log_admin_action(
+    'CUSTOMER_DELETE', 'user', p_user_id, v_reason, to_jsonb(v_user), null,
+    jsonb_build_object('counts', v_counts, 'storage_paths', v_paths)
+  );
+
+  return jsonb_build_object(
+    'name', coalesce(v_user.full_name, v_user.phone, v_user.email),
+    'counts', v_counts,
+    'storage_paths', v_paths
+  );
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") IS 'Deletes an account that has never ordered, with every capability row built on it, in the order the foreign keys require. Refuses an administrator, the caller, a store owner, an account with orders, settlement records or delivery ratings. Administrator only, re-checked in the body, audited. Returns the storage object paths the caller must remove through the Storage API.';
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -1335,6 +1549,119 @@ $$;
 
 
 ALTER FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_vendor  public.vendors%rowtype;
+  v_owner   public.users%rowtype;
+  v_reason  text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_orders  integer;
+  v_paths   jsonb;
+  v_counts  jsonb := '{}'::jsonb;
+  v_n       integer;
+  v_owner_deleted boolean := false;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if v_reason is null then
+    raise exception 'a reason is required — it is what the audit log shows'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_vendor from public.vendors where id = p_vendor_id;
+  if not found then
+    raise exception 'vendor not found' using errcode = 'no_data_found';
+  end if;
+
+  select count(*) into v_orders from public.orders where vendor_id = p_vendor_id;
+  if v_orders > 0 then
+    raise exception
+      'cannot delete: % order(s) belong to this store, and deleting them would delete the money records that reconcile them. Suspend the store instead.',
+      v_orders using errcode = 'foreign_key_violation';
+  end if;
+
+  -- Belt as well as braces: a settlement row for a store with no orders should
+  -- not exist, and if one does it is the thing to look at before deleting.
+  if exists (select 1 from public.allocations a where a.payee_id = p_vendor_id)
+     or exists (select 1 from public.payouts p where p.payee_id = p_vendor_id) then
+    raise exception
+      'cannot delete: this store has settlement records. Suspend it instead.'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  -- The object paths, read before the rows that name them are gone.
+  select coalesce(jsonb_agg(i.storage_path) filter (where i.storage_path is not null), '[]'::jsonb)
+    into v_paths
+    from public.vendor_images i
+   where i.vendor_id = p_vendor_id;
+
+  select count(*) into v_n from public.menu_items where vendor_id = p_vendor_id;
+  v_counts := v_counts || jsonb_build_object('menu_items', v_n);
+  select count(*) into v_n from public.vendor_images where vendor_id = p_vendor_id;
+  v_counts := v_counts || jsonb_build_object('vendor_images', v_n);
+  select count(*) into v_n from public.vendor_order_counters where vendor_id = p_vendor_id;
+  v_counts := v_counts || jsonb_build_object('vendor_order_counters', v_n);
+
+  -- Where the money would have gone. No payout exists, so nothing is orphaned.
+  delete from public.payout_destinations d where d.payee_id = p_vendor_id;
+  get diagnostics v_n = row_count;
+  v_counts := v_counts || jsonb_build_object('payout_destinations', v_n);
+
+  -- Menu items, photographs and the daily queue counter cascade from here.
+  delete from public.vendors v where v.id = p_vendor_id;
+  v_counts := v_counts || jsonb_build_object('vendors', 1);
+
+  if v_vendor.owner_user_id is not null then
+    select * into v_owner from public.users where id = v_vendor.owner_user_id;
+
+    -- Everything that would make this identity more than the store it just
+    -- lost. Any one of them and the account stays exactly as it is.
+    if found
+       and not v_owner.is_admin
+       and v_owner.id <> auth.uid()
+       and not exists (select 1 from public.customer_profiles c where c.user_id = v_owner.id)
+       and not exists (select 1 from public.partner_profiles p where p.user_id = v_owner.id)
+       and not exists (select 1 from public.vendors v2 where v2.owner_user_id = v_owner.id)
+       and not exists (select 1 from public.orders o
+                        where o.customer_id = v_owner.id or o.partner_id = v_owner.id)
+       and not exists (select 1 from public.admin_actions a where a.admin_user_id = v_owner.id)
+    then
+      perform public.admin_purge_test_history(array[v_owner.id], '{}'::uuid[], v_reason);
+
+      delete from public.terms_acceptances t where t.user_id = v_owner.id;
+      -- public.users cascades from auth.users, and so do the account's
+      -- sessions, identities and factors.
+      delete from auth.users u where u.id = v_owner.id;
+      v_owner_deleted := true;
+    end if;
+  end if;
+
+  v_counts := v_counts || jsonb_build_object('owner_account_deleted', v_owner_deleted);
+
+  perform public.log_admin_action(
+    'VENDOR_DELETE', 'vendor', p_vendor_id, v_reason, to_jsonb(v_vendor), null,
+    jsonb_build_object('counts', v_counts, 'storage_paths', v_paths)
+  );
+
+  return jsonb_build_object(
+    'name', v_vendor.name,
+    'counts', v_counts,
+    'storage_paths', jsonb_build_object('vendor-images', v_paths)
+  );
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") IS 'Deletes a store that has never traded, with its menu, photographs, queue counter and payout destination, and the owner identity if the store was the only thing it held. Refuses a store with orders or settlement records — suspend those instead. Administrator only, re-checked in the body, audited. Returns the storage object paths the caller must remove through the Storage API.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_exceptions"("p_limit" integer DEFAULT 200) RETURNS TABLE("kind" "text", "order_id" "uuid", "order_number" "text", "order_type" "public"."order_type", "subject" "text", "detail" "text", "amount_pesewas" bigint, "requires_decision" boolean, "since" timestamp with time zone)
@@ -4466,20 +4793,24 @@ begin
     raise exception 'your last name is required' using errcode = 'check_violation';
   end if;
 
-  -- WHERE THE LEVEL CHECK USED TO BE. A student says when they expect to
-  -- finish; staff do not graduate and are not asked. The CHECK constraint on
-  -- the table says the same thing independently — this is the sentence a
-  -- person reads.
+  -- A student says which of the four cohorts they are in; staff do not
+  -- graduate and are not asked. The offered list and this check are the same
+  -- list, so a year the form cannot offer is a year this refuses.
   if p_affiliation = 'STUDENT' then
     if p_graduation_year is null then
       raise exception 'tell us the year you expect to graduate'
         using errcode = 'check_violation';
     end if;
-    if p_graduation_year < extract(year from now())::integer
-       or p_graduation_year > extract(year from now())::integer + 10 then
-      raise exception 'that graduation year does not look right'
+    if p_graduation_year not in (2027, 2028, 2029, 2030) then
+      raise exception 'choose one of the graduation years offered'
         using errcode = 'check_violation';
     end if;
+  end if;
+
+  -- MALE OR FEMALE, and one of them is answered. See the note at the top.
+  if p_gender is null then
+    raise exception 'tell us whether you are male or female'
+      using errcode = 'check_violation';
   end if;
 
   -- The phone is how a Partner reaches somebody standing outside their door
@@ -4518,7 +4849,12 @@ begin
       raise exception 'no profile for this account' using errcode = 'no_data_found';
     end if;
   exception when unique_violation then
-    -- Two different constraints, two different mistakes, two different fixes.
+    -- TWO DIFFERENT CONSTRAINTS, TWO DIFFERENT MISTAKES, and the distinction is
+    -- kept HERE, in the log, where it is the thing that makes a support call
+    -- answerable. What the person is shown is decided in lib/errors.js, and it
+    -- deliberately no longer says which detail collided or that another account
+    -- holds it — that would answer "is this number registered?" for anybody who
+    -- typed one. The uniqueness rule itself is untouched.
     if sqlerrm like '%users_phone%' then
       raise exception 'that phone number is already used by another Campus Dash account'
         using errcode = 'unique_violation';
@@ -4542,9 +4878,6 @@ begin
     on conflict (user_id) do update
        set affiliation     = excluded.affiliation,
            graduation_year = excluded.graduation_year,
-           -- A VALUE ALREADY GIVEN IS KEPT when a re-run omits it. A later
-           -- screen that does not ask a question must not erase its answer,
-           -- which is why the legacy student ID behaved this way too.
            gender          = coalesce(excluded.gender, public.customer_profiles.gender),
            student_id_number = coalesce(excluded.student_id_number,
                                         public.customer_profiles.student_id_number)
@@ -4565,6 +4898,9 @@ $_$;
 
 
 ALTER FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_phone" "text", "p_affiliation" "public"."campus_affiliation", "p_graduation_year" integer, "p_gender" "public"."customer_gender", "p_terms_id" "uuid", "p_student_id_number" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."complete_customer_onboarding"("p_first_name" "text", "p_last_name" "text", "p_phone" "text", "p_affiliation" "public"."campus_affiliation", "p_graduation_year" integer, "p_gender" "public"."customer_gender", "p_terms_id" "uuid", "p_student_id_number" "text") IS 'The one gate on the CUSTOMER capability. Reads the verified address from auth.users, anchors the school domain, accepts one of the four offered graduation years for a student, requires male or female, and records the terms acceptance in the same transaction.';
 
 
 CREATE OR REPLACE FUNCTION "public"."confirm_payment"("p_payment_id" "uuid", "p_provider_transaction_id" "text", "p_amount_pesewas" bigint) RETURNS "public"."payments"
@@ -8903,6 +9239,14 @@ begin
     raise exception 'your first name is required' using errcode = 'check_violation';
   end if;
 
+  -- A YEAR THAT IS BEING CHANGED IS CHECKED AGAINST THE OFFERED LIST. Null
+  -- still means "leave it", so an account carrying an older year keeps it until
+  -- somebody actually answers the question again.
+  if p_graduation_year is not null and p_graduation_year not in (2027, 2028, 2029, 2030) then
+    raise exception 'choose one of the graduation years offered'
+      using errcode = 'check_violation';
+  end if;
+
   -- WHOSE NUMBER IS A CREDENTIAL. A vendor signs in with theirs, so a settings
   -- form must not be able to move it — that would be an account takeover with
   -- a text input. A customer's number is a profile fact and is theirs to
@@ -11608,6 +11952,11 @@ GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" 
 GRANT ALL ON FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text", "p_category_id" "uuid", "p_description" "text", "p_owner_is_student" boolean, "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text", "p_category_id" "uuid", "p_description" "text", "p_owner_is_student" boolean, "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_create_vendor_account"("p_owner_user_id" "uuid", "p_store_name" "text", "p_reason" "text", "p_applicant_name" "text", "p_category_id" "uuid", "p_description" "text", "p_owner_is_student" boolean, "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes_to_campus" integer) TO "authenticated";
+
+
 GRANT ALL ON TABLE "public"."vendor_categories" TO "service_role";
 GRANT SELECT ON TABLE "public"."vendor_categories" TO "anon";
 GRANT SELECT ON TABLE "public"."vendor_categories" TO "authenticated";
@@ -11648,6 +11997,11 @@ GRANT ALL ON FUNCTION "public"."admin_dashboard_totals"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_dashboard_totals"() TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_delete_customer"("p_user_id" "uuid", "p_reason" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "p_reason" "text") TO "authenticated";
@@ -11656,6 +12010,11 @@ GRANT ALL ON FUNCTION "public"."admin_delete_location"("p_location_id" "uuid", "
 REVOKE ALL ON FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_delete_menu_item"("p_menu_item_id" "uuid", "p_reason" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_delete_vendor"("p_vendor_id" "uuid", "p_reason" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."admin_exceptions"("p_limit" integer) FROM PUBLIC;

@@ -6,6 +6,7 @@ import { setMyEmail } from '@/lib/customer';
 import { createClient } from '@/lib/supabase/server';
 import { actionFailure } from '@/lib/errors';
 import { normaliseGhanaPhone } from '@/lib/sms';
+import { GENDERS, GRADUATION_YEARS } from '@/lib/auth/customer-signup';
 
 /**
  * The availability toggle. The database refuses this for anyone who is not an
@@ -56,21 +57,36 @@ export async function saveMyProfile(_prev, formData) {
   const firstName = String(formData.get('first_name') ?? '').trim();
   const lastName = String(formData.get('last_name') ?? '').trim();
   const phoneRaw = String(formData.get('phone') ?? '').trim();
-  const affiliation = formData.get('affiliation') === 'STAFF' ? 'STAFF' : 'STUDENT';
-  const gender = ['MALE', 'FEMALE'].includes(formData.get('gender'))
-    ? formData.get('gender')
-    : null;
 
   if (!firstName) return { ok: false, message: 'Enter your first name.' };
+
+  // WHETHER THE CUSTOMER FACTS WERE ASKED FOR AT ALL. The form renders them
+  // only for an account that holds a customer_profiles row, so a vendor or an
+  // administrator saving their name posts none of these fields — and reading a
+  // missing affiliation as STUDENT then demanded a graduation year of somebody
+  // who was never shown the question, which refused the save outright.
+  const asked = formData.has('affiliation');
+  const affiliation = formData.get('affiliation') === 'STAFF' ? 'STAFF' : 'STUDENT';
 
   // A GRADUATION YEAR IS A STUDENT'S FACT. Staff do not graduate, so the field
   // is not asked of them and is sent as null; the database says the same thing
   // in a CHECK constraint rather than trusting this.
   let graduationYear = null;
-  if (affiliation === 'STUDENT') {
+  if (asked && affiliation === 'STUDENT') {
     graduationYear = Number(String(formData.get('graduation_year') ?? '').trim());
-    if (!Number.isInteger(graduationYear) || graduationYear < 2000 || graduationYear > 2100) {
+    if (!GRADUATION_YEARS.includes(graduationYear)) {
       return { ok: false, message: 'Choose the year you expect to graduate.' };
+    }
+  }
+
+  // MALE OR FEMALE, the same two sign-up asks for. There is no third answer to
+  // store, so a customer who clears it is refused rather than quietly left as
+  // they were.
+  let gender = null;
+  if (asked) {
+    gender = String(formData.get('gender') ?? '').trim();
+    if (!GENDERS.includes(gender)) {
+      return { ok: false, message: 'Choose male or female.' };
     }
   }
 
@@ -91,7 +107,9 @@ export async function saveMyProfile(_prev, formData) {
       p_first_name: firstName,
       p_last_name: lastName || null,
       p_phone: phone,
-      p_affiliation: affiliation,
+      // NULL when the question was never on screen, so an account with no
+      // customer profile cannot be handed facts it was not asked for.
+      p_affiliation: asked ? affiliation : null,
       p_graduation_year: graduationYear,
       p_gender: gender,
     });

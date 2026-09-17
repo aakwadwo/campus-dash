@@ -4,7 +4,15 @@ import SiteFooter from './site-footer';
 import { listVendors } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
 import { redirectVendorOnlyAccount } from '@/lib/auth/session';
-import { ButtonLink, Container, VendorCard, ChevronRightIcon } from './ui';
+import {
+  ButtonLink,
+  Container,
+  VendorCard,
+  ChevronRightIcon,
+  StoreIcon,
+  BikeIcon,
+  ReceiptIcon,
+} from './ui';
 
 export const metadata = {
   // THE TAB TITLE FOR `/`. The root layout's `title.template` deliberately does
@@ -36,10 +44,20 @@ export const dynamic = 'force-dynamic';
  * the marketplace uses, and when the pilot is empty it simply does not render.
  */
 
+/**
+ * Three steps, each with the icon it already had a name for.
+ *
+ * THE ICONS ARE FROM THE KIT, not drawn for this page: the store is the one on
+ * every vendor card, the runner is the one the Partner screens use, the receipt
+ * is the one on the price breakdown. A person who has seen the rest of the
+ * product has seen all three, which is the only thing an icon here is for.
+ * Nothing moves, nothing is in a coloured circle, and the numbers still carry
+ * the ordering — the mark is beside the step, not instead of it.
+ */
 const HOW_IT_WORKS = [
-  ['Pick a vendor', 'Stores around campus, with what they have right now.'],
-  ['Collect it, or have it brought', 'Pick it up free, or send it to your block.'],
-  ['Pay once', 'One payment covers the food, the Partner and our fee.'],
+  [StoreIcon, 'Pick a vendor', 'Stores around campus, with what they have right now.'],
+  [BikeIcon, 'Collect it, or have it brought', 'Pick it up free, or send it to your block.'],
+  [ReceiptIcon, 'Pay once', 'One payment covers the food, the Partner and our fee.'],
 ];
 
 export default async function Home() {
@@ -140,15 +158,22 @@ export default async function Home() {
         ) : null}
 
         {/* ----------------------------------------------------------------
-            How it works: three short lines, not three cards with icons in
-            circles. One sentence each is the whole budget. */}
+            How it works: three short lines with a mark each, not three cards
+            with icons in circles. One sentence each is still the whole
+            budget. */}
         <Container size="wide" className="border-line mt-8 border-t pt-8 sm:mt-11 sm:pt-9">
           <h2 className="text-lg font-semibold tracking-tight sm:text-2xl">How it works</h2>
           <ol className="mt-5 grid gap-x-10 gap-y-5 sm:grid-cols-3">
-            {HOW_IT_WORKS.map(([title, body], index) => (
+            {HOW_IT_WORKS.map(([Icon, title, body], index) => (
               <li key={title} className="flex gap-3.5 sm:block">
-                <span className="text-brand-700 shrink-0 text-sm font-semibold tabular-nums sm:mb-1.5 sm:block">
-                  {String(index + 1).padStart(2, '0')}
+                {/* The number and the mark read as one thing: same colour, same
+                    line, and on a phone they sit in the gutter the text is
+                    already indented past. */}
+                <span className="text-brand-700 flex shrink-0 flex-col items-center gap-2 sm:mb-2 sm:flex-row sm:gap-2.5">
+                  <Icon className="size-5" />
+                  <span className="text-sm font-semibold tabular-nums">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
                 </span>
                 <div className="min-w-0">
                   <h3 className="font-semibold">{title}</h3>

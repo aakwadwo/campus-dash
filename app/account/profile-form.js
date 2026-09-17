@@ -3,6 +3,7 @@
 import { useActionState, useState } from 'react';
 import { saveMyProfile } from './actions';
 import { Button, ErrorNote, Field, Input, Select } from '@/app/ui';
+import { graduationYears } from '@/lib/auth/customer-signup';
 
 /**
  * Name, and the number a Partner rings.
@@ -97,8 +98,9 @@ export default function ProfileForm({
  */
 function WhoYouAre({ affiliation, graduationYear, gender }) {
   const [who, setWho] = useState(affiliation ?? 'STUDENT');
-  const thisYear = new Date().getFullYear();
-  const years = Array.from({ length: 7 }, (_, i) => thisYear + i);
+  // THE SAME FOUR YEARS SIGN-UP OFFERS, from the same array, because this
+  // screen writes the same column through the same validation.
+  const years = graduationYears();
 
   return (
     <>
@@ -133,17 +135,16 @@ function WhoYouAre({ affiliation, graduationYear, gender }) {
 
       {who === 'STUDENT' ? (
         <Field label="Expected graduation" hint="So we never have to ask again.">
+          {/* EXACTLY THE FOUR OFFERED YEARS. An account carrying an older year
+              — one written before the list was fixed — matches none of them, so
+              the disabled placeholder is what shows and the field has to be
+              answered before the form will submit. Offering the stale year back
+              would offer a value update_my_profile() now refuses. */}
           <Select name="graduation_year" required defaultValue={graduationYear ?? ''}>
             <option value="" disabled>
               Choose a year
             </option>
-            {/* A year already on the account may be outside the offered window
-                — somebody who signed up three years ago — and dropping it would
-                silently change their answer the next time they saved a name. */}
-            {(graduationYear && !years.includes(graduationYear)
-              ? [graduationYear, ...years]
-              : years
-            ).map((year) => (
+            {years.map((year) => (
               <option key={year} value={year}>
                 {year}
               </option>
@@ -154,9 +155,13 @@ function WhoYouAre({ affiliation, graduationYear, gender }) {
         <input type="hidden" name="graduation_year" value="" />
       )}
 
-      <Field label="Gender" hint="Optional.">
-        <Select name="gender" defaultValue={gender ?? ''}>
-          <option value="">Prefer not to say</option>
+      {/* MALE OR FEMALE. "Prefer not to say" stored a null, and a column that
+          cannot be counted is a column with no reason to be asked for. */}
+      <Field label="Gender">
+        <Select name="gender" required defaultValue={gender ?? ''}>
+          <option value="" disabled>
+            Choose
+          </option>
           <option value="MALE">Male</option>
           <option value="FEMALE">Female</option>
         </Select>
