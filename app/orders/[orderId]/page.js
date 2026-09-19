@@ -25,6 +25,13 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+// Its own tab title. Without one the page inherited the home page's, so a
+// customer switching tabs to check on lunch saw the landing page's name.
+export const metadata = {
+  title: 'Your order',
+  robots: { index: false, follow: false },
+};
+
 /**
  * One order, tracked.
  *
@@ -196,9 +203,8 @@ export default async function CustomerOrderPage({ params }) {
                   <p className="text-muted mx-auto mt-3 max-w-sm leading-relaxed">{stage.detail}</p>
                 ) : null}
               </div>
-              {order.cancellation_reason ? (
-                <p className="mt-3 text-sm">Reason: {order.cancellation_reason}</p>
-              ) : null}
+              {/* The reason is said once, on the step that ended the order in
+                  the timeline below, not repeated here. */}
               <p className="text-faint mt-4 flex items-center justify-center gap-2 text-xs tabular-nums">
                 {live ? <LiveDot tone={stage.badge === 'bad' ? 'bad' : 'good'} /> : null}
                 Order {orderLabel(order)}
@@ -241,16 +247,12 @@ export default async function CustomerOrderPage({ params }) {
           {order.can_rate_partner ? <RatePartner orderId={order.order_id} /> : null}
 
           <Card className="mt-6 p-5 sm:p-6">
-            <h2 className="text-muted mb-5 text-xs font-semibold tracking-[0.14em] uppercase">
-              Progress
-            </h2>
+            <h2 className="mb-4 font-semibold">Progress</h2>
             <Timeline steps={stepsFor(order)} />
           </Card>
 
           <Card className="mt-4 p-5 sm:p-6">
-            <h2 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-              Your order
-            </h2>
+            <h2 className="mb-2 font-semibold">Your order</h2>
             <ul className="divide-line divide-y">
               {order.items.map((item, index) => (
                 <li key={index} className="flex items-baseline justify-between gap-4 py-2.5">
@@ -286,9 +288,7 @@ export default async function CustomerOrderPage({ params }) {
           </Card>
 
           <Card className="mt-4 p-5 sm:p-6">
-            <h2 className="text-muted mb-2 text-xs font-semibold tracking-[0.14em] uppercase">
-              Details
-            </h2>
+            <h2 className="mb-1 font-semibold">Details</h2>
             <Facts>
               <Fact
                 label="How you get it"

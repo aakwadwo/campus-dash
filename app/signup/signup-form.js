@@ -8,7 +8,7 @@ import {
   completeSignUpAction,
 } from './actions';
 import { graduationYears, RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
-import { Button, ErrorNote, Field, Input, Select, TextLink } from '@/app/ui';
+import { Button, CodeSentTo, ErrorNote, Field, Input, Select, TextLink } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
 
 /**
@@ -155,7 +155,7 @@ function Carried({ values, next }) {
       <input type="hidden" name="first_name" value={values.firstName ?? ''} />
       <input type="hidden" name="last_name" value={values.lastName ?? ''} />
       <input type="hidden" name="email" value={values.email ?? ''} />
-      <input type="hidden" name="affiliation" value={values.affiliation ?? 'STUDENT'} />
+      <input type="hidden" name="affiliation" value={values.affiliation ?? ''} />
       <input type="hidden" name="graduation_year" value={values.graduationYear ?? ''} />
       <input type="hidden" name="gender" value={values.gender ?? ''} />
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
@@ -239,7 +239,10 @@ function DetailsStep({ values, next, action, pending, state, hasAccount }) {
 
       {hasAccount ? null : (
         <p className="text-muted text-center text-sm">
-          Already have an account? <TextLink href="/login">Sign in</TextLink>
+          Already have one?{' '}
+          <TextLink href={`/login?next=${encodeURIComponent(next)}`}>
+            Sign in to customer account
+          </TextLink>
         </p>
       )}
     </form>
@@ -256,10 +259,7 @@ function CodeStep({ values, next, submitCode, verifying, resend, resending, stat
       <form action={submitCode} className="space-y-4">
         <Carried values={values} next={next} />
 
-        <p className="text-muted text-sm leading-relaxed">
-          Enter the 6-digit code we sent to{' '}
-          <span className="text-ink font-medium break-all">{values.email}</span>.
-        </p>
+        <CodeSentTo>{values.email}</CodeSentTo>
 
         <Field label="Verification code">
           <OtpInput autoFocus disabled={verifying} />
@@ -388,7 +388,9 @@ function CompleteStep({ values, next, action, pending, state }) {
  * they are here, which is the whole point of asking it instead.
  */
 function WhoYouAre({ values }) {
-  const [affiliation, setAffiliation] = useState(values.affiliation || 'STUDENT');
+  // NEITHER IS PRESELECTED. The two lead to different questions, and a default
+  // would answer the first one for somebody.
+  const [affiliation, setAffiliation] = useState(values.affiliation || '');
   const years = graduationYears();
 
   return (
@@ -439,8 +441,9 @@ function WhoYouAre({ values }) {
           </Select>
         </Field>
       ) : (
-        // Staff do not graduate, and sending an empty value is what makes the
-        // server store null rather than whatever a previous render left behind.
+        // Staff do not graduate (and nobody may have chosen yet): an empty value
+        // is what makes the server store null rather than whatever a previous
+        // render left behind. The server discards a year sent for staff anyway.
         <input type="hidden" name="graduation_year" value="" />
       )}
 

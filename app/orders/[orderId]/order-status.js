@@ -10,6 +10,8 @@ import {
   saveEmailAction,
   chooseFulfilmentAction,
   completePickupAction,
+  abandonPaymentAction,
+  abandonUnpaidOrderAction,
 } from '@/app/order/actions';
 import { formatPesewas } from '@/lib/util/money';
 import {
@@ -47,14 +49,28 @@ export default function OrderStatus({
 
   const [waitState, keepWaiting, waitingAgain] = useActionState(keepWaitingAction, {});
   const [collectState, collectInstead, collecting] = useActionState(collectInsteadAction, {});
+  const [abandonState, abandonPayment, abandoning] = useActionState(abandonPaymentAction, {});
+  const [leaveState, leaveOrder, leavingOrder] = useActionState(abandonUnpaidOrderAction, {});
 
   const [changing, setChanging] = useState(false);
 
   const unpaid = order.stage === 'PAYMENT_REQUIRED' || order.stage === 'PAYMENT_FAILED';
   const processing = order.stage === 'PAYMENT_PROCESSING';
+  // EVERY STAGE WHERE SOMEBODY ELSE IS ABOUT TO MOVE THIS ORDER. If a stage is
+  // missing here the screen freezes on it: the timers in PartnerSearch keep
+  // drawing a countdown, so it goes on LOOKING live while the server has moved
+  // on. PREPARING_SEARCHING was missing, which is the longest stretch of a
+  // Partner order — the whole wait while the food cooks and a Partner is found
+  // — so a customer watched "Finding a Campus Dash Partner" count down for
+  // minutes after somebody had already taken it.
+  //
+  // NO_PARTNER and CUSTOMER_ABSENT are absent deliberately: nothing moves in
+  // either until a person acts, and in NO_PARTNER that person is the customer
+  // reading this screen.
   const live = [
     'PAID_AWAITING_KITCHEN',
     'PREPARING',
+    'PREPARING_SEARCHING',
     'PREPARING_PARTNER_ASSIGNED',
     'SEARCHING_PARTNER',
     'PARTNER_ASSIGNED',
@@ -171,19 +187,51 @@ export default function OrderStatus({
         {chooseState.message && chooseState.ok ? (
           <p className="text-good mt-2 text-center text-xs">{chooseState.message}</p>
         ) : null}
+
+        <AbandonUnpaid
+          orderId={order.order_id}
+          action={leaveOrder}
+          pending={leavingOrder}
+          state={leaveState}
+          disabled={paying || leaving}
+        />
       </div>
     );
   }
 
   if (processing) {
     return (
-      <Callout tone="warn">
-        <p className="font-semibold">Confirming your payment…</p>
-        <p className="mt-1">
-          This usually takes a couple of seconds. Do not pay again. If it fails you will be told,
-          and nothing will have been taken.
-        </p>
-      </Callout>
+      <div className="space-y-3">
+        <Callout tone="warn">
+          <p className="font-semibold">Confirming your payment…</p>
+          <p className="mt-1">
+            This usually takes a couple of seconds. Do not pay again. If it fails you will be told,
+            and nothing will have been taken.
+          </p>
+        </Callout>
+
+        {/* THE WAY OUT OF A CHARGE THAT NEVER CAME BACK. Without it this
+            screen was a dead end: it polls for ever, tells the customer not to
+            pay again, and offers nothing to press — the pg_cron sweep would
+            free the order eventually, minutes later, with nobody told.
+            WHETHER IT IS ACTUALLY STUCK IS THE SERVER'S CALL: the button is
+            always here, and customer_abandon_stuck_payment() refuses while the
+            payment is younger than the timeout, in a sentence written for the
+            person reading it. */}
+        <form action={abandonPayment}>
+          <input type="hidden" name="order_id" value={order.order_id} />
+          <Button type="submit" variant="ghost" block pending={abandoning} className="text-muted">
+            {abandoning ? 'Checking…' : 'This is taking too long'}
+          </Button>
+        </form>
+        {abandonState.message ? (
+          abandonState.ok ? (
+            <SuccessNote>{abandonState.message}</SuccessNote>
+          ) : (
+            <ErrorNote>{abandonState.message}</ErrorNote>
+          )
+        ) : null}
+      </div>
     );
   }
 
@@ -385,5 +433,57 @@ function Option({ checked, onChange, title, detail, total, disabled = false }) {
       </span>
       {total ? <span className="shrink-0 font-semibold tabular-nums">{total}</span> : null}
     </label>
+  );
+}
+
+/**
+ * Leaving an order before paying for it.
+ *
+ * WORDED FOR WHAT IT IS: an UNPAID order, abandoned. It never appears once a
+ * payment has succeeded, and the server refuses it then anyway
+ * (customer_abandon_unpaid_order is guarded on the payment state). Two taps, the
+ * second one saying what happens, because a tap that silently cancels
+ * somebody's lunch is a tap they did not mean.
+ */
+function AbandonUnpaid({ orderId, action, pending, state, disabled }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (!confirming) {
+    return (
+      <div className="mt-6 text-center">
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          disabled={disabled}
+          className="text-muted hover:text-ink press-sm min-h-11 text-sm font-medium transition-colors disabled:opacity-55"
+        >
+          Cancel unpaid order
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form action={action} className="border-line mt-6 border-t pt-5">
+      <input type="hidden" name="order_id" value={orderId} />
+      <p className="text-center text-sm">
+        Cancel this order? Nothing has been charged, and the store has not seen it.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          className="flex-1"
+          onClick={() => setConfirming(false)}
+          disabled={pending}
+        >
+          Keep it
+        </Button>
+        <Button type="submit" variant="danger" className="flex-1" pending={pending}>
+          {pending ? 'Cancelling…' : 'Cancel order'}
+        </Button>
+      </div>
+      {state.message && !state.ok ? <ErrorNote className="mt-3">{state.message}</ErrorNote> : null}
+    </form>
   );
 }

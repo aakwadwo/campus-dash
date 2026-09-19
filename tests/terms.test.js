@@ -17,14 +17,20 @@ import { expectRejection } from './helpers/flow.js';
  * version somebody agreed to, and when — so a new version makes the acceptance
  * outstanding again, and only that.
  */
+/** Versions this file publishes itself start here, well above any real one. */
+const TEST_VERSION = 90;
+
 describe('terms and conditions', () => {
   before(resetTransactionalState);
   beforeEach(async () => {
     await resetTransactionalState();
-    // Undo anything a previous test published or accepted.
+    // Undo anything a previous test published or accepted. ONLY THE TEST'S
+    // OWN VERSIONS (90 and up): the published ones below that are reference
+    // data from the migrations, and deleting them would unpublish the real
+    // terms from the shared local database.
     await asService(async (c) => {
-      await c.query('delete from public.terms_acceptances where version > 1');
-      await c.query('delete from public.terms_documents where version > 1');
+      await c.query(`delete from public.terms_acceptances where version >= ${TEST_VERSION}`);
+      await c.query(`delete from public.terms_documents where version >= ${TEST_VERSION}`);
       await c.query(`
         insert into public.terms_acceptances (user_id, terms_id, audience, version)
         select u.id, t.id, t.audience, t.version
@@ -127,7 +133,7 @@ describe('terms and conditions', () => {
         ).rows
     );
     assert.equal(stored.length, 1);
-    assert.equal(stored[0].version, 1);
+    assert.equal(stored[0].version, doc.version, 'the version that was current');
     assert.equal(stored[0].audience, 'CUSTOMER');
     assert.ok(stored[0].accepted_at);
 
@@ -148,8 +154,8 @@ describe('terms and conditions', () => {
       Number(
         (
           await c.query(
-            "select count(*)::int as n from public.terms_acceptances where user_id = $1 and audience = 'CUSTOMER'",
-            [ACTORS.customerAma]
+            "select count(*)::int as n from public.terms_acceptances where user_id = $1 and audience = 'CUSTOMER' and version = $2",
+            [ACTORS.customerAma, doc.version]
           )
         ).rows[0].n
       )
@@ -163,13 +169,13 @@ describe('terms and conditions', () => {
     await asService((c) =>
       c.query(`
         insert into public.terms_documents (audience, version, title, body, published_at)
-        values ('CUSTOMER', 2, 'Customer terms v2 (PLACEHOLDER)', 'Updated placeholder text.', now())
+        values ('CUSTOMER', ${TEST_VERSION}, 'Customer terms (test)', 'Updated text.', now())
       `)
     );
 
     const asked = await outstanding(ACTORS.customerAma);
     assert.equal(asked.length, 1);
-    assert.equal(asked[0].version, 2, 'the new version is what is outstanding');
+    assert.equal(asked[0].version, TEST_VERSION, 'the new version is what is outstanding');
 
     // A Partner is asked for the customer update, but their Partner terms are
     // untouched.
@@ -186,7 +192,7 @@ describe('terms and conditions', () => {
         (
           await c.query(`
         insert into public.terms_documents (audience, version, title, body)
-        values ('CUSTOMER', 9, 'Draft', 'Not published yet')
+        values ('CUSTOMER', ${TEST_VERSION + 1}, 'Draft', 'Not published yet')
         returning *
       `)
         ).rows[0]

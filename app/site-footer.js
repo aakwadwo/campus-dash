@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { CampusDashLogo } from './brand';
+import { CONTACT_NUMBERS } from '@/lib/contact';
 
 /**
  * The consumer footer.
@@ -16,8 +17,8 @@ import { CampusDashLogo } from './brand';
  *
  * WHAT IS NOT LINKED. There is no Privacy Policy route yet, and inventing one
  * to round out the Legal section would put fabricated legal text in front of
- * students. `terms_documents` currently holds CUSTOMER, PARTNER and VENDOR
- * documents (all still marked PLACEHOLDER). A privacy policy is a real launch
+ * students. `terms_documents` holds the CUSTOMER, PARTNER and VENDOR terms,
+ * all on one /terms page. A privacy policy is a real launch
  * requirement, tracked as one, not papered over with a dead link. When
  * /privacy exists it slots in below Terms.
  */
@@ -38,6 +39,11 @@ const LINKS = [
     ],
   },
   { group: 'Legal', items: [['Terms', '/terms']] },
+  // tel: links, so a tap on a phone dials. The numbers live in lib/contact.js.
+  {
+    group: 'Contact',
+    items: CONTACT_NUMBERS.map((number) => [`Call ${number.display}`, `tel:${number.tel}`]),
+  },
 ];
 
 /**
@@ -56,13 +62,16 @@ const LINKS = [
  * NOT FIXED, and never. A fixed footer overlaps content on a phone and covers
  * the last thing somebody was reading.
  */
+const FOOTER_LINK =
+  'text-muted hover:text-ink press-sm flex min-h-12 items-center text-[15px] transition-colors sm:min-h-0 sm:py-1 sm:text-sm';
+
 export default function SiteFooter() {
   return (
     <footer className="border-line mt-auto border-t pt-14">
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
-        {/* Mobile: stacked sections of tall rows. Desktop: three columns of the
+        {/* Mobile: stacked sections of tall rows. Desktop: four columns of the
             same content, where a compact link list is the right density. */}
-        <div className="grid gap-8 sm:grid-cols-3 sm:gap-10">
+        <div className="grid gap-8 sm:grid-cols-4 sm:gap-10">
           {LINKS.map((section) => (
             <nav key={section.group} aria-label={section.group}>
               <h2 className="text-faint text-xs font-semibold tracking-[0.14em] uppercase">
@@ -71,12 +80,17 @@ export default function SiteFooter() {
               <ul className="divide-line mt-1 divide-y sm:mt-3 sm:divide-y-0">
                 {section.items.map(([label, href]) => (
                   <li key={href}>
-                    <Link
-                      href={href}
-                      className="text-muted hover:text-ink press-sm flex min-h-12 items-center text-[15px] transition-colors sm:min-h-0 sm:py-1 sm:text-sm"
-                    >
-                      {label}
-                    </Link>
+                    {/* A dial is not a navigation, so a tel: row is a plain
+                        anchor rather than a client-side Link. */}
+                    {href.startsWith('tel:') ? (
+                      <a href={href} className={FOOTER_LINK}>
+                        {label}
+                      </a>
+                    ) : (
+                      <Link href={href} className={FOOTER_LINK}>
+                        {label}
+                      </Link>
+                    )}
                   </li>
                 ))}
               </ul>

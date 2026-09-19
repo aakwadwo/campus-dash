@@ -3,16 +3,8 @@
 import { useActionState, useEffect, useState, useTransition } from 'react';
 import { quoteAction, submitOrderAction } from '../actions';
 import FulfilmentChoice from '../../fulfilment-choice';
-import {
-  Card,
-  Money,
-  ErrorNote,
-  EmptyState,
-  Skeleton,
-  Spinner,
-  ArrowLeftIcon,
-  BagIcon,
-} from '../../ui';
+import ContactLine from '../../contact-line';
+import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon } from '../../ui';
 
 /**
  * Menu, basket and checkout.
@@ -32,8 +24,10 @@ import {
  * an option that silently vanishes reads as a bug.
  */
 export default function MenuAndBasket({
+  header = null,
   vendor,
   menu,
+  label = 'Menu',
   locations = [],
   deliveryAvailable = true,
   deliveryFeePesewas = null,
@@ -41,7 +35,9 @@ export default function MenuAndBasket({
 }) {
   const [quantities, setQuantities] = useBasket(vendor.vendor_id, menu);
   const [step, setStep] = useState('menu');
-  const [fulfilment, setFulfilment] = useState('PICKUP');
+  // NOTHING IS PRESELECTED. Collecting and a Partner are different decisions
+  // with different prices, and a default is a decision made for somebody.
+  const [fulfilment, setFulfilment] = useState(null);
   const [destination, setDestination] = useState('');
   const [note, setNote] = useState('');
   const [quote, setQuote] = useState(null);
@@ -70,7 +66,7 @@ export default function MenuAndBasket({
   // corrected after a round trip — the server refuses it too, but a screen that
   // quotes GH₵5 for something it is about to be told it cannot have is a screen
   // that lied.
-  const fulfilmentChoice = deliveryAvailable ? fulfilment : 'PICKUP';
+  const fulfilmentChoice = !deliveryAvailable && fulfilment === 'DELIVERY' ? null : fulfilment;
 
   // Re-price whenever the basket or the fulfilment changes. The delivery fee is
   // part of the answer, so changing the choice re-asks the server rather than
@@ -121,51 +117,67 @@ export default function MenuAndBasket({
     window.location.href = submitState.redirectUrl || submitState.orderHref;
   }, [submitState, vendor.vendor_id]);
 
+  // ARRIVING FROM A SEARCH RESULT. The link carries #item-<id>; a client-side
+  // navigation into a streamed page does not scroll to it or set :target, so
+  // this does both, once, after the menu is on screen.
+  const [found, setFound] = useState(null);
+  useEffect(() => {
+    const id = window.location.hash.startsWith('#item-') ? window.location.hash.slice(6) : null;
+    if (!id) return undefined;
+    const el = document.getElementById(`item-${id}`);
+    if (!el) return undefined;
+    el.scrollIntoView({ block: 'center' });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the URL hash after hydration
+    setFound(id);
+    const timer = setTimeout(() => setFound(null), 2400);
+    return () => clearTimeout(timer);
+  }, []);
+
   const setQuantity = (id, next) =>
     setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
 
   if (step === 'review' && !gate) {
     return (
-      <Checkout
-        vendor={vendor}
-        menu={menu}
-        items={items}
-        locations={locations}
-        deliveryAvailable={deliveryAvailable}
-        deliveryFeePesewas={deliveryFeePesewas}
-        quotedPartnerFee={quotedPartnerFee}
-        fulfilment={fulfilmentChoice}
-        onFulfilment={setFulfilment}
-        destination={destination}
-        onDestination={setDestination}
-        note={note}
-        onNote={setNote}
-        quote={quote}
-        quoting={quoting}
-        quoteError={quoteError}
-        onBack={() => setStep('menu')}
-        submit={submit}
-        submitting={submitting}
-        submitState={submitState}
-      />
+      <CheckoutAtTop>
+        <Checkout
+          vendor={vendor}
+          menu={menu}
+          items={items}
+          locations={locations}
+          deliveryAvailable={deliveryAvailable}
+          deliveryFeePesewas={deliveryFeePesewas}
+          quotedPartnerFee={quotedPartnerFee}
+          fulfilment={fulfilmentChoice}
+          onFulfilment={setFulfilment}
+          destination={destination}
+          onDestination={setDestination}
+          note={note}
+          onNote={setNote}
+          quote={quote}
+          quoting={quoting}
+          quoteError={quoteError}
+          onBack={() => setStep('menu')}
+          submit={submit}
+          submitting={submitting}
+          submitState={submitState}
+        />
+      </CheckoutAtTop>
     );
   }
 
   if (menu.length === 0) {
     return (
-      <Card>
-        <EmptyState
-          icon={<BagIcon className="size-6" />}
-          title="Nothing on the menu yet"
-          description={`${vendor.name} has not added any items. Try another vendor for now.`}
-        />
-      </Card>
+      <>
+        {header}
+        <p className="text-muted py-12 text-center">Nothing here yet.</p>
+      </>
     );
   }
 
   return (
     <>
-      <h2 className="mb-3 text-base font-semibold tracking-tight sm:mb-4 sm:text-lg">Menu</h2>
+      {header}
+      <h2 className="mb-3 text-base font-semibold tracking-tight sm:mb-4 sm:text-lg">{label}</h2>
 
       {/* Two columns from `md` up. A single long column of short rows wastes
           most of a laptop screen and makes the menu feel thinner than it is. */}
@@ -173,33 +185,20 @@ export default function MenuAndBasket({
         {menu.map((item) => {
           const chosen = quantities[item.id] ?? 0;
           return (
-            <li key={item.id}>
+            // AN ANCHOR PER ITEM, so a search result lands on the thing that
+            // was searched for, briefly marked so the eye finds it.
+            <li
+              key={item.id}
+              id={`item-${item.id}`}
+              className={`rounded-card scroll-mt-24 transition-shadow ${
+                found === item.id ? 'ring-brand-600/50 ring-2' : ''
+              }`}
+            >
               <Card
                 className={`flex h-full gap-3.5 p-3.5 transition-colors sm:p-5 ${
                   item.is_available ? '' : 'bg-surface-2/60'
                 } ${chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''}`}
               >
-                {/* THE DISH, WHEN THERE IS A PHOTOGRAPH OF IT. Lazy and
-                    explicitly sized, so a menu of twenty items does not cost
-                    twenty blocking requests on a campus connection, and the
-                    layout does not jump as each one lands. A store that has not
-                    added photographs gets a text menu rather than twenty grey
-                    boxes — the absence is not worth reserving space for. */}
-                {item.image_url ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={item.image_url}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    width={80}
-                    height={80}
-                    className={`rounded-card size-20 shrink-0 object-cover ${
-                      item.is_available ? '' : 'opacity-50 saturate-50'
-                    }`}
-                  />
-                ) : null}
-
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-4">
                     <h3
@@ -285,6 +284,14 @@ export default function MenuAndBasket({
   );
 }
 
+/** Checkout opens at the top of the page, not wherever the menu was scrolled to. */
+function CheckoutAtTop({ children }) {
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, []);
+  return <div>{children}</div>;
+}
+
 /**
  * Quantity control.
  *
@@ -337,8 +344,10 @@ function Stepper({ value, onChange, label }) {
 /**
  * One screen: what you ordered, how you want it, what it costs, pay.
  *
- * The Pay button is disabled while the quote is in flight, because the figure
- * beside it would be the figure for a choice the customer has just changed.
+ * THE CHOICE STARTS EMPTY and Pay stays disabled until it is made; after that,
+ * switching is one tap. The total shown is always the server's, and Pay is
+ * disabled while a re-quote is in flight, because the figure beside it would be
+ * the figure for a choice the customer has just changed.
  */
 function Checkout({
   vendor,
@@ -371,12 +380,18 @@ function Checkout({
   // The server's live answer wins over what the page was rendered with: the
   // switch can be flipped while somebody is filling in a basket.
   const canDeliver = quote ? quote.delivery_available !== false : deliveryAvailable;
+  const needsChoice = !fulfilment;
   const needsDestination = fulfilment === 'DELIVERY' && !destination;
   // `leaving` keeps the button spent after the action resolves: the browser is
   // on its way to the payment page and a button that springs back to "Pay"
   // invites a second tap at the worst possible moment.
   const leaving = Boolean(submitState.ok);
   const busy = submitting || leaving;
+  const hint = needsChoice
+    ? 'Choose how you want it.'
+    : needsDestination
+      ? 'Choose where the Partner should bring it.'
+      : null;
 
   return (
     <form action={submit} className="mx-auto max-w-xl">
@@ -387,7 +402,7 @@ function Checkout({
         name="items"
         value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
       />
-      <input type="hidden" name="fulfilment_type" value={fulfilment} />
+      <input type="hidden" name="fulfilment_type" value={fulfilment ?? ''} />
       <input type="hidden" name="destination_location_id" value={destination} />
       <input type="hidden" name="destination_note" value={note} />
 
@@ -398,39 +413,29 @@ function Checkout({
         className="text-muted hover:text-ink hover:bg-surface-2 press-sm mb-4 -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-full pr-3.5 pl-2 text-sm font-medium transition-colors disabled:opacity-55"
       >
         <ArrowLeftIcon className="size-4" />
-        Back to menu
+        {vendor.name}
       </button>
 
       <h2 className="text-display text-2xl font-semibold sm:text-3xl">Checkout</h2>
-      <p className="text-muted mt-1.5">From {vendor.name}</p>
 
       {/* --- Items ------------------------------------------------------- */}
-      <Card className="mt-7 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          Your order
-        </h3>
-        <ul className="divide-line divide-y">
-          {named.map((item) => (
-            <li key={item.menuItemId} className="flex items-baseline justify-between gap-4 py-2.5">
-              <span className="min-w-0">
-                <span className="bg-surface-2 mr-2 inline-block rounded px-1.5 py-0.5 text-xs font-semibold tabular-nums">
-                  {item.quantity}×
-                </span>
-                {item.name}
-              </span>
-              <span className="text-muted shrink-0 text-sm">
-                <Money pesewas={item.price * item.quantity} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <ul className="divide-line border-line mt-6 divide-y border-y">
+        {named.map((item) => (
+          <li key={item.menuItemId} className="flex items-baseline justify-between gap-4 py-3">
+            <span className="min-w-0">
+              <span className="text-muted mr-2 tabular-nums">{item.quantity}×</span>
+              {item.name}
+            </span>
+            <span className="text-muted shrink-0 text-sm">
+              <Money pesewas={item.price * item.quantity} />
+            </span>
+          </li>
+        ))}
+      </ul>
 
       {/* --- How you want it ---------------------------------------------- */}
-      <Card className="mt-4 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          How you want it
-        </h3>
+      <section className="mt-7">
+        <h3 className="mb-3 font-semibold">How you want it</h3>
 
         <FulfilmentChoice
           value={fulfilment}
@@ -474,14 +479,10 @@ function Checkout({
             </label>
           </div>
         ) : null}
-      </Card>
+      </section>
 
       {/* --- Money -------------------------------------------------------- */}
-      <Card className="mt-4 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          What you pay
-        </h3>
-
+      <Card className="mt-7 p-5">
         {quoteError ? (
           <ErrorNote>{quoteError}</ErrorNote>
         ) : quote ? (
@@ -506,10 +507,6 @@ function Checkout({
             <Skeleton className="h-6 w-1/2" />
           </div>
         )}
-
-        <p className="text-muted mt-4 text-xs leading-relaxed">
-          You pay once. {vendor.name} starts preparing as soon as the payment lands.
-        </p>
       </Card>
 
       {submitState.message ? <ErrorNote className="mt-4">{submitState.message}</ErrorNote> : null}
@@ -517,7 +514,7 @@ function Checkout({
       <div className="mt-6">
         <button
           type="submit"
-          disabled={busy || !quote || quoting || needsDestination}
+          disabled={busy || !quote || quoting || needsChoice || needsDestination}
           aria-busy={busy || undefined}
           className="press bg-brand-700 hover:bg-brand-800 h-14 w-full rounded-full text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
@@ -526,7 +523,7 @@ function Checkout({
               <Spinner className="size-4" />
               Taking you to pay…
             </span>
-          ) : quote ? (
+          ) : quote && !needsChoice ? (
             <>
               Pay <Money pesewas={quote.total_pesewas} />
             </>
@@ -535,11 +532,9 @@ function Checkout({
           )}
         </button>
       </div>
-      {needsDestination ? (
-        <p className="text-muted mt-2.5 text-center text-xs">
-          Choose where the Partner should bring it.
-        </p>
-      ) : null}
+      {hint ? <p className="text-muted mt-2.5 text-center text-sm">{hint}</p> : null}
+
+      <ContactLine className="mt-8 text-center" />
     </form>
   );
 }

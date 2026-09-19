@@ -10,10 +10,10 @@ import { Button, ErrorNote, EmptyState, BikeIcon } from '@/app/ui';
 /**
  * Offers, with everything needed to say yes.
  *
- * Store, zone, walking estimate and earnings are all shown BEFORE accepting —
- * hiding them would make the decision a gamble. What is not shown is who the
- * customer is or which room, because that is not needed to judge the job. Both
- * arrive the instant the order is yours.
+ * Store, block and floor, walking estimate and earnings are shown BEFORE
+ * accepting; hiding them would make the decision a gamble. What is not shown is
+ * who the customer is or which room, because that is not needed to judge the
+ * job. Both arrive the instant the order is yours.
  *
  * EVERY OFFER HERE IS PAID FOR, but not every one is cooked: the pool opens the
  * moment a customer pays, so a Partner can claim a job while the kitchen works.
@@ -45,8 +45,8 @@ export default function OfferList({ offers, pollMs = 10000 }) {
       <div className="bg-surface border-line rounded-card mt-5 border">
         <EmptyState
           icon={<BikeIcon className="size-6" />}
-          title="No orders waiting right now"
-          description="This list updates on its own. Keep it open and new orders appear here."
+          title="No orders right now"
+          description="New ones appear here on their own."
         />
       </div>
     );
@@ -62,55 +62,48 @@ export default function OfferList({ offers, pollMs = 10000 }) {
             key={offer.order_id}
             className="rounded-card bg-surface border-line border p-4 sm:p-5"
           >
-            {/* A scan errand is a different job and must not be mistaken for a
-                collection: you carry the customer's prepaid scan, redeem it at
-                the counter yourself, and the food is not waiting for you. */}
-            {offer.order_type === 'SCAN' ? (
-              <p className="text-brand-800 mb-1 text-xs font-semibold tracking-[0.12em] uppercase">
-                Scan delivery
-              </p>
-            ) : null}
-
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
                 <span className="font-semibold">{offer.vendor_name}</span>
-                {offer.order_type === 'SCAN' ? null : (
-                  <span className="text-muted ml-2 text-sm tabular-nums">#{orderLabel(offer)}</span>
-                )}
+                <span className="text-muted ml-2 text-sm tabular-nums">#{orderLabel(offer)}</span>
               </span>
               <span className="text-brand-800 font-semibold tabular-nums">
                 {formatPesewas(offer.earnings_pesewas)}
               </span>
             </div>
 
-            <p
-              className={`mt-1.5 inline-flex items-center gap-1.5 text-sm font-semibold ${
-                offer.food_is_ready ? 'text-good' : 'text-warn'
-              }`}
-            >
+            {/* WHETHER TO GO NOW. A meal scan is an ordinary store order that
+                the store checks at its own counter, so it reads the same way,
+                with a small mark saying so. */}
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
               <span
-                className={`size-1.5 rounded-full ${offer.food_is_ready ? 'bg-good' : 'bg-warn'}`}
-                aria-hidden
-              />
-              {offer.order_type === 'SCAN'
-                ? 'Ready to run'
-                : offer.food_is_ready
-                  ? 'Cooked and waiting'
-                  : 'Still being prepared'}
+                className={`inline-flex items-center gap-1.5 font-semibold ${
+                  offer.food_is_ready ? 'text-good' : 'text-warn'
+                }`}
+              >
+                <span
+                  className={`size-1.5 rounded-full ${offer.food_is_ready ? 'bg-good' : 'bg-warn'}`}
+                  aria-hidden
+                />
+                {offer.food_is_ready ? 'Ready at the store' : 'Still being prepared'}
+              </span>
+              {offer.order_type === 'SCAN' ? (
+                <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 text-xs font-semibold">
+                  Meal scan
+                </span>
+              ) : null}
             </p>
 
-            <dl className="text-muted border-line mt-3 space-y-1 border-t pt-3 text-sm">
-              <Row label="Deliver to" value={offer.destination_zone} />
-              <Row
-                label="Walk"
-                value={offer.walk_minutes == null ? 'Not known' : `About ${offer.walk_minutes} min`}
-              />
-              {offer.order_type === 'SCAN' ? (
-                <Row label="You do" value="Redeem the scan, then take it over" />
-              ) : (
-                <Row label="Items" value={`${offer.item_count}`} />
-              )}
-            </dl>
+            {/* BLOCK AND FLOOR, WHICH IS AS FAR AS AN OFFER GOES. The floor is
+                most of the walk, so it is here; the ROOM, the customer's name
+                and their number arrive with the assignment, to the one Partner
+                who then needs them. */}
+            <p className="text-muted border-line mt-3 border-t pt-3 text-sm">
+              <span className="text-ink font-medium">{offer.destination_zone}</span>
+              {offer.destination_floor ? `, ${offer.destination_floor}` : ''}
+              {offer.walk_minutes == null ? '' : ` · about ${offer.walk_minutes} min walk`}
+              {` · ${offer.item_count} item${Number(offer.item_count) === 1 ? '' : 's'}`}
+            </p>
 
             <form action={accept} onSubmit={() => setPressed(offer.order_id)} className="mt-4">
               <input type="hidden" name="order_id" value={offer.order_id} />
@@ -128,14 +121,5 @@ export default function OfferList({ offers, pollMs = 10000 }) {
         ))}
       </ul>
     </>
-  );
-}
-
-function Row({ label, value }) {
-  return (
-    <div className="flex justify-between gap-3">
-      <dt>{label}</dt>
-      <dd className="text-ink">{value}</dd>
-    </div>
   );
 }

@@ -35,7 +35,12 @@ import OtpInput from '@/app/otp-input';
  * Everything the applicant typed rides the verification step in hidden fields,
  * so a mistyped code costs one field and not a page of retyping.
  */
-export default function VendorSignUpForm({ categories, resubmitting, rejectionReason }) {
+export default function VendorSignUpForm({
+  account = null,
+  categories,
+  resubmitting,
+  rejectionReason,
+}) {
   const [detailsState, submitDetails, sending] = useActionState(startVendorSignUpAction, {
     step: 'details',
   });
@@ -118,31 +123,42 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
         </div>
       ) : null}
 
-      <Field label="Your name">
-        <Input
-          name="applicant_name"
-          required
-          autoComplete="name"
-          defaultValue={v.applicantName ?? ''}
-        />
-      </Field>
+      {/* ASKED ONCE. A signed-in account already has a name; the server reads
+          it from the profile, so there is nothing to type here. */}
+      {account?.name ? (
+        <input type="hidden" name="applicant_name" value={account.name} />
+      ) : (
+        <Field label="Your name">
+          <Input
+            name="applicant_name"
+            required
+            autoComplete="name"
+            defaultValue={v.applicantName ?? ''}
+          />
+        </Field>
+      )}
 
       <Field label="Store name" hint="The name students will see.">
         <Input name="store_name" required defaultValue={v.storeName ?? ''} />
       </Field>
 
-      <Field
-        label="Are you a student?"
-        hint="For our records only. It changes nothing about how your store works."
-      >
-        <Select name="is_student" required defaultValue={v.isStudent ?? ''}>
-          <option value="" disabled>
-            Choose one
-          </option>
-          <option value="yes">Student</option>
-          <option value="no">Not a student</option>
-        </Select>
-      </Field>
+      {/* ALREADY KNOWN for a customer: their profile says student or staff. */}
+      {account?.isStudent ? (
+        <input type="hidden" name="is_student" value={account.isStudent} />
+      ) : (
+        <Field
+          label="Are you a student?"
+          hint="For our records only. It changes nothing about how your store works."
+        >
+          <Select name="is_student" required defaultValue={v.isStudent ?? ''}>
+            <option value="" disabled>
+              Choose one
+            </option>
+            <option value="yes">Student</option>
+            <option value="no">Not a student</option>
+          </Select>
+        </Field>
+      )}
 
       {/* TWO DIFFERENT QUESTIONS, and the labels have to say so. "What do you
           sell?" and a category dropdown underneath read as one question asked
@@ -174,9 +190,19 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
         </Select>
       </Field>
 
+      {/* THE NUMBER THE ACCOUNT ALREADY HAS, and it can be changed. It becomes
+          how the store signs in, so a number not yet proven on this account is
+          confirmed with a code; one that is already proven is not asked again.
+          A changed number replaces the one on the account, after its code. */}
       <Field
         label="Phone number"
-        hint="This is how you sign in, and how we reach you about orders."
+        hint={
+          account?.phone
+            ? account.verified
+              ? 'Your account’s number. Change it if the store uses another.'
+              : 'Your account’s number. We’ll text it a code, since it becomes how your store signs in.'
+            : 'This is how you sign in, and how we reach you about orders.'
+        }
       >
         <Input
           name="phone"
@@ -185,7 +211,7 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
           autoComplete="tel"
           inputMode="tel"
           placeholder="020 123 4567"
-          defaultValue={v.phoneRaw ?? ''}
+          defaultValue={v.phoneRaw ?? account?.phone ?? ''}
         />
       </Field>
 
@@ -210,6 +236,8 @@ export default function VendorSignUpForm({ categories, resubmitting, rejectionRe
             <Spinner />
             Sending code…
           </span>
+        ) : account?.verified ? (
+          'Continue'
         ) : (
           'Send verification code'
         )}

@@ -2,7 +2,8 @@ import { getCapabilities } from '@/lib/auth/session';
 import { outstandingTerms, currentTerms } from '@/lib/terms';
 import SiteHeader from '@/app/site-header';
 import SiteFooter from '@/app/site-footer';
-import { Container, Card, Callout } from '@/app/ui';
+import { Container, Callout, Disclosure } from '@/app/ui';
+import ContactLine from '@/app/contact-line';
 import AcceptForm from './accept-form';
 
 export const metadata = {
@@ -14,9 +15,9 @@ export const metadata = {
 export const dynamic = 'force-dynamic';
 
 const AUDIENCE_LABEL = {
-  CUSTOMER: 'Ordering with Campus Dash',
-  VENDOR: 'Selling on Campus Dash',
-  PARTNER: 'Carrying orders as a Campus Dash Partner',
+  CUSTOMER: 'Customer terms',
+  VENDOR: 'Store terms',
+  PARTNER: 'Partner terms',
 };
 
 const AUDIENCES = ['CUSTOMER', 'PARTNER', 'VENDOR'];
@@ -36,7 +37,9 @@ const AUDIENCES = ['CUSTOMER', 'PARTNER', 'VENDOR'];
  * identity. So the page splits: everybody reads, and somebody with something
  * outstanding also gets the button.
  */
-export default async function TermsPage() {
+export default async function TermsPage({ searchParams }) {
+  const params = await searchParams;
+  const asked = String(params?.audience ?? '').toUpperCase();
   const me = await getCapabilities();
 
   // Published documents, for everybody. Three audiences, always all three: a
@@ -63,56 +66,95 @@ export default async function TermsPage() {
         <Container size="narrow" className="pt-8 sm:pt-12">
           <h1 className="text-display text-3xl font-semibold sm:text-4xl">Terms</h1>
           <p className="text-muted mt-2 leading-relaxed">
-            What you agree to when you order, sell or carry orders on Campus Dash. We record which
-            version you agreed to, and when.
+            What you agree to when you order, sell or carry orders on Campus Dash.
           </p>
 
           {outstanding.length > 0 ? (
             <Callout className="mt-6">
-              There {outstanding.length === 1 ? 'is one document' : `are ${outstanding.length}`} you
-              have not accepted yet. You can read {outstanding.length === 1 ? 'it' : 'them'} below
-              and accept at the bottom of {outstanding.length === 1 ? 'the' : 'each'} section.
+              {outstanding.length === 1
+                ? 'One of these is waiting for your agreement. Accept it at the end of the section.'
+                : 'Some of these are waiting for your agreement. Accept each at the end of its section.'}
             </Callout>
           ) : null}
 
           {documents.length === 0 ? (
             <Callout tone="warn" className="mt-6">
-              The terms are not published yet. Ask Campus Dash if you need a copy.
+              The terms are not published yet. Call us if you need a copy.
             </Callout>
           ) : (
-            <div className="mt-8 space-y-6">
+            <div className="border-line mt-8 border-t">
               {documents.map(({ audience, document }) => (
-                <Card key={audience} className="p-5 sm:p-6">
-                  <h2 className="text-muted text-xs font-semibold tracking-[0.14em] uppercase">
-                    {AUDIENCE_LABEL[audience] ?? audience}
-                  </h2>
-                  <p className="mt-1.5 font-semibold">
-                    {document.title}
-                    <span className="text-faint ml-2 text-sm font-normal tabular-nums">
-                      v{document.version}
-                    </span>
-                  </p>
-
-                  <div className="text-muted mt-4 text-sm leading-relaxed whitespace-pre-line">
-                    {document.body}
-                  </div>
+                <Disclosure
+                  key={audience}
+                  title={AUDIENCE_LABEL[audience] ?? document.title}
+                  summary={`Version ${document.version}${outstandingBy.has(audience) ? ' · waiting for you' : ''}`}
+                  defaultOpen={asked === audience || outstandingBy.has(audience)}
+                >
+                  <TermsBody text={document.body} />
 
                   {/* ACCEPTING NEEDS AN IDENTITY, so the button appears only for
-                      somebody signed in who has this one outstanding. Everyone
-                      else has already read what they came for. */}
+                      somebody signed in who has this one outstanding. */}
                   {outstandingBy.has(audience) ? (
-                    <div className="border-line mt-5 border-t pt-5">
+                    <div className="border-line mt-6 border-t pt-5">
                       <AcceptForm termsId={document.terms_id} audience={audience} />
                     </div>
                   ) : null}
-                </Card>
+                </Disclosure>
               ))}
             </div>
           )}
+
+          <ContactLine lead="Questions?" className="mt-8" />
         </Container>
       </main>
 
       <SiteFooter />
+    </div>
+  );
+}
+
+/**
+ * The published text, which is plain on purpose: "## " starts a section, "- "
+ * a list item, and a blank line a new paragraph. Rendered here as headings,
+ * lists and paragraphs; readable as-is anywhere else it is shown.
+ */
+function TermsBody({ text }) {
+  const blocks = [];
+  let list = null;
+
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('- ')) {
+      if (!list) {
+        list = [];
+        blocks.push({ kind: 'list', items: list });
+      }
+      list.push(line.slice(2));
+      continue;
+    }
+    list = null;
+    if (!line) continue;
+    if (line.startsWith('## ')) blocks.push({ kind: 'heading', text: line.slice(3) });
+    else blocks.push({ kind: 'paragraph', text: line });
+  }
+
+  return (
+    <div className="text-muted space-y-3 text-[15px] leading-relaxed">
+      {blocks.map((block, index) =>
+        block.kind === 'heading' ? (
+          <h3 key={index} className="text-ink pt-3 font-semibold">
+            {block.text}
+          </h3>
+        ) : block.kind === 'list' ? (
+          <ul key={index} className="list-disc space-y-1 pl-5">
+            {block.items.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        ) : (
+          <p key={index}>{block.text}</p>
+        )
+      )}
     </div>
   );
 }

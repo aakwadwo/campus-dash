@@ -1,21 +1,28 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 /**
- * Taking a photograph with the device camera, in the page.
+ * "Take photo": the device camera, and nothing else.
  *
- * TWO WAYS IN, and neither is required. Some people have the thing already on
- * their phone — a screenshot of a scan, a PDF from the university — and telling
- * them to photograph their own screen would be absurd. Others are holding the
- * paper. So this component is one half of a pair: the caller renders a file
- * input beside it, and this is the "or take one now" half.
+ * THE OTHER HALF IS THE CALLER'S. Every screen that uses this also renders a
+ * plain file input for choosing an existing photo or file. That input carries
+ * NO `capture` attribute, so it opens the library; this one opens the camera.
+ * Two buttons, two jobs, and neither pretends to be the other.
  *
- * getUserMedia FIRST, with a fallback. On a laptop the camera stream is the
- * only way to take a picture at all. On a phone `capture="environment"` opens
- * the native camera app, which is faster and better than a stream in a page —
- * but it is a file input, so a browser that blocks camera access still leaves
- * somebody a way through. Both end at the same upload.
+ * TWO ROUTES TO A CAMERA, chosen by the device rather than tried in turn:
+ *
+ *   * A TOUCH DEVICE gets a file input with `capture`, which opens the phone's
+ *     own camera app. It is faster and better than a stream in a page, and it
+ *     is the route that works when a browser is stingy with getUserMedia.
+ *   * A LAPTOP gets the camera in the page, through getUserMedia. `capture`
+ *     means nothing there, so a capture input would only have opened a second
+ *     file picker, which is exactly the confusion this replaces.
+ *
+ * WHY IT WAS BROKEN. The <video> only rendered once streaming had started, so
+ * the stream was attached to an element that did not exist yet: the preview
+ * stayed black and the capture came back empty. The video is now always in the
+ * page, hidden until there is something to show.
  *
  * The stream is stopped on every exit path, including unmount. A camera light
  * that stays on after the photograph is taken is alarming, and rightly so.
@@ -23,68 +30,25 @@ import { useEffect, useRef, useState } from 'react';
 export default function CameraCapture({
   onCaptured,
   facingMode = 'environment',
-  label = 'Take a photo',
+  label = 'Take photo',
+  disabled = false,
   className = '',
 }) {
+  const touch = useCoarsePointer();
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const fallbackRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => () => stopStream(streamRef), []);
 
-  async function open() {
-    setError(null);
-
-    // No camera API at all — an old browser, or an insecure origin. Hand
-    // straight over to the native picker rather than showing a dead button.
-    if (!navigator.mediaDevices?.getUserMedia) {
-      fallbackRef.current?.click();
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setStreaming(true);
-    } catch {
-      // Refused, or in use by something else. The native camera app is a
-      // separate permission and often works when the in-page stream does not.
-      fallbackRef.current?.click();
-    }
-  }
-
-  function close() {
-    stopStream(streamRef);
-    setStreaming(false);
-  }
-
-  async function take() {
-    const video = videoRef.current;
-    if (!video) return;
-
+  async function hand(file) {
+    if (!file) return;
     setBusy(true);
     setError(null);
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-      if (!blob) throw new Error('Could not read the camera image.');
-
-      close();
-      await onCaptured(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+      await onCaptured(file);
     } catch (caught) {
       setError(caught.message);
     } finally {
@@ -92,10 +56,90 @@ export default function CameraCapture({
     }
   }
 
+  async function open() {
+    setError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('This browser cannot open the camera. Choose a photo instead.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode },
+        audio: false,
+      });
+      streamRef.current = stream;
+      const video = videoRef.current;
+      video.srcObject = stream;
+      await video.play();
+      setStreaming(true);
+    } catch (caught) {
+      stopStream(streamRef);
+      setError(
+        caught?.name === 'NotAllowedError'
+          ? 'Camera access was blocked. Allow it in your browser, or choose a photo instead.'
+          : 'No camera was found. Choose a photo instead.'
+      );
+    }
+  }
+
+  function close() {
+    stopStream(streamRef);
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setStreaming(false);
+  }
+
+  async function take() {
+    const video = videoRef.current;
+    if (!video?.videoWidth) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    close();
+    if (!blob) {
+      setError('Could not read the camera image. Try again.');
+      return;
+    }
+    await hand(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+  }
+
+  const pill =
+    'press border-line-strong hover:bg-surface-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors';
+
   return (
     <div className={className}>
-      {streaming ? (
-        <>
+      {touch ? (
+        <label
+          className={`${pill} cursor-pointer ${busy || disabled ? 'pointer-events-none opacity-55' : ''}`}
+        >
+          <CameraGlyph />
+          {label}
+          <input
+            type="file"
+            accept="image/*"
+            capture={facingMode === 'user' ? 'user' : 'environment'}
+            disabled={busy || disabled}
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              hand(file);
+            }}
+          />
+        </label>
+      ) : streaming ? null : (
+        <button type="button" onClick={open} disabled={busy || disabled} className={pill}>
+          <CameraGlyph />
+          {label}
+        </button>
+      )}
+
+      {/* ALWAYS MOUNTED on a laptop, so open() has somewhere to attach the
+          stream. Hidden until it is actually showing something. */}
+      {touch ? null : (
+        <div className={streaming ? 'mt-1' : 'hidden'}>
           <video
             ref={videoRef}
             playsInline
@@ -110,7 +154,7 @@ export default function CameraCapture({
               disabled={busy}
               className="press bg-brand-700 h-11 flex-1 rounded-full text-sm font-semibold text-white transition-colors disabled:opacity-55"
             >
-              {busy ? 'Saving…' : 'Capture'}
+              Capture
             </button>
             <button
               type="button"
@@ -120,44 +164,28 @@ export default function CameraCapture({
               Cancel
             </button>
           </div>
-        </>
-      ) : (
-        <button
-          type="button"
-          onClick={open}
-          className="press border-line-strong hover:bg-surface-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors"
-        >
-          <CameraGlyph />
-          {label}
-        </button>
+        </div>
       )}
-
-      {/* The fallback, and the reason it is hidden rather than absent: on a
-          phone this is the better path, and open() clicks it deliberately. */}
-      <input
-        ref={fallbackRef}
-        type="file"
-        accept="image/*"
-        capture={facingMode === 'user' ? 'user' : 'environment'}
-        className="hidden"
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          event.target.value = '';
-          if (!file) return;
-          setBusy(true);
-          setError(null);
-          try {
-            await onCaptured(file);
-          } catch (caught) {
-            setError(caught.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      />
 
       {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
     </div>
+  );
+}
+
+/**
+ * Whether the primary pointer is a finger. False during server rendering, so a
+ * phone briefly renders the laptop button before hydration swaps it: harmless,
+ * because nothing happens until it is pressed.
+ */
+function useCoarsePointer() {
+  return useSyncExternalStore(
+    (notify) => {
+      const query = window.matchMedia('(pointer: coarse)');
+      query.addEventListener('change', notify);
+      return () => query.removeEventListener('change', notify);
+    },
+    () => window.matchMedia('(pointer: coarse)').matches,
+    () => false
   );
 }
 
@@ -174,6 +202,7 @@ function CameraGlyph() {
       stroke="currentColor"
       strokeWidth="1.75"
       className="size-4"
+      aria-hidden
     >
       <path d="M4 8h3l1.5-2h7L17 8h3v11H4V8Z" strokeLinejoin="round" />
       <circle cx="12" cy="13" r="3.5" />

@@ -65,7 +65,13 @@ export async function quoteAction({ vendorId, items, fulfilmentType = null }) {
  */
 export async function submitOrderAction(_prev, formData) {
   const vendorId = String(formData.get('vendor_id') ?? '');
-  const fulfilmentType = formData.get('fulfilment_type') === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
+  // CHOSEN, NEVER ASSUMED. The checkout starts with neither option selected,
+  // and a request without an answer is refused rather than defaulted to one.
+  const chosen = String(formData.get('fulfilment_type') ?? '');
+  if (chosen !== 'PICKUP' && chosen !== 'DELIVERY') {
+    return { ok: false, message: 'Choose how you want it: collect it, or a Campus Dash Partner.' };
+  }
+  const fulfilmentType = chosen;
   const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
   const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
 
@@ -273,6 +279,46 @@ export async function collectInsteadAction(_prev, formData) {
     'customer_collect_instead',
     'Go to the vendor and collect your order.'
   );
+}
+
+/**
+ * A charge that never came back, given up on by the person waiting for it.
+ *
+ * THE SERVER DECIDES WHETHER IT IS ACTUALLY STUCK.
+ * customer_abandon_stuck_payment() refuses while the payment is younger than
+ * payment_pending_timeout_seconds, and the sentence it returns is written for
+ * the customer — so this asks rather than deciding for itself, and a tap made
+ * two seconds after paying cannot cancel a charge that is merely slow.
+ *
+ * Nothing is refunded here and nothing could be: a payment that reached this
+ * function never succeeded. It is marked FAILED, which puts the order back to
+ * "Ready to pay" with the Pay button on it. The pg_cron sweep does the same
+ * thing eventually; this is for the person who is standing there now.
+ */
+export async function abandonPaymentAction(_prev, formData) {
+  return customerChoice(
+    formData,
+    'customer_abandon_stuck_payment',
+    'That payment has been cancelled. Nothing was taken — you can try again.'
+  );
+}
+
+/**
+ * Leaving an order that has not been paid for.
+ *
+ * ONLY AN UNPAID ONE. customer_abandon_unpaid_order() is guarded on the payment
+ * state, so an order that has been paid, or has a payment in flight, is refused
+ * with a sentence rather than cancelled. Nothing was charged and no store has
+ * seen it, so there is nothing to undo.
+ */
+export async function abandonUnpaidOrderAction(_prev, formData) {
+  const result = await customerChoice(
+    formData,
+    'customer_abandon_unpaid_order',
+    'Order cancelled. Nothing was charged.'
+  );
+  if (result.ok) revalidatePath('/orders');
+  return result;
 }
 
 /**

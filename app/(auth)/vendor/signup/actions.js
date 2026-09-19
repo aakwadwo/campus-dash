@@ -88,11 +88,54 @@ async function identityHoldingPhone(phone) {
 
 /** The signed-in account, or null. Never trusted for authority — only identity. */
 async function currentUserId() {
+  return (await signedInAccount())?.id ?? null;
+}
+
+/**
+ * Who is signed in, and what their account already knows.
+ *
+ * A CUSTOMER OPENING A STORE IS THE SAME PERSON, so their name comes from their
+ * profile and their phone is the one they already gave us. `verifiedPhone` is
+ * the number GoTrue has confirmed on this auth identity, in E.164, or null: an
+ * email customer's profile phone is self-declared and has never been proven,
+ * which is why it cannot yet be a sign-in credential.
+ */
+async function signedInAccount() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  return user?.id ?? null;
+  if (!user) return null;
+
+  const { data: profile } = await supabase
+    .from('users')
+    .select('full_name, phone')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  const authPhone = user.phone ? `+${String(user.phone).replace(/^\+/, '')}` : null;
+  return {
+    id: user.id,
+    name: profile?.full_name ?? null,
+    profilePhone: profile?.phone ?? null,
+    verifiedPhone: user.phone_confirmed_at ? authPhone : null,
+  };
+}
+
+/** The store is created on the session that exists. The one place that calls vendor_signup(). */
+async function createStore(d, applicantName) {
+  const supabase = await createClient();
+  const { data: terms } = await supabase.rpc('current_terms', { p_audience: 'VENDOR' });
+  const termsId = (Array.isArray(terms) ? terms[0] : terms)?.terms_id;
+
+  await signUp({
+    applicantName,
+    storeName: d.storeName,
+    isStudent: d.isStudent === 'yes',
+    description: d.description,
+    categoryId: d.categoryId,
+    termsId,
+  });
 }
 
 /** The number that received the code: the carried one, else the typed one. */
@@ -140,7 +183,12 @@ export async function startVendorSignUpAction(_prev, formData) {
   const d = collect(formData);
   const fail = (error) => at({ step: 'details', ...carry(d), error });
 
-  if (!d.applicantName) return fail('Enter your name.');
+  // SIGNED IN ALREADY? Then this is somebody adding a store to the account they
+  // have, and their name is not asked again: it comes from their profile.
+  const account = await signedInAccount();
+  const applicantName = d.applicantName || account?.name || '';
+
+  if (!applicantName) return fail('Enter your name.');
   if (!d.storeName) return fail('Enter your store name.');
   if (d.isStudent !== 'yes' && d.isStudent !== 'no') {
     return fail('Say whether you are a student.');
@@ -163,49 +211,54 @@ export async function startVendorSignUpAction(_prev, formData) {
     return fail('We could not check that number just now. Try again shortly.');
   }
 
-  if (holder.id) {
-    const me = await currentUserId();
+  if (account) {
+    if (holder.id && holder.id !== account.id) {
+      return fail('That number is already on another Campus Dash account. Use a different one.');
+    }
 
-    if (me === holder.id) {
-      // ALREADY SIGNED IN AS THE PERSON WHO OWNS THIS NUMBER, so there is
-      // nothing left to prove: the session is the proof, and the number is
-      // already on their profile. vendor_signup() reads the phone from that
-      // profile row, so the store attaches to the identity they already have —
-      // no second account, no second credential, customer data untouched.
+    // ALREADY PROVEN ON THIS ACCOUNT: the session is the proof and the number
+    // is already a credential here. Nothing to verify again.
+    if (account.verifiedPhone === phone) {
       try {
-        const { data: terms } = await (
-          await createClient()
-        ).rpc('current_terms', {
-          p_audience: 'VENDOR',
-        });
-        const termsId = (Array.isArray(terms) ? terms[0] : terms)?.terms_id;
-
-        await signUp({
-          applicantName: d.applicantName,
-          storeName: d.storeName,
-          isStudent: d.isStudent === 'yes',
-          description: d.description,
-          categoryId: d.categoryId,
-          termsId,
-        });
+        await createStore(d, applicantName);
       } catch (error) {
         return fail(actionFailure(error, CONTEXT).message);
       }
-
       revalidatePath('/', 'layout');
       redirect('/vendor/application');
     }
 
-    // Somebody else's number, or nobody is signed in. NOT refused outright —
-    // it is very probably their own account — but the way in is the credential
-    // that account already has, not a second one minted here. Sending an OTP
-    // would create the duplicate identity; attaching this number to their auth
-    // record so an OTP could reach them would be worse, because a profile phone
-    // is self-declared and unverified, and whoever holds the handset would then
-    // be able to sign in as them.
+    // THE NUMBER BECOMES A SIGN-IN CREDENTIAL, so it is proven ON THIS ACCOUNT.
+    // A phone change sends the code to the number and, once confirmed, writes
+    // it onto this same auth identity. signInWithOtp would instead look for an
+    // identity holding the number, find none, and mint a second one: the
+    // failure that left customer-vendors unable to sign in to their store.
+    const supabase = await createClient();
+    const { error } = await supabase.auth.updateUser({ phone });
+    if (error) {
+      console.error('[vendor-signup] could not send the phone-change code:', error.message);
+      if (error.status === 429)
+        return fail('Too many codes requested. Wait a moment and try again.');
+      if (/already|exists|registered/i.test(error.message ?? '')) {
+        return fail('That number is already on another Campus Dash account. Use a different one.');
+      }
+      return fail('Could not send a verification code. Try again shortly.');
+    }
+
+    return at({
+      step: 'code',
+      ...carry({ ...d, applicantName }),
+      phone,
+      sentAt: Date.now(),
+    });
+  }
+
+  if (holder.id) {
+    // Somebody else's number, or their own while signed out. The way in is
+    // the credential that account already has, not a second one minted here.
     return fail(
-      'That number is already on a Campus Dash account. Sign in with it first, then register ' +
-        'your store from your account — it keeps everything on one login.'
+      'That number is already on a Campus Dash account. Sign in first, then add your store ' +
+        'from your account. It keeps everything on one login.'
     );
   }
 
@@ -224,7 +277,6 @@ export async function startVendorSignUpAction(_prev, formData) {
     phone,
     // Starts the resend cooldown. The code screen counts down from this.
     sentAt: Date.now(),
-    notice: `We sent a 6-digit code to ${phone}.`,
   });
 }
 
@@ -254,7 +306,12 @@ export async function resendVendorCodeAction(_prev, formData) {
   const back = (extra) => at({ step: 'code', ...carry(d), phone, ...extra });
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({ phone });
+  // A signed-in account is proving a number for ITSELF (a phone change); a new
+  // store owner is signing in with one. Same code screen, different request.
+  const signedIn = Boolean(await currentUserId());
+  const { error } = signedIn
+    ? await supabase.auth.resend({ type: 'phone_change', phone })
+    : await supabase.auth.signInWithOtp({ phone });
 
   if (error) {
     console.error('[vendor-signup] could not resend the code:', error.message);
@@ -289,7 +346,17 @@ export async function finishVendorSignUpAction(_prev, formData) {
   if (!isOtpShape(token)) return fail('Enter the 6-digit code from the SMS.');
 
   const supabase = await createClient();
-  const { error: verifyError } = await supabase.auth.verifyOtp({ phone, token, type: 'sms' });
+  const account = await signedInAccount();
+
+  // ON THIS ACCOUNT, or a new one. A signed-in customer confirms a phone change,
+  // which writes the number onto the identity they already have; somebody with
+  // no account signs in with the number, which is how a vendor-only account is
+  // made.
+  const { error: verifyError } = await supabase.auth.verifyOtp({
+    phone,
+    token,
+    type: account ? 'phone_change' : 'sms',
+  });
 
   if (verifyError) {
     console.error(
@@ -300,17 +367,14 @@ export async function finishVendorSignUpAction(_prev, formData) {
   }
 
   try {
-    const { data: terms } = await supabase.rpc('current_terms', { p_audience: 'VENDOR' });
-    const termsId = (Array.isArray(terms) ? terms[0] : terms)?.terms_id;
-
-    await signUp({
-      applicantName: d.applicantName,
-      storeName: d.storeName,
-      isStudent: d.isStudent === 'yes',
-      description: d.description,
-      categoryId: d.categoryId,
-      termsId,
-    });
+    if (account) {
+      // The number is proven on this identity now. Put it on the profile too,
+      // so the number a Partner rings and the one the store signs in with are
+      // one number. The database reads it from auth.users, not from here.
+      const { error: syncError } = await supabase.rpc('sync_my_verified_phone');
+      if (syncError) throw new Error(syncError.message);
+    }
+    await createStore(d, d.applicantName || account?.name || '');
   } catch (error) {
     const failure = actionFailure(error, CONTEXT);
     return at({ step: 'code', ...carry(d), phone, error: failure.message });

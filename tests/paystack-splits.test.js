@@ -482,17 +482,39 @@ describe('split settlement in the ledger', () => {
     assert.equal(vendor.settlement_channel, 'TRANSFER');
   });
 
-  test('a scan errand has no vendor allocation to split at all', async () => {
+  test('a scan order with a pack splits the pack to the store, and only the pack', async () => {
+    await giveVendorASubaccount(VENDORS.wafflemania);
+    // Stated, not inherited: another file zeroes the pack for its own arithmetic.
+    await asService((c) =>
+      c.query('update public.pricing_config set scan_pack_fee_pesewas = 400 where id')
+    );
+
+    // A Partner order, so the pack is compulsory: GH₵2 fee + GH₵4 pack + GH₵5.
+    const order = await submitScanOrder({ vendorId: VENDORS.wafflemania });
+    await payWithSplit(order.order_id, { share: 400 });
+
+    const vendor = (await getAllocations(order.order_id)).filter((a) => a.payee_type === 'VENDOR');
+    assert.equal(vendor.length, 1, 'the pack is the store’s money');
+    assert.equal(Number(vendor[0].amount_pesewas), 400, 'the pack, and never the scanned value');
+    assert.equal(vendor[0].status, 'SETTLED', 'paid by the split, so no run can claim it');
+    assert.equal(vendor[0].settlement_channel, 'SPLIT');
+  });
+
+  test('a scan collection with no pack has no vendor allocation to split at all', async () => {
     await giveVendorASubaccount(VENDORS.wafflemania);
 
-    const order = await submitScanOrder({ vendorId: VENDORS.wafflemania });
+    const order = await submitScanOrder({
+      vendorId: VENDORS.wafflemania,
+      fulfilment: 'PICKUP',
+      wantsPack: false,
+    });
     await payWithSplit(order.order_id, { subaccount: null });
 
     const allocations = await getAllocations(order.order_id);
     assert.equal(
       allocations.filter((a) => a.payee_type === 'VENDOR').length,
       0,
-      'Campus Dash did not sell their food and owes them nothing for it'
+      'the university settles the food, and there is no pack: the store is owed nothing by us'
     );
   });
 

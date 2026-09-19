@@ -1,10 +1,11 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import VendorSignUpForm from './signup-form';
 import { getCapabilities } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { listCategories, getMyApplication } from '@/lib/vendor';
-import { Card, TextLink, ArrowLeftIcon } from '@/app/ui';
+import { Card, TextLink } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
+import BackButton from '@/app/back-button';
 
 export const metadata = { title: 'Register your store' };
 
@@ -21,24 +22,20 @@ export default async function VendorSignUpPage() {
   const me = await getCapabilities();
 
   let rejectionReason = null;
+  let account = null;
   if (me.authenticated) {
     if (me.vendor_ids?.length) redirect('/vendor');
     const application = await getMyApplication();
     if (application && application.status !== 'REJECTED') redirect('/vendor/application');
     rejectionReason = application?.rejection_reason ?? null;
+    account = await accountFacts();
   }
 
   const categories = await listCategories();
 
   return (
     <main className="flex min-h-dvh flex-col px-5 py-6 sm:py-10">
-      <Link
-        href="/order"
-        className="text-muted hover:text-ink press-sm -ml-1 inline-flex w-fit items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
-      >
-        <ArrowLeftIcon className="size-4" />
-        Keep browsing
-      </Link>
+      <BackButton fallback="/" />
 
       <div className="flex flex-1 flex-col justify-center">
         <div className="animate-fade-up mx-auto w-full max-w-md py-6">
@@ -48,27 +45,69 @@ export default async function VendorSignUpPage() {
               {rejectionReason ? 'Resubmit your store' : 'Sell on Campus Dash'}
             </h1>
             <p className="text-muted mx-auto mt-2.5 max-w-sm text-sm leading-relaxed">
-              Tell us about your store. We&apos;ll text a code to confirm your number, then an
-              administrator reviews the application.
+              {account
+                ? 'Added to the account you already have. Campus Dash reviews every store.'
+                : 'Tell us about your store. Campus Dash reviews every one.'}
             </p>
           </div>
 
           <Card className="p-5 sm:p-6">
             <VendorSignUpForm
+              account={account}
               categories={categories}
               resubmitting={Boolean(rejectionReason)}
               rejectionReason={rejectionReason}
             />
           </Card>
 
-          <p className="text-muted mt-6 text-center text-sm leading-relaxed">
-            Already registered?{' '}
-            <TextLink href="/login/vendor" className="font-medium">
-              Sign in
-            </TextLink>
-          </p>
+          {account ? null : (
+            <p className="text-muted mt-6 text-center text-sm leading-relaxed">
+              Already registered?{' '}
+              <TextLink href="/login/vendor" className="font-medium">
+                Sign in
+              </TextLink>
+            </p>
+          )}
         </div>
       </div>
     </main>
   );
+}
+
+/**
+ * What the signed-in account already knows, so the form does not ask again.
+ *
+ * The phone is shown the way Ghanaians write it (0XXXXXXXXX). `verified` says
+ * whether it is already a credential on this account; if it is and it is not
+ * changed, no code is sent at all.
+ */
+async function accountFacts() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: profile } = await supabase
+    .from('users')
+    .select('full_name, phone')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  // STUDENT OR STAFF IS ALREADY ON THE CUSTOMER PROFILE, so the store form
+  // does not ask it again. Null for an account with no customer profile.
+  const { data: customer } = await supabase
+    .from('customer_profiles')
+    .select('affiliation')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  const phone = profile?.phone ?? null;
+  const authPhone = user.phone ? `+${String(user.phone).replace(/^\+/, '')}` : null;
+  return {
+    name: profile?.full_name ?? null,
+    phone: phone ? phone.replace(/^\+233/, '0') : '',
+    verified: Boolean(user.phone_confirmed_at) && authPhone === phone,
+    isStudent: customer?.affiliation ? (customer.affiliation === 'STUDENT' ? 'yes' : 'no') : null,
+  };
 }

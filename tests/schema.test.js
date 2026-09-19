@@ -368,6 +368,9 @@ describe('schema invariants', () => {
       'admin_webhook_events',
       'complete_customer_onboarding',
       'customer_abandon_stuck_payment',
+      // An UNPAID order, abandoned by the person who placed it. Guarded on the
+      // payment state, so a paid order is refused rather than cancelled.
+      'customer_abandon_unpaid_order',
       'customer_choose_fulfilment',
       'customer_collect_instead',
       // The customer types in the four digits the STORE read out, and that
@@ -423,11 +426,15 @@ describe('schema invariants', () => {
       'quote_scan_order',
       'scan_image_path',
       'set_my_email',
+      // Copies the caller's VERIFIED auth phone onto their own profile. No
+      // parameter: the number comes from auth.users, never from the request.
+      'sync_my_verified_phone',
       'submit_order',
       'submit_scan_order',
       'update_my_profile',
       'vendor_add_image',
       'vendor_delete_image',
+      'vendor_set_primary_image',
       'vendor_earnings_summary',
       'vendor_handoff_code',
       'vendor_mark_ready',

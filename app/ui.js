@@ -305,6 +305,45 @@ export function Callout({ tone = 'brand', className = '', children }) {
   );
 }
 
+/**
+ * Something useful that does not need to be on screen until somebody asks.
+ *
+ * THE ONE PROGRESSIVE-DISCLOSURE PATTERN IN THE PRODUCT. A row with a title, an
+ * optional one-line summary of what is inside, and a chevron; tap it and the
+ * content opens beneath. Every screen that hides detail behind a tap uses this,
+ * so "tap to see more" looks and behaves the same everywhere.
+ *
+ * A native <details>, so it needs no JavaScript, works in a server component,
+ * and is announced correctly by a screen reader. `flush` drops the hairline for
+ * a disclosure that sits inside a card.
+ */
+export function Disclosure({
+  title,
+  summary = null,
+  defaultOpen = false,
+  flush = false,
+  className = '',
+  children,
+}) {
+  return (
+    <details
+      open={defaultOpen || undefined}
+      className={`group ${flush ? '' : 'border-line border-b last:border-b-0'} ${className}`}
+    >
+      <summary className="press-sm flex min-h-14 cursor-pointer list-none items-center gap-3 py-3 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold">{title}</span>
+          {summary ? (
+            <span className="text-muted mt-0.5 block truncate text-sm">{summary}</span>
+          ) : null}
+        </span>
+        <ChevronRightIcon className="text-faint size-5 shrink-0 transition-transform group-open:rotate-90" />
+      </summary>
+      <div className="pb-5">{children}</div>
+    </details>
+  );
+}
+
 /* ---------------------------------------------------------------------------
  * Status
  * ------------------------------------------------------------------------- */
@@ -587,6 +626,24 @@ export function CodeDisplay({ label, hint, code, tone = 'brand' }) {
   );
 }
 
+/**
+ * "We sent a 6-digit code to" and the address, on a line of its own.
+ *
+ * The address used to sit inline with `break-all`, which snapped it at any
+ * character wherever the sentence happened to end: "kwame.mensah@acity.e" on
+ * one line and "du.gh" on the next. Given its own line it fits whole on any
+ * phone, at a readable size; `overflow-wrap: anywhere` only breaks an address
+ * too long for the screen, and only where it must.
+ */
+export function CodeSentTo({ children }) {
+  return (
+    <p className="text-muted text-[15px] leading-relaxed">
+      Enter the 6-digit code we sent to
+      <span className="text-ink block font-semibold [overflow-wrap:anywhere]">{children}</span>
+    </p>
+  );
+}
+
 /* ---------------------------------------------------------------------------
  * Timeline
  * ------------------------------------------------------------------------- */
@@ -701,9 +758,12 @@ export function ImagePlaceholder({ name = '', className = '', ratio = 'aspect-[1
  * A vendor in the marketplace grid.
  *
  * The composition follows the references exactly: image, a state chip over it,
- * then name and metadata beneath in decreasing weight. A closed store is not
- * hidden — knowing a place exists but is shut is useful — but it is desaturated
- * and not a link, so it cannot waste a tap.
+ * then name and metadata beneath in decreasing weight.
+ *
+ * A CLOSED STORE LOOKS LIKE A REAL STORE. Its photo is shown exactly as it is;
+ * the "Closed" chip is the only thing that says so, and the card is not a link,
+ * so it cannot waste a tap. Greying the whole card made a real place read as a
+ * broken one.
  */
 export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
   const open = vendor.is_accepting_orders;
@@ -717,12 +777,10 @@ export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
             src={imageUrl}
             alt=""
             loading="lazy"
-            className={`rounded-card aspect-[16/10] w-full object-cover ${
-              open ? '' : 'opacity-45 saturate-0'
-            }`}
+            className="rounded-card bg-surface-2 aspect-[16/10] w-full object-cover"
           />
         ) : (
-          <ImagePlaceholder name={vendor.name} className={open ? '' : 'opacity-45 saturate-0'} />
+          <ImagePlaceholder name={vendor.name} />
         )}
         <div className="absolute top-3 left-3">
           {open ? (
@@ -731,17 +789,14 @@ export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
               Open
             </span>
           ) : (
-            <span className="bg-surface text-muted border-line rounded-full border px-2.5 py-1 text-xs font-semibold">
+            <span className="bg-ink rounded-full px-2.5 py-1 text-xs font-semibold text-white">
               Closed
             </span>
           )}
         </div>
       </div>
       <div className="px-1 pt-3">
-        <p
-          className={`leading-snug font-semibold break-words ${open ? '' : 'text-muted'}`}
-          title={vendor.name}
-        >
+        <p className="leading-snug font-semibold break-words" title={vendor.name}>
           {vendor.name}
         </p>
         {meta ? (
@@ -751,7 +806,13 @@ export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
     </>
   );
 
-  if (!open) return <div className="cursor-default">{body}</div>;
+  if (!open) {
+    return (
+      <div className="cursor-default" aria-label={`${vendor.name}, closed right now`}>
+        {body}
+      </div>
+    );
+  }
 
   return (
     <Link

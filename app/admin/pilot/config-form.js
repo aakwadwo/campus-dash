@@ -48,7 +48,7 @@ export default function ConfigForm({ config }) {
         type="number"
         min="0"
         placeholder={String(config?.scan_pack_fee_pesewas ?? 0)}
-        hint="SCAN orders only, and its own line on the customer's bill. Optional on a collection — they may bring their own container — and compulsory with a Partner, who needs something to carry. A normal food order comes in the store's packaging and is never charged this. 0 means Campus Dash absorbs it."
+        hint="SCAN orders only, and its own line on the customer's bill. Optional on a collection — they may bring their own container — and compulsory with a Partner, who needs something to carry. A normal food order comes in the store's packaging and is never charged this. The pack fee is the store's money, allocated to the vendor. 0 means no pack is charged."
       />
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Both order types</h3>

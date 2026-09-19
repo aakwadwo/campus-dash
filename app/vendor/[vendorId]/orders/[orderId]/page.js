@@ -64,6 +64,14 @@ export default async function VendorOrderPage({ params }) {
         ) : null}
       </header>
 
+      {/* PACK INCLUDED is part of the job, so it is said before anything else
+          about the order. */}
+      {Number(order.vendor_pack_pesewas) > 0 ? (
+        <p className="bg-ink rounded-card mb-4 px-4 py-3 text-sm font-semibold text-white">
+          Pack included. Pack this order.
+        </p>
+      ) : null}
+
       {/* WHAT TO DO comes before what the order contains. */}
       <OrderActions order={order} vendorId={vendorId} handoffCode={handoffCode} scanUrl={scanUrl} />
 
@@ -83,25 +91,32 @@ export default async function VendorOrderPage({ params }) {
         </ul>
 
         {/* THE STORE'S AMOUNT, and only that. The fees on this order belong to
-            Campus Dash and the Partner and are not returned to this screen.
-            On a meal scan Campus Dash pays nothing at all — the university's
-            system settles it — so the scan's value is named for what it is
-            rather than shown as a GH₵0.00 that reads like a mistake. */}
-        <div className="border-line mt-3 flex items-baseline justify-between gap-3 border-t pt-3">
-          <span className="font-semibold">
-            {order.order_type === 'SCAN' ? 'Redeemed on scan' : 'Your amount'}
-          </span>
-          <span className="text-lg font-semibold tabular-nums">
-            {formatPesewas(
-              order.order_type === 'SCAN' ? order.scan_value_pesewas : order.vendor_amount_pesewas
-            )}
-          </span>
-        </div>
-        {order.order_type === 'SCAN' ? (
-          <p className="text-muted mt-2 text-xs leading-relaxed">
-            Settled through the campus meal system, not by Campus Dash.
-          </p>
-        ) : null}
+            Campus Dash and the Partner and are not returned to this screen. On
+            a meal scan the food is settled through the campus meal system, so
+            its value is named for what it is; the pack, when there is one, is
+            the store's money through Campus Dash. */}
+        <dl className="border-line mt-3 space-y-1.5 border-t pt-3 text-sm">
+          {order.order_type === 'SCAN' ? (
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-muted">Food, on the meal scan</dt>
+              <dd className="tabular-nums">{formatPesewas(order.scan_value_pesewas)}</dd>
+            </div>
+          ) : null}
+          {Number(order.vendor_pack_pesewas) > 0 ? (
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-muted">Pack</dt>
+              <dd className="tabular-nums">{formatPesewas(order.vendor_pack_pesewas)}</dd>
+            </div>
+          ) : null}
+          {order.order_type !== 'SCAN' || Number(order.vendor_amount_pesewas) > 0 ? (
+            <div className="flex items-baseline justify-between gap-3 pt-1">
+              <dt className="font-semibold">Paid to you by Campus Dash</dt>
+              <dd className="text-base font-semibold tabular-nums">
+                {formatPesewas(order.vendor_amount_pesewas)}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
       </Card>
 
       {order.scan_details ? (

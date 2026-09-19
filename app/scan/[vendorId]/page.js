@@ -56,10 +56,9 @@ export default async function ScanVendorPage({ params }) {
     url: vendorImageUrl(image.storage_path),
   }));
 
-  return (
-    <div className="min-h-dvh">
-      <SiteHeader />
-
+  // THE STORE'S HEADER, handed to the builder so it steps aside at checkout.
+  const header = (
+    <div className="mb-6">
       <div className="border-line border-b">
         <Container size="wide" className="pt-4 pb-5 sm:pt-6 sm:pb-7">
           <BackLink href="/scan" className="mb-3 sm:mb-5">
@@ -106,36 +105,37 @@ export default async function ScanVendorPage({ params }) {
         </Container>
       </div>
 
-      <main className="pb-40">
+      {!vendor.is_accepting_orders ? (
         <Container size="wide" className="pt-6">
-          {!vendor.is_accepting_orders ? (
-            <Callout tone="warn" className="mb-6">
-              This store is closed right now, so you cannot put a scan through. You can still look
-              at what they take.
-            </Callout>
-          ) : null}
-
-          {available.length === 0 ? (
-            <Callout className="mb-6">
-              {vendor.name} takes meal scans but has not marked anything available right now.
-            </Callout>
-          ) : null}
-
-          <ScanOrderBuilder
-            vendor={{
-              vendor_id: vendorId,
-              name: vendor.name,
-              is_accepting_orders: vendor.is_accepting_orders,
-            }}
-            menu={available}
-            locations={locations}
-            partnerAvailable={platform.partner_delivery_enabled !== false}
-            // For the LABEL on the Partner option only. What is charged always
-            // comes back from quote_scan_order().
-            partnerFeePesewas={Number(platform.delivery_fee_pesewas ?? 0)}
-            packFeePesewas={Number(platform.scan_pack_fee_pesewas ?? 0)}
-          />
+          <Callout tone="warn">
+            This store is closed right now, so you cannot put a scan through. You can still look at
+            what they take.
+          </Callout>
         </Container>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div className="min-h-dvh">
+      <SiteHeader />
+
+      <main className="pb-40">
+        <ScanOrderBuilder
+          header={header}
+          vendor={{
+            vendor_id: vendorId,
+            name: vendor.name,
+            is_accepting_orders: vendor.is_accepting_orders,
+          }}
+          menu={available}
+          locations={locations}
+          partnerAvailable={platform.partner_delivery_enabled !== false}
+          // For the LABEL on the Partner option only. What is charged always
+          // comes back from quote_scan_order().
+          partnerFeePesewas={Number(platform.delivery_fee_pesewas ?? 0)}
+          packFeePesewas={Number(platform.scan_pack_fee_pesewas ?? 0)}
+        />
       </main>
     </div>
   );

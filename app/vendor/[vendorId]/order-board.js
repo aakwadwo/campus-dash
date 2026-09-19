@@ -15,7 +15,7 @@ import { Button, Stat, Unavailable, ChevronRightIcon, SuccessNote, ErrorNote } f
  * the order the questions come:
  *
  *   1. Am I open?                    the status line and its one button
- *   2. How is today going?           Today's orders, Today's sales
+ *   2. How is today going?           Sales today, Earned today
  *   3. What needs me right now?      to prepare, then ready for collection
  *   4. What just happened?           the last few finished, then History
  *
@@ -107,8 +107,12 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
       {/* 2. HOW IS TODAY GOING. Two numbers, both the store's own. */}
       {today ? (
         <dl className="mt-6 grid grid-cols-2 gap-3">
-          <Stat label="Today's orders" value={today.orders} />
-          <Stat label="Today's sales" value={formatPesewas(today.salesPesewas)} />
+          {/* SALES, counted and summed the same way: orders that pay this store
+              something through Campus Dash. A meal scan with no pack is made
+              and handed over like any other, but earns nothing through us, so
+              it is on the board and not in these two numbers. */}
+          <Stat label="Sales today" value={today.orders} />
+          <Stat label="Earned today" value={formatPesewas(today.salesPesewas)} />
         </dl>
       ) : (
         <Unavailable className="mt-6">
@@ -225,6 +229,13 @@ function OrderCard({ order, vendorId, tone }) {
               Meal scan
             </span>
           ) : null}
+          {/* AN OPERATIONAL FACT, so it is on the card: somebody has to put the
+              food in one. What the pack is worth sits inside the order. */}
+          {order.pack_included ? (
+            <span className="bg-ink rounded px-1.5 py-0.5 text-xs font-semibold text-white">
+              Pack included
+            </span>
+          ) : null}
           <span className="text-muted">
             {order.item_count} item{order.item_count === 1 ? '' : 's'} ·{' '}
             <Age key={order.age_seconds} seconds={order.age_seconds} />
@@ -238,23 +249,10 @@ function OrderCard({ order, vendorId, tone }) {
           </span>
         ) : null}
       </span>
-      <span className="shrink-0 text-right">
-        {/* WHAT CAMPUS DASH PAYS THIS STORE. On a meal scan that is nothing —
-            the university's system settles it — so the scan's value is shown
-            instead, marked as what it is, rather than a bare GH₵0.00 that
-            reads like a mistake. */}
-        {scan ? (
-          <span className="block text-sm font-semibold tabular-nums">
-            {formatPesewas(order.scan_value_pesewas)}
-            <span className="text-muted block text-xs font-normal">on scan</span>
-          </span>
-        ) : (
-          <span className="block font-semibold tabular-nums">
-            {formatPesewas(order.vendor_amount_pesewas)}
-          </span>
-        )}
-        <ChevronRightIcon className="text-faint ml-auto size-5" />
-      </span>
+      {/* NO MONEY ON A LIVE CARD. A counter needs the number, what to check and
+          who is waiting; the amounts are inside the order for whoever wants
+          them. */}
+      <ChevronRightIcon className="text-faint size-5 shrink-0" />
     </Link>
   );
 }
@@ -281,13 +279,15 @@ function FinishedRow({ order, vendorId }) {
                 : 'Handed over'}
         {order.order_type === 'SCAN' ? <span className="text-faint"> · meal scan</span> : null}
       </span>
-      <span
-        className={`shrink-0 text-sm font-semibold tabular-nums ${cancelled ? 'text-faint line-through' : ''}`}
-      >
-        {formatPesewas(
-          order.order_type === 'SCAN' ? order.scan_value_pesewas : order.vendor_amount_pesewas
-        )}
-      </span>
+      {/* The store's own amount through Campus Dash: the food, or on a scan
+          order the pack. Nothing at all when that is zero. */}
+      {Number(order.vendor_amount_pesewas) > 0 ? (
+        <span
+          className={`shrink-0 text-sm font-semibold tabular-nums ${cancelled ? 'text-faint line-through' : ''}`}
+        >
+          {formatPesewas(order.vendor_amount_pesewas)}
+        </span>
+      ) : null}
       <ChevronRightIcon className="text-faint size-4 shrink-0" />
     </Link>
   );
@@ -432,12 +432,35 @@ function CollectedToast({ count, onDone }) {
   );
 }
 
+/**
+ * ONE AudioContext for the life of the page, not one per chime.
+ *
+ * A browser allows only a handful per document — six in Chrome — and this board
+ * is open on a counter all day. Constructing a fresh one per order and never
+ * closing it meant the seventh order of the day threw, was swallowed by the
+ * catch below, and the store simply stopped being told about new orders for the
+ * rest of the day. Nothing on screen said so.
+ *
+ * Reusing one also gives the chime its best chance on a phone: a context
+ * created before any tap starts SUSPENDED, and resume() below takes it out of
+ * that state the first time the browser will allow it rather than stranding a
+ * context nobody can ever hear.
+ */
+let audioContext = null;
+
+function sharedAudioContext() {
+  const AudioCtx = window.AudioContext ?? window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!audioContext || audioContext.state === 'closed') audioContext = new AudioCtx();
+  if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+  return audioContext;
+}
+
 /** Two short tones via Web Audio — no asset to load, no permission to ask for. */
 function beep() {
   try {
-    const AudioCtx = window.AudioContext ?? window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const context = new AudioCtx();
+    const context = sharedAudioContext();
+    if (!context) return;
     [0, 0.18].forEach((offset) => {
       const oscillator = context.createOscillator();
       const gain = context.createGain();

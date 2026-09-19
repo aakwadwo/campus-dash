@@ -471,7 +471,7 @@ COMMENT ON COLUMN "public"."orders"."order_type" IS 'FOOD or SCAN. Decides prici
 COMMENT ON COLUMN "public"."orders"."partner_slot" IS 'Which of a Partner''s concurrent delivery slots this order occupies. Unique per Partner while the delivery is active — that index IS the capacity limit; pricing_config.max_active_deliveries_per_partner decides how many slots exist. Retained after completion for the audit trail; the index ignores it there, so a finished delivery never blocks a new one.';
 
 
-COMMENT ON COLUMN "public"."orders"."pack_fee_pesewas" IS 'The disposable pack fee charged on this order, snapshotted at submission. Always 0 on a FOOD order — the check constraint says so — because Campus Dash only buys packaging for a scan errand.';
+COMMENT ON COLUMN "public"."orders"."pack_fee_pesewas" IS 'The pack fee charged on this order, snapshotted at submission. The STORE''S money: it is allocated to the vendor with the rest of the store''s share (subtotal + pack). Always 0 on a FOOD order — orders_pack_fee_scan_only says so — because a food order arrives in the store''s own packaging and is charged nothing for it.';
 
 
 COMMENT ON COLUMN "public"."orders"."order_day" IS 'The calendar day the queue number belongs to. Kept as a column rather than derived from created_at so the number and the day it is unique within can never disagree.';
@@ -5008,10 +5008,12 @@ CREATE OR REPLACE FUNCTION "public"."create_order_allocations"("p_order_id" "uui
     AS $$
 declare
   v_order    public.orders%rowtype;
+  v_vendor   bigint;
   v_platform bigint;
   v_count    integer := 0;
   v_split    bigint := 0;
   v_code     text;
+  v_by_split boolean;
 begin
   perform public.assert_service_or_admin();
 
@@ -5026,9 +5028,7 @@ begin
   end if;
 
   -- WHAT THE PROVIDER ACTUALLY SPLIT, read from the payment that succeeded —
-  -- not from what we intended, and not from the vendor's current setup. A
-  -- vendor who registered a subaccount after this order was charged is still
-  -- owed this order's money through a payout run.
+  -- not from what we intended, and not from the vendor's current setup.
   select p.split_vendor_pesewas, p.split_subaccount_code
     into v_split, v_code
     from public.payments p
@@ -5038,38 +5038,36 @@ begin
 
   v_split := coalesce(v_split, 0);
 
-  -- At payment time NO PARTNER EXISTS YET — dispatch has not even opened. So we
-  -- allocate in two rows now, and the Partner's share is carved out of the
-  -- platform row later, at the moment a Partner actually earns it
-  -- (see settle_partner_earnings). The rows always sum to the total, so the
-  -- balance constraint holds at every step.
-  v_platform := v_order.total_pesewas - v_order.subtotal_pesewas;
+  -- THE STORE'S SHARE: the food it sold, plus the pack it packed. Zero pack on
+  -- a food order (orders_pack_fee_scan_only) and zero food on a scan order
+  -- (orders_scan_has_no_food_value), so each order type reads its own half.
+  v_vendor   := v_order.subtotal_pesewas + coalesce(v_order.pack_fee_pesewas, 0);
+  v_platform := v_order.total_pesewas - v_vendor;
 
-  -- The vendor cooked the food; their money is eligible on payment, regardless
-  -- of how the delivery later turns out.
-  --
-  -- SCAN ORDERS GET NO SUCH ROW. Campus Dash did not sell their food and owes
-  -- them nothing for it.
-  if v_order.order_type <> 'SCAN' then
+  -- A PARTIAL split would leave a remainder nobody was ever going to send, so
+  -- only a split covering the whole share settles the row.
+  v_by_split := v_code is not null and v_split >= v_vendor;
+
+  -- A food order always has a vendor row. A scan order has one only when the
+  -- store is owed something through Campus Dash — the pack. A scan collection
+  -- without a pack still writes NO vendor row: a zero-pesewa liability tells a
+  -- reader the store is owed something, and it is not.
+  if v_order.order_type <> 'SCAN' or v_vendor > 0 then
     insert into public.allocations (
       order_id, payee_type, payee_id, amount_pesewas, status,
       settlement_channel, settled_at
     )
     values (
-      p_order_id, 'VENDOR', v_order.vendor_id, v_order.subtotal_pesewas,
-      -- A PARTIAL split would leave a remainder nobody was ever going to send,
-      -- so only a split that covers the whole subtotal settles the row. In
-      -- practice the split IS the subtotal; this is the guard, not a case.
-      (case when v_code is not null and v_split >= v_order.subtotal_pesewas
-            then 'SETTLED' else 'ELIGIBLE' end)::public.allocation_status,
-      case when v_code is not null and v_split >= v_order.subtotal_pesewas
-           then 'SPLIT' else 'TRANSFER' end,
-      case when v_code is not null and v_split >= v_order.subtotal_pesewas
-           then now() end
+      p_order_id, 'VENDOR', v_order.vendor_id, v_vendor,
+      (case when v_by_split then 'SETTLED' else 'ELIGIBLE' end)::public.allocation_status,
+      case when v_by_split then 'SPLIT' else 'TRANSFER' end,
+      case when v_by_split then now() end
     );
     v_count := v_count + 1;
   end if;
 
+  -- The service fee, plus the Partner fee until a Partner earns it (see
+  -- settle_partner_earnings, which carves it out of this row).
   insert into public.allocations (order_id, payee_type, payee_id, amount_pesewas, status, settlement_channel)
   values (p_order_id, 'PLATFORM', null, v_platform, 'ELIGIBLE', 'TRANSFER');
   v_count := v_count + 1;
@@ -5080,6 +5078,9 @@ $$;
 
 
 ALTER FUNCTION "public"."create_order_allocations"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."create_order_allocations"("p_order_id" "uuid") IS 'Writes the ledger for a paid order. VENDOR = subtotal + pack (the food on a food order, the pack on a scan order; no row on a scan order with neither). PLATFORM = the rest, from which settle_partner_earnings later carves the Partner''s fee. Idempotent. A VENDOR row paid by a Paystack split that covered the whole share is born SETTLED.';
 
 
 CREATE OR REPLACE FUNCTION "public"."create_payment_intent"("p_order_id" "uuid", "p_provider" "text", "p_idempotency_key" "text") RETURNS "public"."payments"
@@ -5335,6 +5336,61 @@ $$;
 
 
 ALTER FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") RETURNS "public"."transition_result"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_order public.orders%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found or v_order.customer_id <> auth.uid() then
+    raise exception 'not your order' using errcode = 'insufficient_privilege';
+  end if;
+
+  update public.orders
+     set order_status        = 'CANCELLED',
+         cancelled_at        = now(),
+         cancellation_reason = 'the customer abandoned the unpaid order'
+   where id = p_order_id
+     and customer_id = auth.uid()
+     and order_status = 'ACCEPTED'
+     and payment_status in ('UNPAID', 'FAILED');
+
+  if not found then
+    perform public.log_order_event(p_order_id, 'ORDER_ABANDONED', false, 'CUSTOMER',
+      'order_status', v_order.order_status::text, 'CANCELLED',
+      'only an order that has not been paid for can be abandoned');
+    return row(
+      false,
+      case
+        when v_order.payment_status = 'PENDING'
+          then 'a payment on this order is still being confirmed'
+        when v_order.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
+          then 'this order has been paid for, so it cannot be abandoned'
+        else 'this order can no longer be abandoned'
+      end
+    )::public.transition_result;
+  end if;
+
+  perform public.log_order_event(p_order_id, 'ORDER_ABANDONED', true, 'CUSTOMER',
+    'order_status', 'ACCEPTED', 'CANCELLED', 'the customer abandoned the unpaid order');
+
+  return row(true, null)::public.transition_result;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") IS 'The customer abandons their own order before paying for it: ACCEPTED with payment UNPAID or FAILED becomes CANCELLED. Guarded on the payment state, so a paid order or one with a payment in flight is refused and logged, never overwritten. The same end state expire_stale_orders() reaches on its own.';
 
 
 CREATE OR REPLACE FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid" DEFAULT NULL::"uuid", "p_destination_note" "text" DEFAULT NULL::"text") RETURNS "public"."transition_result"
@@ -5676,22 +5732,30 @@ $$;
 ALTER FUNCTION "public"."customer_order_detail"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."customer_order_list"("p_limit" integer DEFAULT 30) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_name" "text", "order_type" "public"."order_type", "stage" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "total_pesewas" bigint, "submitted_at" timestamp with time zone, "completed_at" timestamp with time zone, "seconds_to_deadline" integer, "partner_first_name" "text", "cancellation_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."customer_order_list"("p_limit" integer DEFAULT 30) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_name" "text", "vendor_image_path" "text", "order_type" "public"."order_type", "stage" "text", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "items_summary" "text", "total_pesewas" bigint, "submitted_at" timestamp with time zone, "completed_at" timestamp with time zone, "seconds_to_deadline" integer, "partner_first_name" "text", "cancellation_reason" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-  select o.id, o.order_number, o.vendor_order_no, v.name, o.order_type,
+  select o.id, o.order_number, o.vendor_order_no, v.name,
+         (select i.storage_path from public.vendor_images i
+           where i.vendor_id = v.id order by i.sort_order, i.created_at limit 1),
+         o.order_type,
          public.customer_order_stage(o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type),
          o.order_status, o.payment_status, o.delivery_status, o.fulfilment_type,
          (select count(*) from public.order_items oi where oi.order_id = o.id),
+         -- "2× Jollof, Water". The names as they were when ordered, so a store
+         -- renaming a dish does not rewrite somebody's history.
+         (select string_agg(
+                   case when oi.quantity > 1
+                        then oi.quantity::text || '× ' || oi.name_snapshot
+                        else oi.name_snapshot end,
+                   ', ' order by oi.created_at)
+            from public.order_items oi where oi.order_id = o.id),
          o.total_pesewas, o.submitted_at, o.completed_at,
          case when o.accept_deadline_at is not null
               then extract(epoch from (o.accept_deadline_at - now()))::integer end,
-         -- FIRST NAME, AND IT STAYS. It used to be nulled the moment the
-         -- delivery ended, so a history row named nobody — a record of a
-         -- transaction rather than of something that happened. "Kwame brought
-         -- this" is what a person remembers. The PHONE NUMBER is what ends with
-         -- the delivery, and this list never carried one.
+         -- First name only, and it stays after the delivery. The PHONE NUMBER
+         -- is what ends with the delivery, and this list never carried one.
          public.given_name(pu.first_name, pu.full_name),
          o.cancellation_reason
     from public.orders o
@@ -5704,6 +5768,9 @@ $$;
 
 
 ALTER FUNCTION "public"."customer_order_list"("p_limit" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."customer_order_list"("p_limit" integer) IS 'The caller''s own orders, newest first, as a history: the store and its primary photo, a one-line summary of the items, the total and the stage. No phone numbers, no codes. Scoped to auth.uid().';
 
 
 CREATE OR REPLACE FUNCTION "public"."customer_order_stage"("p_order_status" "public"."order_status", "p_payment_status" "public"."payment_status", "p_delivery_status" "public"."delivery_status" DEFAULT 'NONE'::"public"."delivery_status", "p_fulfilment_type" "public"."fulfilment_type" DEFAULT NULL::"public"."fulfilment_type") RETURNS "text"
@@ -8855,7 +8922,10 @@ CREATE OR REPLACE FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") RE
          coalesce((select jsonb_agg(jsonb_build_object(
                      'id', i.id, 'storage_path', i.storage_path, 'caption', i.caption
                    ) order by i.sort_order, i.created_at)
-                     from public.vendor_images i where i.vendor_id = v.id), '[]'::jsonb)
+                     from (select * from public.vendor_images i2
+                            where i2.vendor_id = v.id
+                            order by i2.sort_order, i2.created_at
+                            limit 4) i), '[]'::jsonb)
     from public.vendors v
     left join public.vendor_categories k on k.id = v.category_id
    where v.id = p_vendor_id and v.status = 'ACTIVE';
@@ -9220,6 +9290,54 @@ $$;
 ALTER FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_items" "jsonb", "p_fulfilment_type" "public"."fulfilment_type", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_location_id" "uuid", "p_details" "text", "p_destination_note" "text", "p_wants_pack" boolean) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."sync_my_verified_phone"() RETURNS "public"."users"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_user  public.users%rowtype;
+  v_phone text;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication required' using errcode = 'insufficient_privilege';
+  end if;
+
+  select nullif(u.phone, '') into v_phone
+    from auth.users u
+   where u.id = auth.uid() and u.phone_confirmed_at is not null;
+
+  if v_phone is null then
+    raise exception 'verify the phone number first' using errcode = 'check_violation';
+  end if;
+
+  -- GoTrue stores numbers without the leading '+'. The profile wants E.164.
+  if left(v_phone, 1) <> '+' then
+    v_phone := '+' || v_phone;
+  end if;
+
+  if exists (select 1 from public.users where phone = v_phone and id <> auth.uid()) then
+    raise exception 'that phone number is already used by another Campus Dash account'
+      using errcode = 'unique_violation';
+  end if;
+
+  update public.users set phone = v_phone where id = auth.uid()
+  returning * into v_user;
+
+  if not found then
+    raise exception 'no profile for this account' using errcode = 'no_data_found';
+  end if;
+
+  return v_user;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."sync_my_verified_phone"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."sync_my_verified_phone"() IS 'Copies the caller''s VERIFIED auth phone onto their profile. Takes no parameter: the number is read from auth.users, where GoTrue wrote it after checking the code. Used when a customer opens a store, so the number a Partner rings and the number the vendor signs in with are one number on one identity.';
+
+
 CREATE OR REPLACE FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text" DEFAULT NULL::"text", "p_phone" "text" DEFAULT NULL::"text", "p_affiliation" "public"."campus_affiliation" DEFAULT NULL::"public"."campus_affiliation", "p_graduation_year" integer DEFAULT NULL::integer, "p_gender" "public"."customer_gender" DEFAULT NULL::"public"."customer_gender") RETURNS "public"."users"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -9451,6 +9569,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_
 declare
   v_image public.vendor_images%rowtype;
   v_count integer;
+  v_next  integer;
 begin
   if not public.is_vendor_staff(p_vendor_id) and not public.is_admin() then
     raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
@@ -9459,11 +9578,16 @@ begin
     raise exception 'no image was received' using errcode = 'check_violation';
   end if;
 
-  -- A gallery, not a photo dump. Twelve is more than any pilot stall will use
-  -- and small enough that the storefront stays a page rather than a scroll.
-  select count(*) into v_count from public.vendor_images where vendor_id = p_vendor_id;
-  if v_count >= 12 then
-    raise exception 'a store may have at most 12 images; delete one first'
+  -- Serialised per store, so two uploads racing each other cannot both see
+  -- three photos and leave five.
+  perform 1 from public.vendors where id = p_vendor_id for update;
+
+  select count(*), coalesce(max(sort_order) + 1, 0)
+    into v_count, v_next
+    from public.vendor_images where vendor_id = p_vendor_id;
+
+  if v_count >= 4 then
+    raise exception 'a store may have at most 4 photos; remove one first'
       using errcode = 'check_violation';
   end if;
 
@@ -9472,7 +9596,7 @@ begin
   )
   values (
     p_vendor_id, btrim(p_storage_path), p_content_type, p_byte_size,
-    nullif(btrim(coalesce(p_caption, '')), ''), v_count, auth.uid()
+    nullif(btrim(coalesce(p_caption, '')), ''), v_next, auth.uid()
   )
   returning * into v_image;
 
@@ -9482,6 +9606,9 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_add_image"("p_vendor_id" "uuid", "p_storage_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_caption" "text") IS 'Records one store photo, at the END of the order, so the first photo a store uploads is its primary one. At most four per store, checked under a lock on the store row. Owner or admin, enforced in the body.';
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_clear_menu_item_image"("p_menu_item_id" "uuid") RETURNS "text"
@@ -9630,9 +9757,6 @@ CREATE OR REPLACE FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "
   with day_orders as (
     select o.id,
            o.order_day,
-           -- A SALE IS A PAID ORDER THAT HAS NOT BEEN REFUNDED, with a live
-           -- VENDOR allocation. REFUND_PENDING and REFUNDED are not sales even
-           -- where the allocation is still SETTLED by a split.
            (o.payment_status = 'PAID' and a.id is not null) as is_sale,
            coalesce(a.amount_pesewas, 0) as amount_pesewas
       from public.orders o
@@ -9642,15 +9766,13 @@ CREATE OR REPLACE FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "
        and a.payee_id = o.vendor_id
        and a.status <> 'CANCELLED'
      where o.vendor_id = p_vendor_id
-       and o.order_type = 'FOOD'
+       and (o.order_type = 'FOOD' or coalesce(o.pack_fee_pesewas, 0) > 0)
        and o.order_status <> 'DRAFT'
        and o.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
        and o.order_day >= (now() at time zone 'UTC')::date
                           - (least(greatest(coalesce(p_days, 30), 1), 366) - 1)
        and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
   )
-  -- A day whose only orders were refunded is still returned, at zero, so the
-  -- refunded order stays reachable from History rather than vanishing.
   select d.order_day,
          (count(distinct d.id) filter (where d.is_sale))::integer,
          (coalesce(sum(d.amount_pesewas) filter (where d.is_sale), 0))::bigint
@@ -9954,7 +10076,7 @@ $$;
 ALTER FUNCTION "public"."vendor_menu"("p_vendor_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "bucket" "text", "order_type" "public"."order_type", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "scan_status" "public"."scan_status", "item_count" bigint, "vendor_amount_pesewas" bigint, "scan_value_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "vendor_completed_at" timestamp with time zone, "awaiting_handoff" boolean, "cancellation_reason" "text")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer DEFAULT 20) RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "bucket" "text", "order_type" "public"."order_type", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "scan_status" "public"."scan_status", "item_count" bigint, "vendor_amount_pesewas" bigint, "scan_value_pesewas" bigint, "pack_included" boolean, "submitted_at" timestamp with time zone, "age_seconds" integer, "vendor_completed_at" timestamp with time zone, "awaiting_handoff" boolean, "cancellation_reason" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -9987,19 +10109,17 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "
          r.fulfilment_type,
          r.scan_status,
          (select count(*) from public.order_items oi where oi.order_id = r.id),
-         -- THE VENDOR'S AMOUNT FROM CAMPUS DASH. Never the total, never a fee —
-         -- and zero on a scan, because we did not sell their food.
-         r.subtotal_pesewas,
+         -- THE STORE'S AMOUNT THROUGH CAMPUS DASH. The food on a food order,
+         -- the pack on a scan order. Never the total, never a Campus Dash fee.
+         r.subtotal_pesewas + coalesce(r.pack_fee_pesewas, 0),
          case when r.order_type = 'SCAN'
               then (select coalesce(sum(oi.line_total_pesewas), 0)
                       from public.order_items oi where oi.order_id = r.id)
               else 0::bigint end,
+         coalesce(r.pack_fee_pesewas, 0) > 0,
          r.submitted_at,
          extract(epoch from (now() - coalesce(r.submitted_at, r.created_at)))::integer,
          r.vendor_completed_at,
-         -- SOMEBODY IS DUE AT THE COUNTER. Deliberately does not say who: the
-         -- store does the same thing either way, and naming the recipient
-         -- invited stores to treat the two differently.
          (r.vendor_completed_at is null and r.order_status = 'READY'
             and (r.delivery_status = 'ASSIGNED' or r.delivery_status = 'NONE')),
          r.cancellation_reason
@@ -10013,6 +10133,9 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_order_board"("p_vendor_id" "uuid", "p_closed_limit" integer) IS 'The store''s board: paid orders only, the store''s own amount (subtotal + pack) and never a customer total, a destination or a phone number. pack_included is the operational fact a counter needs on a scan order. Staff or admin, enforced in the body.';
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_order_bucket"("p_order_status" "public"."order_status") RETURNS "text"
@@ -10049,7 +10172,7 @@ ALTER FUNCTION "public"."vendor_order_bucket_for"("p_order_status" "public"."ord
 COMMENT ON FUNCTION "public"."vendor_order_bucket_for"("p_order_status" "public"."order_status", "p_vendor_completed_at" timestamp with time zone) IS 'Which column of the store''s board an order belongs in. Keyed on the store''s own completion rather than the order''s, so a Partner order leaves the counter at handoff.';
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_id" "uuid", "bucket" "text", "order_type" "public"."order_type", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "scan_status" "public"."scan_status", "scan_details" "text", "scan_value_pesewas" bigint, "vendor_amount_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "vendor_completed_at" timestamp with time zone, "handoff_code_available" boolean, "cancellation_reason" "text", "items" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") RETURNS TABLE("order_id" "uuid", "order_number" "text", "vendor_order_no" integer, "vendor_id" "uuid", "bucket" "text", "order_type" "public"."order_type", "order_status" "public"."order_status", "payment_status" "public"."payment_status", "delivery_status" "public"."delivery_status", "fulfilment_type" "public"."fulfilment_type", "scan_status" "public"."scan_status", "scan_details" "text", "scan_value_pesewas" bigint, "vendor_amount_pesewas" bigint, "vendor_pack_pesewas" bigint, "submitted_at" timestamp with time zone, "age_seconds" integer, "accepted_at" timestamp with time zone, "preparing_at" timestamp with time zone, "ready_at" timestamp with time zone, "vendor_completed_at" timestamp with time zone, "handoff_code_available" boolean, "cancellation_reason" "text", "items" "jsonb")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -10071,14 +10194,16 @@ CREATE OR REPLACE FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") R
               then (select coalesce(sum(oi.line_total_pesewas), 0)
                       from public.order_items oi where oi.order_id = o.id)
               else 0::bigint end,
-         o.subtotal_pesewas,
+         o.subtotal_pesewas + coalesce(o.pack_fee_pesewas, 0),
+         -- THE STORE'S PACK MONEY, as its own figure, so the order screen can
+         -- say what the pack is worth to the store without doing arithmetic.
+         coalesce(o.pack_fee_pesewas, 0),
          o.submitted_at,
          extract(epoch from (now() - coalesce(o.submitted_at, o.created_at)))::integer,
          o.accepted_at,
          o.preparing_at,
          o.ready_at,
          o.vendor_completed_at,
-         -- Whether there is a code to read out right now.
          (o.payment_status = 'PAID' and o.vendor_completed_at is null and (
             o.delivery_status = 'ASSIGNED'
             or (o.order_status = 'READY' and o.delivery_status = 'NONE'))),
@@ -10107,6 +10232,9 @@ $$;
 ALTER FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") OWNER TO "postgres";
 
 
+COMMENT ON FUNCTION "public"."vendor_order_detail"("p_order_id" "uuid") IS 'One paid order, as its store sees it: items, the store''s amount (subtotal + pack) and, on a scan order, the scanned value and the pack. No destination, no phone number, no customer total. Staff or admin, enforced in the body.';
+
+
 CREATE OR REPLACE FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid", "p_day" "date") RETURNS TABLE("order_id" "uuid", "vendor_order_no" integer, "order_status" "public"."order_status", "payment_status" "public"."payment_status", "fulfilment_type" "public"."fulfilment_type", "item_count" bigint, "vendor_amount_pesewas" bigint, "counts_as_sale" boolean, "submitted_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -10117,7 +10245,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid",
          o.payment_status,
          o.fulfilment_type,
          (select count(*) from public.order_items oi where oi.order_id = o.id),
-         o.subtotal_pesewas,
+         o.subtotal_pesewas + coalesce(o.pack_fee_pesewas, 0),
          -- The same rule vendor_daily_sales() sums by, so a day's list and its
          -- History row always agree.
          o.payment_status = 'PAID'
@@ -10132,7 +10260,7 @@ CREATE OR REPLACE FUNCTION "public"."vendor_orders_on_day"("p_vendor_id" "uuid",
     from public.orders o
    where o.vendor_id = p_vendor_id
      and o.order_day = p_day
-     and o.order_type = 'FOOD'
+     and (o.order_type = 'FOOD' or coalesce(o.pack_fee_pesewas, 0) > 0)
      and o.order_status <> 'DRAFT'
      and o.payment_status in ('PAID', 'REFUND_PENDING', 'REFUNDED')
      and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
@@ -10560,6 +10688,47 @@ $_$;
 
 
 ALTER FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") RETURNS "public"."vendor_images"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_image public.vendor_images%rowtype;
+  v_first integer;
+begin
+  select * into v_image from public.vendor_images where id = p_image_id;
+  if not found then
+    raise exception 'no such image' using errcode = 'no_data_found';
+  end if;
+  if not public.is_vendor_staff(v_image.vendor_id) and not public.is_admin() then
+    raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
+  end if;
+
+  select min(sort_order) into v_first
+    from public.vendor_images where vendor_id = v_image.vendor_id;
+
+  -- Already first: nothing to do, and nothing to renumber.
+  if v_image.sort_order = v_first then
+    return v_image;
+  end if;
+
+  -- In front of everything else, and everything else keeps its own order.
+  update public.vendor_images
+     set sort_order = v_first - 1
+   where id = p_image_id
+  returning * into v_image;
+
+  return v_image;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") IS 'Moves one store photo to the front, making it the photo used wherever a single picture of the store is shown. The rest keep their order. Owner or admin, enforced in the body.';
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") RETURNS "public"."vendors"
@@ -12394,6 +12563,11 @@ GRANT ALL ON FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uu
 GRANT ALL ON FUNCTION "public"."customer_abandon_stuck_payment"("p_order_id" "uuid") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."customer_abandon_unpaid_order"("p_order_id" "uuid") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."customer_choose_fulfilment"("p_order_id" "uuid", "p_fulfilment_type" "public"."fulfilment_type", "p_destination_location_id" "uuid", "p_destination_note" "text") TO "authenticated";
@@ -12887,6 +13061,11 @@ GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_item
 GRANT ALL ON FUNCTION "public"."submit_scan_order"("p_vendor_id" "uuid", "p_items" "jsonb", "p_fulfilment_type" "public"."fulfilment_type", "p_scan_image_path" "text", "p_content_type" "text", "p_byte_size" bigint, "p_destination_location_id" "uuid", "p_details" "text", "p_destination_note" "text", "p_wants_pack" boolean) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."sync_my_verified_phone"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."sync_my_verified_phone"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."sync_my_verified_phone"() TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text", "p_phone" "text", "p_affiliation" "public"."campus_affiliation", "p_graduation_year" integer, "p_gender" "public"."customer_gender") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text", "p_phone" "text", "p_affiliation" "public"."campus_affiliation", "p_graduation_year" integer, "p_gender" "public"."customer_gender") TO "service_role";
 GRANT ALL ON FUNCTION "public"."update_my_profile"("p_first_name" "text", "p_last_name" "text", "p_phone" "text", "p_affiliation" "public"."campus_affiliation", "p_graduation_year" integer, "p_gender" "public"."customer_gender") TO "authenticated";
@@ -13048,6 +13227,11 @@ GRANT ALL ON FUNCTION "public"."vendor_set_menu_item_image"("p_menu_item_id" "uu
 REVOKE ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_set_payout_destination"("p_vendor_id" "uuid", "p_momo_network" "text", "p_account_number" "text", "p_account_name" "text") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") FROM PUBLIC;
@@ -13324,7 +13508,7 @@ ON CONFLICT ("id") DO NOTHING;
 
 
 -- ---------------------------------------------------------------------------
--- Terms documents — PLACEHOLDER TEXT
+-- Terms documents (version 1 was placeholder text; version 2 is the real text)
 -- ---------------------------------------------------------------------------
 -- THESE ARE NOT LEGAL TERMS. They exist so the acceptance mechanism has
 -- something to present and record. Real text must come from a lawyer familiar
@@ -13367,6 +13551,106 @@ VALUES
    'Customer contact details are shown only while you are carrying their order, '
    'and must not be recorded, shared or used for anything else.\n\n'
    'Campus Dash pays Partner earnings weekly.', "now"())
+ON CONFLICT ("audience", "version") DO NOTHING;
+
+-- Version 2: the real customer, store and Partner terms, from
+-- 20261004000003_terms_version_two.sql. Version 1 stays, because acceptances
+-- point at the exact row somebody agreed to.
+INSERT INTO "public"."terms_documents" ("audience", "version", "title", "body", "published_at")
+values
+  ('CUSTOMER', 2, 'Campus Dash customer terms',
+   E'These terms apply when you order through Campus Dash. Campus Dash connects you with independent stores around Academic City University and, if you ask, with a Campus Dash Partner who brings your order to you.\n\n'
+   '## Your account\n'
+   'Customer accounts are for Academic City students and staff. You sign in with a code sent to your @acity.edu.gh address. Keep your details accurate, especially your phone number: it is how a Partner reaches you when they arrive.\n'
+   'One person, one account. You may also run a store or become a Partner on the same account.\n\n'
+   '## Ordering and prices\n'
+   'Stores set their own prices and decide what is available. At checkout you choose to collect the order yourself or to have a Campus Dash Partner bring it to a campus location you pick from the list.\n'
+   'Before you pay you see the full price:\n'
+   '- the food, at the store''s price\n'
+   '- a Campus Dash service fee, shown as its own line\n'
+   '- the Campus Dash Partner fee, only if you choose a Partner\n'
+   'What you see at checkout is what you are charged. A later price change never changes an order you have already placed.\n\n'
+   '## Payment\n'
+   'You pay once, through our payment provider, before the store sees your order. An order is only confirmed when the payment provider confirms the payment to us. Returning to Campus Dash from the payment page is not, on its own, confirmation.\n'
+   'Until you pay, you can abandon an order from its page. Nothing is charged for an order you abandon.\n\n'
+   '## Meal scans\n'
+   'If a store accepts meal scans, you can pay for eligible items with your campus meal scan. The scan is settled between you and the university, not by Campus Dash. You pay Campus Dash a flat service fee, a pack fee when a pack is added, and the Partner fee if you choose a Partner. A pack is optional when you collect and included when a Partner brings your order.\n'
+   'The store checks your scan before preparing your food. If the store does not accept it, Campus Dash reviews the order before anything else happens.\n'
+   'Upload only a scan that belongs to you. It is visible to you, the store preparing the order, the Partner carrying it (while they carry it) and Campus Dash administrators.\n\n'
+   '## Collecting and receiving your order\n'
+   'When you collect, the store gives you a 4-digit code at the counter. Enter it in Campus Dash to confirm you have your order.\n'
+   'When a Partner brings your order, Campus Dash shows you a 4-digit code. Read it to your Partner only once you have your order. Never share it before then.\n'
+   'Be at the location you chose and reachable on your phone. If a Partner cannot reach you after waiting, they may record that you were not there, and Campus Dash will review what happens next.\n\n'
+   '## Cancellations and refunds\n'
+   'Once your payment succeeds, the store starts on your order. You cannot cancel a paid order, and it is not refunded because you changed your mind.\n'
+   'A refund may apply when a paid order cannot be fulfilled, for example:\n'
+   '- the store cannot make your order\n'
+   '- your order never reached the store because of a problem on our side\n'
+   '- you were charged more than once for the same order\n'
+   'Refunds are not automatic. Campus Dash reviews each case and, where a refund applies, returns the amount you paid for that order to your original payment method.\n'
+   'If something is wrong or missing, or a delivery did not happen as it should, report it from the order or contact us. Reports are reviewed by a person.\n\n'
+   '## Respect\n'
+   'Partners are students and staff helping the campus community. Treat them, and the people working at stores, with respect. Campus Dash may suspend accounts that abuse the service or the people in it.\n\n'
+   '## Your information\n'
+   'A store sees what you ordered, never where it is going or your phone number. Your Partner sees your first name, destination and phone number only while they are carrying your order. Nobody sees your surname.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish a new version and ask you to accept it. The version you accepted, and when, is recorded.',
+   "now"()),
+
+  ('VENDOR', 2, 'Campus Dash store terms',
+   E'These terms apply when you run a store on Campus Dash. Your store stays your business: Campus Dash brings you orders that are already paid for and, when a customer asks, a Campus Dash Partner to carry them.\n\n'
+   '## Your account and approval\n'
+   'You sign in with a code sent to your phone number. Keep that number working. It is how you sign in and how we reach you.\n'
+   'A Campus Dash administrator reviews every store before it goes live, and may pause or suspend a store that does not keep to these terms.\n\n'
+   '## Your store and menu\n'
+   'You set your prices and choose what is available. Keep your menu accurate: mark items sold out when they are, and close the store when you are not taking orders.\n'
+   'Your store photos must be your own, and must show your store or what you sell.\n'
+   'You are responsible for the food and goods you sell, for preparing them safely, and for any licence or permission your business needs.\n\n'
+   '## Orders\n'
+   'You only ever receive orders that have been paid for. Start preparing when an order arrives, and press Ready for pickup only when it is ready.\n'
+   'When somebody comes to collect, read them the 4-digit code shown on the order. Do not hand an order over to anyone who has not been given that code by you, whether they are the customer or a Campus Dash Partner.\n'
+   'If you cannot fulfil a paid order, tell Campus Dash straight away.\n\n'
+   '## Meal scans\n'
+   'If your store accepts meal scans, you are the one who checks each scan before preparing the food, and you only accept scans you would accept at your counter. Campus Dash does not verify scans with the university.\n'
+   'The food on a scan order is settled between the student and the university, not by Campus Dash. When a pack is included, the pack fee is yours and you pack the order in it.\n\n'
+   '## Getting paid\n'
+   'You receive the full price of the food you sell through Campus Dash, and the pack fee on scan orders that include a pack. Campus Dash does not take a commission from your prices. The customer pays the Campus Dash service fee and any Partner fee on top.\n'
+   'Payments reach you by mobile money, either as the customer pays or in a regular settlement run, depending on how your payout account is set up. Keep your payout details accurate.\n'
+   'If an order is refunded because it could not be fulfilled, you are not owed that order, and an amount already paid to you for it may be recovered.\n\n'
+   '## Customer information\n'
+   'You see what was ordered. You do not see where an order is going or the customer''s phone number. Do not try to collect customers'' personal details through Campus Dash orders.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish a new version and ask you to accept it. The version you accepted, and when, is recorded.',
+   "now"()),
+
+  ('PARTNER', 2, 'Campus Dash Partner terms',
+   E'These terms apply when you carry orders as a Campus Dash Partner. Partners are students and staff who help the campus community and earn for doing it.\n\n'
+   '## Becoming a Partner\n'
+   'You apply from your customer account with your student or staff ID. A Campus Dash administrator reviews every application. Being a Partner is part of your one Campus Dash account, not a separate one.\n'
+   'You are an independent Partner, not an employee of Campus Dash or of any store. You choose when you are available and which orders you accept.\n\n'
+   '## Accepting and carrying orders\n'
+   'Before you accept, you see the store, the building and floor the order is going to, and what you earn. After you accept, you also see the room, the customer''s first name, any note they left, and their phone number.\n'
+   'You may carry more than one order at a time, up to the limit Campus Dash sets.\n'
+   'You cannot carry your own order, or an order from a store you own.\n'
+   'At the store, enter the 4-digit code the store reads out to you. At the destination, enter the 4-digit code the customer reads out to you. Never ask a customer for their code before they have their order.\n'
+   'If the customer is not there, wait for the time shown in the app and try to call them before recording that they were not there.\n'
+   'If you cannot complete an order you have accepted, release it in the app as early as you can so another Partner can take it.\n\n'
+   '## Customer information\n'
+   'A customer''s phone number is shown to you only while you are carrying their order, and only so you can reach them about it. Do not save it, share it, or use it for anything else.\n\n'
+   '## Earnings\n'
+   'You earn the Campus Dash Partner fee, currently GH₵5, for each order you complete.\n'
+   'Earnings are paid weekly to your mobile money account once your available balance reaches GH₵20. A smaller balance carries forward to the next week. Keep your payout details accurate.\n\n'
+   '## Conduct\n'
+   'Handle every order with care, keep food sealed, and treat customers and store staff with respect. Customers may rate completed deliveries. Campus Dash may suspend a Partner who does not keep to these terms.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish a new version and ask you to accept it. The version you accepted, and when, is recorded.',
+   "now"())
 ON CONFLICT ("audience", "version") DO NOTHING;
 
 

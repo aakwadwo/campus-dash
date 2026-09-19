@@ -1,10 +1,10 @@
 import { Suspense } from 'react';
 import { config } from '@/lib/config';
-import Link from 'next/link';
 import LoginForm from './login-form';
 import { safeNext } from '@/lib/auth/landing';
-import { Card, TextLink, ArrowLeftIcon } from '@/app/ui';
+import { Card, TextLink } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
+import BackButton from '@/app/back-button';
 
 export const metadata = {
   robots: { index: false, follow: false },
@@ -30,13 +30,7 @@ export default async function LoginPage({ searchParams }) {
 
   return (
     <main className="flex min-h-dvh flex-col px-5 py-6 sm:py-10">
-      <Link
-        href="/order"
-        className="text-muted hover:text-ink press-sm -ml-1 inline-flex w-fit items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
-      >
-        <ArrowLeftIcon className="size-4" />
-        Keep browsing
-      </Link>
+      <BackButton fallback="/" />
 
       <div className="flex flex-1 flex-col justify-center">
         <div className="animate-fade-up mx-auto w-full max-w-sm">

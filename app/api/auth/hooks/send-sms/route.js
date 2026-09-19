@@ -4,6 +4,7 @@ import { getSmsProvider, normaliseGhanaPhone } from '@/lib/sms';
 import { config } from '@/lib/config';
 // TEMPORARY — see lib/observability/otp-trace.js. Remove with the diagnosis.
 import { otpTrace } from '@/lib/observability/otp-trace';
+import { recipientOf } from '@/lib/sms/hook-recipient';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,7 +100,12 @@ export async function POST(request) {
     );
   }
 
-  const phone = normaliseGhanaPhone(payload?.user?.phone);
+  // WHICH NUMBER. A sign-in code goes to the number on the account. A PHONE
+  // CHANGE code goes to the NEW number, which GoTrue holds as `new_phone` until
+  // it is confirmed: sending it to `user.phone` delivered the code to the old
+  // handset (or, for a customer who signs in by email and has no auth phone,
+  // to nobody), so a customer opening a store could never verify their number.
+  const phone = normaliseGhanaPhone(recipientOf(payload));
   const otp = payload?.sms?.otp;
 
   // Supabase's own send time, from the signed header. The gap to `receivedAt`

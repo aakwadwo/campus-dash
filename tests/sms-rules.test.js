@@ -161,16 +161,39 @@ describe('SMS rules', () => {
     });
 
     /**
-     * The one Partner-order message that survives, because it carries something
-     * the customer cannot get anywhere else at that moment: the code they will
-     * be asked to read out on arrival.
+     * The one Partner-order message that survives, and it survives for the fact
+     * rather than for the code. Until somebody accepts, nothing on the tracking
+     * page moves and there is nothing to look at; "Kwame has accepted" is the
+     * thing the customer cannot know without being told.
+     *
+     * IT CARRIES NO CODE. It used to end "Your code is 4821", which put a
+     * handoff secret in a message that is forwardable, screenshottable and
+     * permanent, and that outlives the delivery by months. The delivery code is
+     * on the tracking screen, behind the customer's own session.
      */
-    test('IS texted when a Partner accepts, because that message carries their code', () => {
+    test('IS texted when a Partner accepts, and told only that it was accepted', () => {
       assert.deepEqual(audiencesFor('PARTNER_ASSIGNED'), ['CUSTOMER']);
       const message = renderSms(E.PARTNER_ASSIGNED, A.CUSTOMER, context);
-      assert.match(message, /4821/, 'the code');
-      assert.match(message, /Kwame/, 'and a first name');
+      assert.match(message, /Kwame/, 'a first name');
+      assert.match(message, /accepted/i, 'and what happened');
+      // THE LINK, not the words "the app". It is the same appUrl every other
+      // message that sends somebody to a screen already carries, and on a phone
+      // it is the difference between a tap and going to look for the app.
+      assert.match(message, /Open https:\/\/example\.test to view/, 'and a tappable way there');
+      assert.ok(message.includes(context.appUrl), 'the URL comes from the context');
+      assert.doesNotMatch(message, /\b4821\b/, 'NEVER the delivery code');
+      assert.doesNotMatch(message, /\bcode\b/i, 'and no mention of one to forward');
       assert.doesNotMatch(message, /\+233/, 'never a phone number');
+    });
+
+    /**
+     * The Partner is not texted a second time for having just pressed accept.
+     * There is no PARTNER template for this event, so the audience resolves to
+     * a skip rather than to a message.
+     */
+    test('the Partner is NOT texted about their own acceptance', () => {
+      assert.equal(audiencesFor('PARTNER_ASSIGNED').includes('PARTNER'), false);
+      assert.equal(renderSms(E.PARTNER_ASSIGNED, A.PARTNER, context), null);
     });
   });
 
@@ -217,11 +240,17 @@ describe('SMS rules', () => {
   // =========================================================================
   // THE WHOLE SURFACE
   // =========================================================================
-  test('no message carries a phone number, a surname or a pickup code', () => {
+  test('no message carries a phone number, a surname or EITHER handoff code', () => {
+    // BOTH CODES, and the delivery one is the addition. It used to be rendered
+    // on purpose in PARTNER_ASSIGNED, so the base context's 4821 could not be
+    // asserted against here; now that no template may carry either, both are
+    // planted and both are checked. All three handoff codes are four digits and
+    // none of them belongs in something forwardable.
     const withSecrets = {
       ...context,
       customerPhone: '+233201234567',
       pickupCode: '1234',
+      deliveryCode: '4821',
       partnerName: 'Kwame',
     };
 
@@ -234,10 +263,15 @@ describe('SMS rules', () => {
         // valid" names no code and is the right thing to say.
         assert.doesNotMatch(
           message,
-          /\b(pickup|handoff) code is \d{4}\b/i,
-          `${event} -> ${audience} carries a pickup code`
+          /\b(pickup|handoff|delivery) code is \d{4}\b/i,
+          `${event} -> ${audience} carries a handoff code`
         );
-        assert.doesNotMatch(message, /\b1234\b/, `${event} -> ${audience} leaked the code`);
+        assert.doesNotMatch(message, /\b1234\b/, `${event} -> ${audience} leaked the pickup code`);
+        assert.doesNotMatch(
+          message,
+          /\b4821\b/,
+          `${event} -> ${audience} leaked the delivery code`
+        );
       }
     }
   });
@@ -246,8 +280,9 @@ describe('SMS rules', () => {
    * The whole point of the trim, stated as a number. One Partner order used to
    * generate eight order-scoped messages across three people. It now generates
    * three, and each one tells somebody something they could not otherwise know:
-   * the store that money arrived, the customer their handoff code, and the
-   * Partner that the order they are already holding is ready to collect.
+   * the store that money arrived, the customer that somebody has taken their
+   * order, and the Partner that the order they are already holding is ready to
+   * collect.
    */
   test('one Partner order generates three order-scoped messages, not eight', () => {
     const events = [
@@ -270,7 +305,7 @@ describe('SMS rules', () => {
     assert.equal(
       total,
       3,
-      'the store hears it is paid, the customer gets their code, the Partner hears it is ready'
+      'the store hears it is paid, the customer hears it was accepted, the Partner hears it is ready'
     );
   });
 });

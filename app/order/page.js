@@ -1,19 +1,12 @@
 import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
-import { listVendors, listCategories } from '@/lib/customer';
+import { listVendors, listCategories, listSearchableItems } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import VendorSearch from './vendor-search';
-import {
-  Container,
-  Callout,
-  EmptyState,
-  ScanIcon,
-  StoreIcon,
-  ChevronRightIcon,
-  TextLink,
-} from '../ui';
+import ContactLine from '../contact-line';
+import { Container, Callout, ScanIcon, ChevronRightIcon, TextLink } from '../ui';
 
 export const metadata = {
   title: 'Browse stores around Academic City',
@@ -42,16 +35,17 @@ export const dynamic = 'force-dynamic';
  * reason to make an account, so leading with the sign-in prompt was asking for
  * commitment before showing the goods.
  *
- * Filtering happens in the browser over the list already rendered. There is no
- * vendor search RPC and inventing one to make the page feel richer would be
- * building backend for a screenshot; with a campus-sized catalogue a client
- * filter is also simply the right tool.
+ * ONE SEARCH BOX, over the stores and everything they sell. Filtering happens
+ * in the browser over what is already rendered; with a campus-sized catalogue a
+ * client filter is the right tool, and the item list is read through the same
+ * anon RLS policy the store pages use.
  */
 export default async function VendorListPage() {
-  const [me, rows, categories] = await Promise.all([
+  const [me, rows, categories, items] = await Promise.all([
     getCapabilities(),
     listVendors(),
     listCategories(),
+    listSearchableItems().catch(() => []),
   ]);
 
   // The public URL is resolved here. A client component has no business reading
@@ -64,46 +58,32 @@ export default async function VendorListPage() {
 
       <main className="flex-1 pb-24 sm:pb-0">
         <Container size="wide" className="pt-8 sm:pt-12">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-            <h1 className="text-display text-2xl font-semibold sm:text-4xl">Browse food</h1>
-            {me.can_order ? (
-              <Link
-                href="/orders"
-                className="text-muted hover:text-ink press-sm hidden shrink-0 items-center gap-1 rounded-full text-sm font-semibold transition-colors sm:inline-flex"
-              >
-                My orders
-                <ChevronRightIcon className="size-4" />
-              </Link>
-            ) : null}
+          <div className="mb-5 flex items-baseline justify-between gap-6">
+            <h1 className="text-display text-2xl font-semibold sm:text-4xl">Browse</h1>
+            {/* The scan route, deliberately quiet: one short link, not a panel
+                competing with the stores. */}
+            <Link
+              href="/scan"
+              className="text-muted hover:text-ink press-sm inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-medium transition-colors"
+            >
+              <ScanIcon className="text-brand-700 size-[18px]" />
+              Use a meal scan
+              <ChevronRightIcon className="size-4" />
+            </Link>
           </div>
 
-          {/* The scan route, deliberately quiet. It is not a vendor and it
-              answers a different question from "what is open?", so it gets one
-              compact row rather than a highlighted panel that competes with the
-              food. Somebody arriving with a scan already knows what they want. */}
-          <Link
-            href="/scan"
-            className="press-sm border-line mt-3 flex min-h-12 items-center gap-2 border-b pb-4 text-sm font-medium"
-          >
-            <ScanIcon className="text-brand-700 size-[18px] shrink-0" />
-            <span>Have a meal scan? Redeem it</span>
-            <ChevronRightIcon className="text-faint ml-auto size-4 shrink-0" />
-          </Link>
-
-          <VendorSearch vendors={vendors} categories={categories} />
+          <VendorSearch vendors={vendors} categories={categories} items={items} />
 
           {vendors.length === 0 ? (
-            <EmptyState
-              icon={<StoreIcon className="size-6" />}
-              title="No vendors yet"
-              description="Campus Dash is still adding stores around Academic City. Check back shortly."
-            />
+            <p className="text-muted py-16 text-center">No stores yet. Check back soon.</p>
           ) : null}
 
           {/* The gate, after the goods. Two different states, because "sign in"
               and "finish your student details" are different problems and
               telling someone the wrong one wastes their time. */}
           <OrderingGate me={me} className="mt-12" />
+
+          <ContactLine className="mt-10" />
         </Container>
       </main>
 
@@ -119,12 +99,12 @@ export function OrderingGate({ me, className = '' }) {
     ? {
         href: '/signup?next=%2Forder',
         label: 'Create an account',
-        body: 'Browse as much as you like. To place an order you need a Campus Dash account. It takes a minute and uses your school email.',
+        body: 'Ordering needs a Campus Dash account, made with your school email.',
       }
     : {
         href: '/signup?next=%2Forder',
         label: 'Finish signing up',
-        body: 'Campus Dash is for Academic City students. Finish signing up with your school email and you can order.',
+        body: 'Finish signing up and you can order.',
       };
 
   return (

@@ -57,7 +57,12 @@ export async function quoteScanAction({
  */
 export async function submitScanOrderAction(_prev, formData) {
   const vendorId = String(formData.get('vendor_id') ?? '');
-  const fulfilmentType = formData.get('fulfilment_type') === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
+  // CHOSEN, NEVER ASSUMED: the checkout starts with neither option selected.
+  const chosen = String(formData.get('fulfilment_type') ?? '');
+  if (chosen !== 'PICKUP' && chosen !== 'DELIVERY') {
+    return { ok: false, message: 'Choose how you want it: collect it, or a Campus Dash Partner.' };
+  }
+  const fulfilmentType = chosen;
   const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
   const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
   const details = String(formData.get('details') ?? '').trim() || null;

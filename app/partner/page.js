@@ -12,7 +12,7 @@ import {
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
 import AvailabilityToggle from './availability-toggle';
-import { ButtonLink, Callout, Completion, ChevronRightIcon, Card } from '@/app/ui';
+import { ButtonLink, Callout, Completion, ChevronRightIcon, Card, Disclosure } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -322,16 +322,25 @@ function Earnings({ earnings, payouts }) {
               aria-label="Progress towards the weekly payout amount"
             />
           </div>
-          <p className="text-muted mt-2.5 text-sm leading-relaxed">
+          {/* ONE LINE AT A GLANCE; the policy behind it is a tap away. */}
+          <p className="text-muted mt-2.5 text-sm">
             {eligible
-              ? `Payouts are processed weekly. Your earnings are ready to be paid in the next payout.`
-              : `Payouts are processed weekly when your available earnings reach ${formatPesewas(threshold)}. ` +
-                `${formatPesewas(toGo)} to go, and anything below that carries forward to the next cycle.`}
+              ? 'Ready for the next weekly payout.'
+              : `${formatPesewas(toGo)} to go until the weekly payout.`}
           </p>
         </div>
       ) : null}
 
-      <dl className="border-line mt-4 space-y-1 border-t pt-4 text-sm">
+      <Disclosure title="How earnings work" flush className="border-line mt-3 border-t">
+        <p className="text-muted text-sm leading-relaxed">
+          You earn the Campus Dash Partner fee for every order you complete. Payouts are processed
+          weekly
+          {threshold > 0 ? ` once your available earnings reach ${formatPesewas(threshold)}` : ''}.
+          Anything below that carries forward to the next cycle, so nothing is lost.
+        </p>
+      </Disclosure>
+
+      <dl className="border-line space-y-1 border-t pt-4 text-sm">
         <Row label="Orders completed" value={String(earnings?.delivered_count ?? 0)} />
         <Row label="Earned in total" value={formatPesewas(earnings?.earned_pesewas ?? 0)} />
         {inProgress > 0 ? (

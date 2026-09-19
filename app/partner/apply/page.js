@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getMyApplication } from '@/lib/partner';
 import ApplyForm, { ContinueOrdering } from './apply-form';
+import BackButton from '@/app/back-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,7 +45,8 @@ export default async function PartnerApplyPage() {
   const showForm = !application || application.status === 'REJECTED';
 
   return (
-    <main className="mx-auto max-w-2xl px-4 pt-6 pb-16">
+    <main className="mx-auto max-w-2xl px-4 pt-4 pb-16">
+      <BackButton fallback="/account" className="mb-3" />
       <h1 className="text-2xl font-semibold tracking-tight">
         {state ? state.title : 'Become a Partner'}
       </h1>
@@ -64,23 +65,12 @@ export default async function PartnerApplyPage() {
         </>
       ) : (
         <p className="text-muted mt-2 text-sm leading-relaxed">
-          Partners help other students get what they need across campus, and earn for every order
-          they bring. This adds delivering to the account you already have: same login, same
-          details, same order history. All we need is a photo of your student ID and your agreement
-          to the Partner terms.
+          Bring orders across campus and earn on each one. It is added to the account you already
+          have, so all we need is a photo of your ID.
         </p>
       )}
 
       {showForm ? <ApplyForm /> : null}
-
-      {!state ? (
-        <p className="text-muted mt-8 text-center text-xs">
-          Not now?{' '}
-          <Link href="/order" className="text-brand-700 underline underline-offset-4">
-            Back to ordering
-          </Link>
-        </p>
-      ) : null}
     </main>
   );
 }

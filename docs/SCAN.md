@@ -11,18 +11,18 @@ is the redemption point.** A restaurant that is going to hand food to somebody
 has to know the order exists, know what was asked for, and be the party that
 checks the scan before anything leaves the counter.
 
-|                                 | Food order              | Scan order                         |
-| ------------------------------- | ----------------------- | ---------------------------------- |
-| Customer pays for the food      | yes                     | **no — the scan does**             |
-| Campus Dash food price          | the store's price       | **GH₵0**                           |
-| Store entitlement in our ledger | the food subtotal       | **none — no row is written**       |
-| Partner entitlement             | delivery fee            | delivery fee                       |
-| Platform revenue                | service fee (% of food) | **flat fee** (+ pack when charged) |
-| Fulfilment                      | pickup or Partner       | pickup or Partner                  |
-| On the store's board            | yes                     | **yes**                            |
-| Daily queue number              | yes                     | **yes**                            |
-| Who verifies the scan           | —                       | **the store**                      |
-| Handoff                         | four digits             | **four digits**                    |
+|                                 | Food order              | Scan order                        |
+| ------------------------------- | ----------------------- | --------------------------------- |
+| Customer pays for the food      | yes                     | **no — the scan does**            |
+| Campus Dash food price          | the store's price       | **GH₵0**                          |
+| Store entitlement in our ledger | the food subtotal       | **the pack, when one is charged** |
+| Partner entitlement             | delivery fee            | delivery fee                      |
+| Platform revenue                | service fee (% of food) | **flat fee**                      |
+| Fulfilment                      | pickup or Partner       | pickup or Partner                 |
+| On the store's board            | yes                     | **yes**                           |
+| Daily queue number              | yes                     | **yes**                           |
+| Who verifies the scan           | —                       | **the store**                     |
+| Handoff                         | four digits             | **four digits**                   |
 
 The meal entitlement is settled between the student and the university. Campus
 Dash is not a party to it and never records its value as money owed.
@@ -72,8 +72,11 @@ service away. Zero would be a decision — a deliberately free one.
 
 ### The pack fee is a choice on a collection, and compulsory with a Partner
 
-**GH₵4.00, and always its own line when it is charged.** Campus Dash buys the
-containers a redeemed meal is carried in.
+**GH₵4.00, and always its own line when it is charged.** The STORE packs the
+meal, so **the pack fee is the store's money**: it is allocated to the vendor in
+the same ledger row, and split to the store's Paystack subaccount on the same
+charge, as a food order's subtotal. It is never Campus Dash revenue and never
+part of the Partner's GH₵5.
 
 - **Collection:** the customer decides. Somebody walking to a counter can bring
   their own container, and charging GH₵4.00 for one they refused is charging for
@@ -247,28 +250,37 @@ was a customer's whereabouts shown to a room, and it went with the rest.
 
 ## The ledger
 
-`create_order_allocations()` writes **no VENDOR row** for a scan order — not a
-zero-value one. A zero-pesewa liability is still a liability on the books: it
-shows up in settlement queries and tells a reader the store is owed something by
-Campus Dash. It is not; the university's system settles that.
+The store's share of any order is `subtotal_pesewas + pack_fee_pesewas`. On a
+scan order the subtotal is zero, so **the store's share is the pack**, and
+`create_order_allocations()` writes a VENDOR row for it. A scan collection
+without a pack writes **no VENDOR row** at all, not a zero-value one: a
+zero-pesewa liability tells a reader the store is owed something by Campus Dash,
+and it is not. The food itself is settled by the university's system.
 
 ```
-customer pays          GH₵11.00  GH₵2.00 fee + GH₵4.00 pack + GH₵5.00 Partner
-PLATFORM allocation    GH₵11.00  at payment
-PARTNER allocation     GH₵5.00   carved out of PLATFORM on delivery
-net platform           GH₵6.00   the flat fee, plus the pack
-VENDOR allocation      — no row is written at all —
+Partner order                GH₵11.00  GH₵2.00 fee + GH₵4.00 pack + GH₵5.00 Partner
+VENDOR allocation            GH₵4.00   the pack, at payment (split, or the daily run)
+PLATFORM allocation          GH₵7.00   at payment
+PARTNER allocation           GH₵5.00   carved out of PLATFORM on delivery
+net platform                 GH₵2.00   the flat fee
+
+Collection with a pack       GH₵6.00   VENDOR GH₵4.00, PLATFORM GH₵2.00
+Collection without a pack    GH₵2.00   PLATFORM GH₵2.00, no VENDOR row
 ```
 
-**The same GH₵11.00 whatever was ordered.** A GH₵42.00 tilapia and a GH₵38.00
-waffle produce identical figures, because the fee is flat and the scanned value
-never enters the arithmetic. A collection with no pack is GH₵2.00 and a single
-PLATFORM row.
+**The same figures whatever was ordered.** A GH₵42.00 tilapia and a GH₵38.00
+waffle produce identical allocations, because the fee is flat and the scanned
+value never enters the arithmetic. `tests/scan-pack-allocation.test.js` pins
+every case.
 
 The items on the order carry their menu prices so the counter can see what was
 asked for and what it is normally worth, but `orders.subtotal_pesewas` stays
 **zero** — nothing ties the two together, and `orders_scan_has_no_food_value`
 refuses any attempt to change that.
+
+The store's board shows **Pack included** on a scan order that has one, because
+somebody has to put the food in it. What the pack is worth to the store is on
+the order screen, not the card.
 
 **Paystack's processing fee is a platform expense by construction rather than by
 policy.** `payments` records only the gross amount collected; there is no fee

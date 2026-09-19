@@ -20,7 +20,7 @@ import { TEXT_LINK_CLASS } from '@/app/ui';
 export default function ScanCollection({ scanUrl, restaurantName }) {
   return (
     <section className="rounded-card bg-surface ring-line p-4 ring-1">
-      <h2 className="text-xs font-semibold tracking-wide uppercase">The customer’s scan</h2>
+      <h2 className="text-muted text-sm font-medium">The customer’s scan</h2>
       <p className="text-muted mt-1 text-sm leading-relaxed">
         Show this at {restaurantName}. They check it and hand the food over, then read you a 4-digit
         code. The food is already paid for, so do not pay for it yourself.

@@ -119,7 +119,15 @@ messages are worth keeping.
 ## Legal and data protection — the actual launch blockers
 
 **17. Terms and conditions.**
-`terms_documents` holds three PLACEHOLDER documents, clearly marked as such.
+Version 2 of the customer, store and Partner terms is published
+(`20261004000003_terms_version_two.sql`), written against what the product
+actually does. It states the one decided refund rule (a paid order is not
+cancelled or refunded because somebody changed their mind; refunds are reviewed
+by a person where an order could not be fulfilled) and deliberately does NOT
+settle questions 8, 9 and 12. It has not been reviewed by a lawyer, and should
+be before a wider launch.
+
+The history: `terms_documents` used to hold three PLACEHOLDER documents.
 The mechanism is complete: versioned, timestamped, per-audience, and a new
 version re-prompts only the people it applies to.
 

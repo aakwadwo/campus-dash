@@ -78,6 +78,18 @@ const nextConfig = {
   // Docker via host.docker.internal), so the dev server must accept those
   // origins for its own assets. Development only; ignored in production.
   allowedDevOrigins: ['127.0.0.1', 'localhost', 'host.docker.internal'],
+  experimental: {
+    serverActions: {
+      // STORE PHOTOS ARRIVE THROUGH SERVER ACTIONS, and Next's default body
+      // limit is 1 MB. A photo straight off a phone camera is two to five, so
+      // every upload from a phone was refused before it reached storage, and no
+      // store ever got a picture onto its card. The browser now shrinks a photo
+      // before sending it (app/image-resize.js); this is the ceiling for the
+      // case where it cannot, set just above the 5 MB the storage bucket and
+      // uploadVendorImage() both enforce, with room for multipart overhead.
+      bodySizeLimit: '6mb',
+    },
+  },
   async headers() {
     const securityHeaders = [
       { key: 'Content-Security-Policy', value: contentSecurityPolicy() },

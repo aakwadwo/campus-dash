@@ -142,24 +142,28 @@ export async function cancelDeliveryAction(_prev, formData) {
  * the handoff proves.
  */
 export async function confirmPickupAction(_prev, formData) {
+  const code = str(formData, 'pickup_code');
+  // FOUR DIGITS BEFORE THE DATABASE SEES IT. Every attempt is counted and five
+  // of them lock the code out, so a blank or half-typed box must not spend one
+  // — check_handoff_code() cannot tell a mis-tap from a guess, and should not
+  // have to. The same guard the customer's collection has had all along.
+  if (!/^\d{4}$/.test(code)) {
+    return { ok: false, message: 'Enter the 4 digits the store gave you.' };
+  }
   return run(
-    () =>
-      partner.confirmPickup(
-        String(formData.get('order_id') ?? ''),
-        String(formData.get('pickup_code') ?? '').trim()
-      ),
+    () => partner.confirmPickup(str(formData, 'order_id'), code),
     'Collected. Take it to the customer.',
     ['/partner', '/partner/delivery']
   );
 }
 
 export async function completeDeliveryAction(_prev, formData) {
+  const code = str(formData, 'delivery_code');
+  if (!/^\d{4}$/.test(code)) {
+    return { ok: false, message: 'Enter the 4 digits the customer reads out.' };
+  }
   return run(
-    () =>
-      partner.completeDelivery(
-        String(formData.get('order_id') ?? ''),
-        String(formData.get('delivery_code') ?? '').trim()
-      ),
+    () => partner.completeDelivery(str(formData, 'order_id'), code),
     'Delivered. Your earning has been recorded.',
     ['/partner', '/partner/delivery']
   );

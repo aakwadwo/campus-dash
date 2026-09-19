@@ -351,8 +351,7 @@ export async function addVendorImageAction(_prev, formData) {
     return actionFailure(error, CONTEXT);
   }
 
-  revalidatePath(`/admin/vendors/${vendorId}`);
-  revalidatePath(`/order/${vendorId}`);
+  revalidateStorePhotos(vendorId);
   return { ok: true, message: 'Photo added.' };
 }
 
@@ -370,9 +369,31 @@ export async function deleteVendorImageAction(_prev, formData) {
   } catch (error) {
     return actionFailure(error, CONTEXT);
   }
+  revalidateStorePhotos(vendorId);
+  return { ok: true, message: 'Photo removed.' };
+}
+
+export async function setVendorPrimaryImageAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  const vendorId = str(formData, 'vendor_id');
+  try {
+    await admin.setVendorPrimaryImage(str(formData, 'image_id'));
+  } catch (error) {
+    return actionFailure(error, CONTEXT);
+  }
+  revalidateStorePhotos(vendorId);
+  return { ok: true, message: 'Main photo changed.' };
+}
+
+/** Every page a store's photo appears on, the customer-facing ones included. */
+function revalidateStorePhotos(vendorId) {
   revalidatePath(`/admin/vendors/${vendorId}`);
   revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: 'Photo removed.' };
+  revalidatePath('/order');
+  revalidatePath('/scan');
+  revalidatePath('/');
 }
 
 // --- Menu items -------------------------------------------------------------

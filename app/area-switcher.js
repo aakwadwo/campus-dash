@@ -26,6 +26,18 @@ const AREA_COPY = {
   '/admin': { label: 'Admin console', description: 'Operations, approvals and settings' },
 };
 
+/**
+ * WHERE YOU ARE, named on the button in the customer area, whose header has no
+ * area name of its own; elsewhere the header already says it, and the button
+ * simply says "Switch". Either way it opens to the other areas.
+ */
+const CURRENT_NAME = {
+  // Only where the header does not already say it. The store, Partner and
+  // admin headers carry their own name beside the logo, so there the button
+  // says what it does instead of repeating it.
+  '/order': 'Customer',
+};
+
 export default async function AreaSwitcher({ current }) {
   const areas = await myAreas();
   const others = areas
@@ -33,10 +45,11 @@ export default async function AreaSwitcher({ current }) {
     .map((area) => ({ href: area.href, ...(AREA_COPY[area.href] ?? { label: area.label }) }));
   if (others.length === 0) return null;
 
+  const here = CURRENT_NAME[current] ?? 'Switch';
   return (
     <MenuDisclosure
-      label="Switch to"
-      ariaLabel="Switch to another area of your account"
+      label={here}
+      ariaLabel={`You are in ${here}. Switch to another area of your account`}
       items={others}
     />
   );

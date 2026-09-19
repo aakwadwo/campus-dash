@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from 'react';
 import CameraCapture from '@/app/camera-capture';
 import FulfilmentChoice from '@/app/fulfilment-choice';
+import ContactLine from '@/app/contact-line';
 import { quoteScanAction, submitScanOrderAction } from '../actions';
 import {
   Card,
@@ -10,9 +11,9 @@ import {
   ErrorNote,
   Skeleton,
   Spinner,
-  EmptyState,
-  BagIcon,
   ArrowLeftIcon,
+  Disclosure,
+  Container,
 } from '@/app/ui';
 
 /**
@@ -28,6 +29,7 @@ import {
  * different product. The scan itself is the one extra field.
  */
 export default function ScanOrderBuilder({
+  header = null,
   vendor,
   menu,
   locations = [],
@@ -37,7 +39,8 @@ export default function ScanOrderBuilder({
 }) {
   const [quantities, setQuantities] = useState({});
   const [step, setStep] = useState('menu');
-  const [fulfilment, setFulfilment] = useState('PICKUP');
+  // NOTHING IS PRESELECTED. The customer chooses; the price depends on it.
+  const [fulfilment, setFulfilment] = useState(null);
   const [destination, setDestination] = useState('');
   const [note, setNote] = useState('');
   const [details, setDetails] = useState('');
@@ -68,13 +71,33 @@ export default function ScanOrderBuilder({
 
   const itemCount = items.reduce((total, item) => total + item.quantity, 0);
   const canOrder = vendor.is_accepting_orders && itemCount > 0;
-  const fulfilmentChoice = partnerAvailable ? fulfilment : 'PICKUP';
+  const fulfilmentChoice = !partnerAvailable && fulfilment === 'DELIVERY' ? null : fulfilment;
 
-  // Re-price whenever the fulfilment or the pack choice changes. The service
-  // fee is flat and does not move with the basket, but the pack and the
-  // Partner fee do, and nothing is added up in the browser either way.
+  // Re-price whenever the fulfilment, the destination or the pack choice
+  // changes. The service fee is flat and does not move with the basket, but the
+  // pack and the Partner fee do, and nothing is added up in the browser either
+  // way.
+  //
+  // THE DESTINATION IS A DEPENDENCY, and leaving it out broke every scan
+  // delivery. price_scan_order() REFUSES a Partner order with no destination —
+  // rightly, it cannot work out a zone without one — so choosing the Partner
+  // before a place raised, and because the destination was not in the list
+  // below, picking a place afterwards never re-asked. The checkout stayed on
+  // "Something went wrong on our side" with no total and an unpayable button.
   useEffect(() => {
     if (step !== 'review' || items.length === 0) return undefined;
+
+    // NOTHING TO PRICE until somebody has chosen how they want it: the pack and
+    // the Partner fee both depend on the answer.
+    if (!fulfilmentChoice) return undefined;
+
+    // NOTHING TO ASK YET. A Partner order without a destination is not a
+    // pricing failure, it is a question the customer has not answered — the
+    // line under the Pay button already asks it. Sending it anyway turned an
+    // unfilled field into an internal error. Nothing is cleared here: whatever
+    // quote is held was priced for the OTHER fulfilment, and `priced` below
+    // already refuses to show one of those.
+    if (fulfilmentChoice === 'DELIVERY' && !destination) return undefined;
 
     let cancelled = false;
     startQuoting(async () => {
@@ -103,7 +126,7 @@ export default function ScanOrderBuilder({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, JSON.stringify(items), fulfilmentChoice, wantsPack, vendor.vendor_id]);
+  }, [step, JSON.stringify(items), fulfilmentChoice, destination, wantsPack, vendor.vendor_id]);
 
   /**
    * The provider's checkout is on another origin, so getting there is a full
@@ -119,107 +142,100 @@ export default function ScanOrderBuilder({
 
   if (menu.length === 0) {
     return (
-      <Card>
-        <EmptyState
-          icon={<BagIcon className="size-6" />}
-          title="Nothing on scan right now"
-          description={`${vendor.name} takes meal scans but has not marked anything available. Try another store.`}
-        />
-      </Card>
+      <>
+        {header}
+        <Container size="wide">
+          <p className="text-muted py-12 text-center">Nothing here takes a scan right now.</p>
+        </Container>
+      </>
     );
   }
 
   if (step === 'review') {
     return (
-      <ScanCheckout
-        vendor={vendor}
-        menu={menu}
-        items={items}
-        locations={locations}
-        partnerAvailable={partnerAvailable}
-        partnerFeePesewas={partnerFeePesewas}
-        quotedPartnerFee={quotedPartnerFee}
-        packFeePesewas={packFeePesewas}
-        fulfilment={fulfilmentChoice}
-        onFulfilment={setFulfilment}
-        destination={destination}
-        onDestination={setDestination}
-        note={note}
-        onNote={setNote}
-        details={details}
-        onDetails={setDetails}
-        wantsPack={wantsPack}
-        onWantsPack={setWantsPack}
-        scan={scan}
-        onScan={setScan}
-        quote={quote}
-        quotedFor={quotedFor}
-        quoting={quoting}
-        quoteError={quoteError}
-        onBack={() => setStep('menu')}
-        submit={submit}
-        submitting={submitting}
-        submitState={submitState}
-      />
+      <AtTop>
+        <ScanCheckout
+          vendor={vendor}
+          menu={menu}
+          items={items}
+          locations={locations}
+          partnerAvailable={partnerAvailable}
+          partnerFeePesewas={partnerFeePesewas}
+          quotedPartnerFee={quotedPartnerFee}
+          packFeePesewas={packFeePesewas}
+          fulfilment={fulfilmentChoice}
+          onFulfilment={setFulfilment}
+          destination={destination}
+          onDestination={setDestination}
+          note={note}
+          onNote={setNote}
+          details={details}
+          onDetails={setDetails}
+          wantsPack={wantsPack}
+          onWantsPack={setWantsPack}
+          scan={scan}
+          onScan={setScan}
+          quote={quote}
+          quotedFor={quotedFor}
+          quoting={quoting}
+          quoteError={quoteError}
+          onBack={() => setStep('menu')}
+          submit={submit}
+          submitting={submitting}
+          submitState={submitState}
+        />
+      </AtTop>
     );
   }
 
   return (
     <>
-      <h2 className="mb-3 text-base font-semibold tracking-tight sm:mb-4 sm:text-lg">
-        What your scan covers here
-      </h2>
+      {header}
+      <Container size="wide">
+        <h2 className="mb-3 text-base font-semibold tracking-tight sm:mb-4 sm:text-lg">
+          What your scan covers here
+        </h2>
 
-      <ul className="grid gap-3 md:grid-cols-2">
-        {menu.map((item) => {
-          const chosen = quantities[item.id] ?? 0;
-          return (
-            <li key={item.id}>
-              <Card
-                className={`flex h-full gap-3.5 p-3.5 transition-colors sm:p-5 ${
-                  chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''
-                }`}
-              >
-                {item.image_url ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={item.image_url}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    width={80}
-                    height={80}
-                    className="rounded-card size-20 shrink-0 object-cover"
-                  />
-                ) : null}
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-4">
-                    <h3 className="font-semibold break-words">{item.name}</h3>
-                    {/* THE STORE'S OWN PRICE, struck through, because the scan is
+        <ul className="grid gap-3 md:grid-cols-2">
+          {menu.map((item) => {
+            const chosen = quantities[item.id] ?? 0;
+            return (
+              <li key={item.id}>
+                <Card
+                  className={`flex h-full gap-3.5 p-3.5 transition-colors sm:p-5 ${
+                    chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-4">
+                      <h3 className="font-semibold break-words">{item.name}</h3>
+                      {/* THE STORE'S OWN PRICE, struck through, because the scan is
                       what settles it. Showing the value makes it obvious what
                       the entitlement is being spent on; showing it as payable
                       would be a lie. */}
-                    <span className="text-muted shrink-0 text-sm line-through">
-                      <Money pesewas={item.price_pesewas} />
-                    </span>
+                      <span className="text-muted shrink-0 text-sm line-through">
+                        <Money pesewas={item.price_pesewas} />
+                      </span>
+                    </div>
+
+                    {item.description ? (
+                      <p className="text-muted mt-1.5 text-sm leading-relaxed">
+                        {item.description}
+                      </p>
+                    ) : null}
+
+                    <Stepper
+                      value={chosen}
+                      onChange={(next) => setQuantity(item.id, next)}
+                      label={item.name}
+                    />
                   </div>
-
-                  {item.description ? (
-                    <p className="text-muted mt-1.5 text-sm leading-relaxed">{item.description}</p>
-                  ) : null}
-
-                  <Stepper
-                    value={chosen}
-                    onChange={(next) => setQuantity(item.id, next)}
-                    label={item.name}
-                  />
-                </div>
-              </Card>
-            </li>
-          );
-        })}
-      </ul>
+                </Card>
+              </li>
+            );
+          })}
+        </ul>
+      </Container>
 
       {itemCount > 0 ? (
         <div className="animate-sheet fixed inset-x-0 bottom-[calc(57px+env(safe-area-inset-bottom))] z-50 px-3 pb-3 sm:bottom-0 sm:px-6 sm:pb-6">
@@ -242,6 +258,18 @@ export default function ScanOrderBuilder({
         </div>
       ) : null}
     </>
+  );
+}
+
+/** The checkout opens at the top of the page, with the store header gone. */
+function AtTop({ children }) {
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, []);
+  return (
+    <Container size="wide" className="pt-4 sm:pt-6">
+      {children}
+    </Container>
   );
 }
 
@@ -326,10 +354,11 @@ function ScanCheckout({
 
   // A quote priced for the other fulfilment answers a question nobody asked.
   const priced = quote && quotedFor === fulfilment ? quote : null;
+  const needsChoice = !fulfilment;
   const needsDestination = fulfilment === 'DELIVERY' && !destination;
   const leaving = Boolean(submitState.ok);
   const busy = submitting || leaving;
-  const ready = Boolean(quote && scan && !quoting && !needsDestination);
+  const ready = Boolean(priced && scan && !quoting && !needsChoice && !needsDestination);
 
   return (
     <form action={submit} className="mx-auto max-w-xl">
@@ -340,7 +369,7 @@ function ScanCheckout({
         name="items"
         value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
       />
-      <input type="hidden" name="fulfilment_type" value={fulfilment} />
+      <input type="hidden" name="fulfilment_type" value={fulfilment ?? ''} />
       <input type="hidden" name="destination_location_id" value={destination} />
       <input type="hidden" name="destination_note" value={note} />
       <input type="hidden" name="scan_image_path" value={scan?.path ?? ''} />
@@ -362,9 +391,7 @@ function ScanCheckout({
 
       {/* --- Items ------------------------------------------------------- */}
       <Card className="mt-7 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          Your order
-        </h3>
+        <h3 className="mb-3 font-semibold">Your order</h3>
         <ul className="divide-line divide-y">
           {named.map((item) => (
             <li key={item.menuItemId} className="flex items-baseline justify-between gap-4 py-2.5">
@@ -380,10 +407,7 @@ function ScanCheckout({
             </li>
           ))}
         </ul>
-        <p className="text-muted mt-3 text-xs leading-relaxed">
-          Struck through because your scan covers it. {vendor.name} checks the scan at the counter
-          before handing anything over.
-        </p>
+        <p className="text-muted mt-3 text-xs">Your scan covers the food.</p>
       </Card>
 
       {/* --- The scan ------------------------------------------------------ */}
@@ -391,9 +415,7 @@ function ScanCheckout({
 
       {/* --- How you want it ---------------------------------------------- */}
       <Card className="mt-4 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          How you want it
-        </h3>
+        <h3 className="mb-3 font-semibold">How you want it</h3>
 
         <FulfilmentChoice
           value={fulfilment}
@@ -451,8 +473,7 @@ function ScanCheckout({
         {packFeePesewas > 0 && priced ? (
           priced.pack_is_compulsory ? (
             <p className="text-muted mt-4 text-sm leading-relaxed">
-              A pack is included, at <Money pesewas={priced.pack_fee_pesewas} />. Your Partner needs
-              something to carry your food in.
+              A pack is included with a Partner, at <Money pesewas={priced.pack_fee_pesewas} />.
             </p>
           ) : (
             <label className="border-line mt-4 flex cursor-pointer items-start gap-3 border-t pt-4">
@@ -468,7 +489,7 @@ function ScanCheckout({
                   Add a pack <Money pesewas={packFeePesewas} />
                 </span>
                 <span className="text-muted mt-0.5 block text-xs leading-relaxed">
-                  Leave this off if you are bringing your own container.
+                  Leave off if you are bringing your own container.
                 </span>
               </span>
             </label>
@@ -480,12 +501,8 @@ function ScanCheckout({
       {/* OPTIONAL NOW, and that is a consequence of the items being real. This
           used to be the only way anybody knew what to collect, so it had to be
           compulsory. The order says that now. */}
-      <Card className="mt-4 p-5">
-        <label className="block">
-          <span className="text-sm font-medium">
-            Anything the store should know{' '}
-            <span className="text-muted font-normal">(optional)</span>
-          </span>
+      <Card className="mt-4 px-5">
+        <Disclosure title="Add a note for the store" flush defaultOpen={Boolean(details)}>
           <textarea
             name="details"
             maxLength={1000}
@@ -493,20 +510,27 @@ function ScanCheckout({
             value={details}
             onChange={(event) => onDetails(event.target.value)}
             placeholder="No pepper. If the chicken is finished, fish is fine."
-            className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-2 w-full border px-3 py-2.5 text-[15px] outline-none"
+            aria-label="A note for the store"
+            className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint w-full border px-3 py-2.5 text-base outline-none"
           />
-        </label>
+        </Disclosure>
       </Card>
 
       {/* --- Money -------------------------------------------------------- */}
       <Card className="mt-4 p-5">
-        <h3 className="text-muted mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
-          What you pay
-        </h3>
-
-        {quoteError ? (
+        {needsChoice || needsDestination ? (
+          // NOT a loading state, and it comes before any error: nothing is in
+          // flight and nothing will be until the customer answers, so a
+          // skeleton announcing "working out your total" would be waiting on
+          // the customer while telling them the opposite.
+          <p className="text-muted text-sm leading-relaxed">
+            {needsChoice
+              ? 'Choose how you want it and the total appears here.'
+              : 'Choose where the Partner should bring it and the total appears here.'}
+          </p>
+        ) : quoteError ? (
           <ErrorNote>{quoteError}</ErrorNote>
-        ) : quote ? (
+        ) : priced ? (
           <dl className={`transition-opacity ${quoting ? 'opacity-45' : ''}`}>
             <div className="flex items-baseline justify-between gap-4 py-1.5">
               <dt className="text-muted text-sm">
@@ -520,28 +544,28 @@ function ScanCheckout({
             {/* FLAT, and the same figure on every scan order. It is not a share
                 of what the scan covered: that is the store's price for food
                 Campus Dash did not sell. */}
-            <Line label="Service fee" value={quote.service_fee_pesewas} />
-            {/* ALWAYS ITS OWN LINE when it is charged. Campus Dash buys the
-                containers; somebody charged for something is entitled to see
-                what. It is never folded into another figure. */}
-            {quote.pack_fee_pesewas > 0 ? (
+            <Line label="Service fee" value={priced.service_fee_pesewas} />
+            {/* ALWAYS ITS OWN LINE when it is charged. The store packs the meal
+                and the fee is the store's; somebody charged for something is
+                entitled to see what. It is never folded into another figure. */}
+            {priced.pack_fee_pesewas > 0 ? (
               <Line
                 label="Pack"
                 hint={
-                  quote.pack_is_compulsory
+                  priced.pack_is_compulsory
                     ? 'Included with a Partner'
                     : 'What your food is carried in'
                 }
-                value={quote.pack_fee_pesewas}
+                value={priced.pack_fee_pesewas}
               />
             ) : null}
-            {quote.delivery_fee_pesewas > 0 ? (
-              <Line label="Campus Dash Partner" value={quote.delivery_fee_pesewas} />
+            {priced.delivery_fee_pesewas > 0 ? (
+              <Line label="Campus Dash Partner" value={priced.delivery_fee_pesewas} />
             ) : null}
             <div className="border-line mt-2 flex items-baseline justify-between gap-4 border-t pt-3">
               <dt className="font-semibold">Total</dt>
               <dd className="text-lg font-semibold">
-                <Money pesewas={quote.total_pesewas} />
+                <Money pesewas={priced.total_pesewas} />
               </dd>
             </div>
           </dl>
@@ -553,11 +577,6 @@ function ScanCheckout({
             <Skeleton className="h-6 w-1/2" />
           </div>
         )}
-
-        <p className="text-muted mt-4 text-xs leading-relaxed">
-          Your scan pays {vendor.name} for the food. This is what Campus Dash charges
-          {quote?.pack_fee_pesewas > 0 ? ', including the pack' : ''}.
-        </p>
       </Card>
 
       {submitState.message ? <ErrorNote className="mt-4">{submitState.message}</ErrorNote> : null}
@@ -574,9 +593,9 @@ function ScanCheckout({
               <Spinner className="size-4" />
               Taking you to pay…
             </span>
-          ) : quote ? (
+          ) : priced ? (
             <>
-              Pay <Money pesewas={quote.total_pesewas} />
+              Pay <Money pesewas={priced.total_pesewas} />
             </>
           ) : (
             'Pay'
@@ -584,12 +603,16 @@ function ScanCheckout({
         </button>
       </div>
       {!scan ? (
-        <p className="text-muted mt-2.5 text-center text-xs">Attach your meal scan to continue.</p>
+        <p className="text-muted mt-2.5 text-center text-sm">Attach your meal scan to continue.</p>
+      ) : needsChoice ? (
+        <p className="text-muted mt-2.5 text-center text-sm">Choose how you want it.</p>
       ) : needsDestination ? (
-        <p className="text-muted mt-2.5 text-center text-xs">
+        <p className="text-muted mt-2.5 text-center text-sm">
           Choose where the Partner should bring it.
         </p>
       ) : null}
+
+      <ContactLine className="mt-8 text-center" />
     </form>
   );
 }
@@ -623,32 +646,33 @@ function ScanUpload({ scan, onUploaded }) {
 
   return (
     <Card className="mt-4 p-5">
-      <h3 className="text-sm font-medium">
+      <h3 className="font-semibold">
         Your meal scan <span className="text-bad">*</span>
       </h3>
       <p className="text-muted mt-1 text-xs leading-relaxed">
-        A photo, screenshot or PDF. It stays private: only you and the store see it, and only while
-        the order is live.
+        Only you and the store see it, while the order is live.
       </p>
 
       {preview ? (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
           src={preview}
-          alt="The scan you selected"
+          alt="The scan you attached"
           className="border-line rounded-card mt-3 w-full border"
         />
       ) : null}
-      {scan && !preview ? <p className="text-muted mt-3 text-sm">PDF received.</p> : null}
-      {scan ? (
-        <p className="text-good mt-2 text-sm font-medium">
-          Scan received. Check it is readable, and choose another if not.
-        </p>
-      ) : null}
+      {scan && !preview ? <p className="text-muted mt-3 text-sm">PDF attached.</p> : null}
 
+      {/* TWO JOBS, TWO BUTTONS. "Choose" opens the library or files (no
+          `capture`, so the library is never taken away). "Take photo" opens the
+          camera. See app/camera-capture.js for how each device gets there. */}
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <label className="press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors">
-          {scan ? 'Choose another' : 'Choose a file'}
+        <label
+          className={`press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors ${
+            busy ? 'pointer-events-none opacity-55' : ''
+          }`}
+        >
+          {scan ? 'Choose another' : 'Choose photo or file'}
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -663,7 +687,11 @@ function ScanUpload({ scan, onUploaded }) {
           />
         </label>
 
-        <CameraCapture onCaptured={accept} label={scan ? 'Retake photo' : 'Take a photo'} />
+        <CameraCapture
+          onCaptured={accept}
+          disabled={busy}
+          label={scan ? 'Retake photo' : 'Take photo'}
+        />
       </div>
 
       {busy ? (

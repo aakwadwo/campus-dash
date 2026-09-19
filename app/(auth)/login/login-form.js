@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useState } from 'react';
 import { requestEmailCode, verifyEmailCode, resendEmailCode } from './actions';
 import { RESEND_COOLDOWN_SECONDS } from '@/lib/auth/customer-signup';
-import { Button, ErrorNote, Field, Input } from '@/app/ui';
+import { Button, CodeSentTo, ErrorNote, Field, Input } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
 
 /**
@@ -74,10 +74,7 @@ export default function LoginForm({ next }) {
         <input type="hidden" name="email" value={email} />
         <input type="hidden" name="next" value={next} />
 
-        <p className="text-muted text-sm leading-relaxed">
-          Enter the 6-digit code we sent to{' '}
-          <span className="text-ink font-medium break-all">{email}</span>.
-        </p>
+        <CodeSentTo>{email}</CodeSentTo>
 
         <Field label="Verification code">
           <OtpInput autoFocus disabled={verifying} />

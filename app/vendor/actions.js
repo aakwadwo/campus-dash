@@ -10,12 +10,12 @@ import {
   updateProfile,
   addImage,
   removeImage,
+  setPrimaryImage,
   setPayoutDestination,
   setMenuItemAvailable,
   createMenuItem,
   updateMenuItem,
   deleteMenuItem,
-  setMenuItemImage,
   clearMenuItemImage,
 } from '@/lib/vendor';
 import { vendorRedeemScan, vendorRefuseScan } from '@/lib/scan';
@@ -258,62 +258,6 @@ export async function deleteMenuItemAction(_prev, formData) {
 }
 
 /**
- * A photograph on one dish.
- *
- * UPLOAD FIRST, THEN RECORD, then delete whatever was there before — the same
- * order the storefront gallery uses, and for the same reason. A row pointing at
- * an object that does not exist is a broken image on every storefront; an object
- * with no row is invisible and costs a few kilobytes.
- */
-export async function setMenuItemImageAction(_prev, formData) {
-  const vendorId = str(formData, 'vendor_id');
-  const menuItemId = str(formData, 'menu_item_id');
-  const file = formData.get('image');
-
-  if (!file || typeof file === 'string' || file.size === 0) {
-    return { ok: false, message: 'Choose a photo to upload.' };
-  }
-
-  let uploaded;
-  let previous = null;
-  try {
-    uploaded = await uploadVendorImage({ vendorId, file });
-    previous = await setMenuItemImage({
-      menuItemId,
-      storagePath: uploaded.path,
-      contentType: uploaded.contentType,
-      byteSize: uploaded.byteSize,
-    });
-  } catch (error) {
-    if (uploaded?.path) await deleteVendorImage(uploaded.path).catch(() => {});
-    return fail(error);
-  }
-
-  // THE ONE IT REPLACED. Without this every retaken photo leaves its
-  // predecessor in the bucket for ever.
-  if (previous && previous !== uploaded.path) {
-    await deleteVendorImage(previous).catch(() => {});
-  }
-
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: 'Photo saved.' };
-}
-
-export async function clearMenuItemImageAction(_prev, formData) {
-  const vendorId = str(formData, 'vendor_id');
-  try {
-    const path = await clearMenuItemImage(str(formData, 'menu_item_id'));
-    if (path) await deleteVendorImage(path).catch(() => {});
-  } catch (error) {
-    return fail(error);
-  }
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: 'Photo removed.' };
-}
-
-/**
  * "35" and "35.50" both mean pesewas in the end, and neither may become a float.
  *
  * Parsed as two integer parts and combined, rather than multiplied by 100:
@@ -386,8 +330,7 @@ export async function addImageAction(_prev, formData) {
     return fail(error);
   }
 
-  revalidatePath('/vendor/profile');
-  revalidatePath(`/order/${vendorId}`);
+  revalidateStorePhotos(vendorId);
   return { ok: true, message: 'Photo added.' };
 }
 
@@ -401,9 +344,32 @@ export async function deleteImageAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
+  revalidateStorePhotos(vendorId);
+  return { ok: true, message: 'Photo removed.' };
+}
+
+export async function setPrimaryImageAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  try {
+    await setPrimaryImage(str(formData, 'image_id'));
+  } catch (error) {
+    return fail(error);
+  }
+  revalidateStorePhotos(vendorId);
+  return { ok: true, message: 'Main photo changed.' };
+}
+
+/**
+ * Every page a store's photo appears on. The landing page and the marketplace
+ * were missing from this list, so a new photo reached the store's own page and
+ * nowhere a customer actually looks first.
+ */
+function revalidateStorePhotos(vendorId) {
   revalidatePath('/vendor/profile');
   revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: 'Photo removed.' };
+  revalidatePath('/order');
+  revalidatePath('/scan');
+  revalidatePath('/');
 }
 
 export async function setAcceptingOrdersAction(_prev, formData) {

@@ -68,7 +68,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
   // collection, because the counter is the next thing, not the door.
   const destinationCard = (
     <section className="rounded-card bg-surface border-line border p-4">
-      <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
+      <h2 className="text-muted text-sm font-medium">
         {collecting ? 'Then take it to' : 'Take it to'}
       </h2>
       {/* THE FIRST NAME, LARGE. It is what the Partner says out loud when
@@ -130,14 +130,19 @@ export default async function PartnerDeliveryPage({ searchParams }) {
           <li aria-hidden className="bg-line-strong h-px w-6" />
           <li className={collecting ? 'text-faint' : 'text-brand-700'}>2. Deliver</li>
         </ol>
-        {isScan ? <p className="text-brand-800 text-sm font-semibold">Scan delivery</p> : null}
+        {/* THE STORE CHECKS A MEAL SCAN, not the Partner. The job is the same
+            as any order: collect with the store's code, deliver with the
+            customer's. */}
+        {isScan ? (
+          <p className="bg-brand-50 text-brand-800 mb-1.5 w-fit rounded px-1.5 py-0.5 text-xs font-semibold">
+            Meal scan
+          </p>
+        ) : null}
         <h1 className="text-display text-2xl font-semibold sm:text-3xl">
           {collecting
-            ? isScan
-              ? 'Redeem the scan'
-              : delivery.food_is_ready
-                ? 'Collect the order'
-                : 'Wait for the store'
+            ? delivery.food_is_ready
+              ? 'Collect the order'
+              : 'Wait for the store'
             : 'Deliver the order'}
         </h1>
         <p className="text-muted mt-1.5 text-sm">
@@ -152,7 +157,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
       {collecting && isScan ? (
         <>
           <section className="rounded-card bg-surface border-line mt-3 border p-4">
-            <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">Go to</h2>
+            <h2 className="text-muted text-sm font-medium">Go to</h2>
             <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
             <p className="text-muted text-sm">{delivery.vendor_location}</p>
           </section>
@@ -162,9 +167,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
               than the whole instruction it used to have to be. */}
           {brief?.details ? (
             <section className="rounded-card bg-brand-50 mt-3 p-4">
-              <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
-                What they asked for
-              </h2>
+              <h2 className="text-muted text-sm font-medium">What they asked for</h2>
               <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line">{brief.details}</p>
             </section>
           ) : null}
@@ -175,9 +178,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
         </>
       ) : collecting ? (
         <section className="rounded-card bg-surface border-line mt-3 border p-4">
-          <h2 className="text-muted text-xs font-semibold tracking-[0.12em] uppercase">
-            Collect from
-          </h2>
+          <h2 className="text-muted text-sm font-medium">Collect from</h2>
           <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
           <p className="text-muted text-sm">{delivery.vendor_location}</p>
           {delivery.vendor_phone ? (

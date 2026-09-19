@@ -1,11 +1,11 @@
-import Link from 'next/link';
 import { config } from '@/lib/config';
 import { redirect } from 'next/navigation';
 import SignUpForm from './signup-form';
 import { getCapabilities } from '@/lib/auth/session';
 import { safeNext, landingFor } from '@/lib/auth/landing';
-import { Card, ArrowLeftIcon } from '@/app/ui';
+import { Card } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
+import BackButton from '@/app/back-button';
 
 export const metadata = {
   robots: { index: false, follow: false },
@@ -29,13 +29,7 @@ export default async function SignUpPage({ searchParams }) {
 
   return (
     <main className="flex min-h-dvh flex-col px-5 py-6 sm:py-10">
-      <Link
-        href="/order"
-        className="text-muted hover:text-ink press-sm -ml-1 inline-flex w-fit items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-medium transition-colors"
-      >
-        <ArrowLeftIcon className="size-4" />
-        Keep browsing
-      </Link>
+      <BackButton fallback="/" />
 
       <div className="flex flex-1 flex-col justify-center">
         <div className="animate-fade-up mx-auto w-full max-w-sm py-6">
@@ -43,7 +37,7 @@ export default async function SignUpPage({ searchParams }) {
             <CampusDashMark height={44} className="mx-auto mb-5" alt="Campus Dash" />
             <h1 className="text-display text-3xl font-semibold">Create your account</h1>
             <p className="text-muted mx-auto mt-2.5 max-w-xs text-sm leading-relaxed">
-              For Academic City students. One account to order, to deliver, and to sell.
+              For Academic City students and staff.
             </p>
           </div>
 

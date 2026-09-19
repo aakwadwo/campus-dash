@@ -177,7 +177,6 @@ describe('route health', { skip: running ? false : `dev server not running at ${
       // move themselves up; this test asked for the field long after the form
       // stopped having it.
       'name="affiliation"',
-      'name="graduation_year"',
       'name="gender"',
       'name="phone"',
       'name="accept_terms"',
@@ -185,11 +184,16 @@ describe('route health', { skip: running ? false : `dev server not running at ${
       assert.ok(body.includes(field), `the sign-up form is missing ${field}`);
     }
 
-    // All four cohorts. A missing one is a whole year group that cannot sign
-    // up, and nothing else in the suite would notice.
-    for (const year of ['2027', '2028', '2029', '2030']) {
-      assert.ok(new RegExp(`value=\\"${year}\\"`).test(body), `${year} is not offered`);
-    }
+    // STUDENT OR STAFF STARTS UNANSWERED, and the graduation year is a
+    // student's question, so it is not on the page until "Student" is chosen.
+    // Neither radio arrives checked, and no year is asked of somebody who may
+    // be staff. (All four cohorts are pinned against GRADUATION_YEARS in
+    // tests/customer-signup.test.js, the list the field renders from.)
+    assert.ok(!/name="affiliation"[^>]*checked/.test(body), 'student or staff is not preselected');
+    assert.ok(
+      !body.includes('name="graduation_year" required'),
+      'no year is asked before the choice'
+    );
 
     // And both answers to a question that no longer has a third.
     for (const gender of ['MALE', 'FEMALE']) {

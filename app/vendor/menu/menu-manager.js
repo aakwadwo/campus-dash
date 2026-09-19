@@ -1,13 +1,11 @@
 'use client';
 
-import { useActionState, useEffect, useRef, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import {
   setMenuItemAvailableAction,
   createMenuItemAction,
   updateMenuItemAction,
   deleteMenuItemAction,
-  setMenuItemImageAction,
-  clearMenuItemImageAction,
 } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import {
@@ -19,9 +17,7 @@ import {
   ErrorNote,
   SuccessNote,
   EmptyState,
-  Spinner,
   BagIcon,
-  ImagePlaceholder,
 } from '@/app/ui';
 
 /**
@@ -102,8 +98,6 @@ function MenuRow({ item, vendorId }) {
   return (
     <Card className={`p-3.5 sm:p-4 ${item.is_available ? '' : 'bg-surface-2/50'}`}>
       <div className="flex items-start gap-3.5">
-        <ItemImage item={item} vendorId={vendorId} />
-
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-3">
             <p className={`font-semibold break-words ${item.is_available ? '' : 'text-muted'}`}>
@@ -347,139 +341,4 @@ function ItemFields({ item = null }) {
       </label>
     </>
   );
-}
-
-/* ---------------------------------------------------------------------------
- * The photograph
- * ------------------------------------------------------------------------ */
-
-/**
- * One dish's photograph.
- *
- * SUBMITS ON CHOOSE. A file input followed by a separate Save button is two
- * steps for one intention, and the half-finished state between them is where
- * "I uploaded it and nothing happened" comes from. Choosing the file IS the
- * upload, the tile shows the local preview immediately, and the pending state
- * sits on the tile rather than somewhere else on the page.
- */
-function ItemImage({ item, vendorId }) {
-  const [state, upload, uploading] = useActionState(setMenuItemImageAction, {});
-  const [clearState, clear, clearing] = useActionState(clearMenuItemImageAction, {});
-  const formRef = useRef(null);
-  const [preview, setPreview] = usePreview();
-
-  const busy = uploading || clearing;
-  const shown = preview ?? item.image_url;
-
-  return (
-    <div className="w-20 shrink-0 sm:w-24">
-      <form ref={formRef} action={upload}>
-        <input type="hidden" name="vendor_id" value={vendorId} />
-        <input type="hidden" name="menu_item_id" value={item.id} />
-
-        <label
-          className={`group relative block cursor-pointer ${busy ? 'pointer-events-none' : ''}`}
-        >
-          {shown ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={shown}
-              alt=""
-              className={`rounded-card aspect-square w-full object-cover transition-opacity ${
-                busy ? 'opacity-40' : 'group-hover:opacity-80'
-              }`}
-            />
-          ) : (
-            <ImagePlaceholder
-              name={item.name}
-              ratio="aspect-square"
-              className={busy ? 'opacity-40' : ''}
-            />
-          )}
-
-          <span
-            className={`text-faint mt-1 block text-center text-[11px] font-medium ${
-              busy ? '' : 'group-hover:text-ink'
-            }`}
-          >
-            {busy ? (
-              <span className="inline-flex items-center gap-1">
-                <Spinner className="size-3" />
-                Saving
-              </span>
-            ) : shown ? (
-              'Change'
-            ) : (
-              'Add photo'
-            )}
-          </span>
-
-          <input
-            type="file"
-            name="image"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            disabled={busy}
-            className="sr-only"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              // The local preview goes up before the round trip, so the tile
-              // shows the right photograph while it is being saved rather than
-              // the old one or a gap.
-              setPreview(URL.createObjectURL(file));
-              formRef.current?.requestSubmit();
-            }}
-          />
-        </label>
-      </form>
-
-      {/* RECOVERABLE. An upload that failed says so on the tile and leaves the
-          input ready for another go, rather than stranding the row. */}
-      {state.message && !state.ok ? (
-        <p role="alert" className="text-bad mt-1 text-center text-[11px] leading-tight">
-          {state.message}
-        </p>
-      ) : null}
-      {clearState.message && !clearState.ok ? (
-        <p role="alert" className="text-bad mt-1 text-center text-[11px] leading-tight">
-          {clearState.message}
-        </p>
-      ) : null}
-
-      {item.image_url && !busy ? (
-        <form action={clear} className="mt-0.5 text-center">
-          <input type="hidden" name="vendor_id" value={vendorId} />
-          <input type="hidden" name="menu_item_id" value={item.id} />
-          <button
-            type="submit"
-            className="text-faint hover:text-bad press-sm min-h-8 text-[11px] font-medium transition-colors"
-          >
-            Remove
-          </button>
-        </form>
-      ) : null}
-    </div>
-  );
-}
-
-/** An object URL that is revoked when replaced and on unmount. */
-function usePreview() {
-  const [url, setUrl] = useState(null);
-  const current = useRef(null);
-
-  useEffect(
-    () => () => {
-      if (current.current) URL.revokeObjectURL(current.current);
-    },
-    []
-  );
-
-  const set = (next) => {
-    if (current.current) URL.revokeObjectURL(current.current);
-    current.current = next;
-    setUrl(next);
-  };
-
-  return [url, set];
 }

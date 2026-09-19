@@ -135,6 +135,58 @@ values (
 );
 
 -- ---------------------------------------------------------------------------
+-- The school addresses — HOW EVERY CUSTOMER AND PARTNER ACTUALLY SIGNS IN
+-- ---------------------------------------------------------------------------
+-- A customer proves a verified @acity.edu.gh address, not a phone number. The
+-- accounts above were seeded with a confirmed phone only, which made every one
+-- of them unreachable from /login: signInWithOtp() is called with
+-- shouldCreateUser false, GoTrue finds no auth.users row carrying the address,
+-- and the screen correctly answers "No Campus Dash account uses that address
+-- yet". docs/MANUAL-TESTING.md has always said to sign these accounts in by
+-- address, so the seed was contradicting the documented walkthrough.
+--
+-- The PHONE STAYS. It is a customer's profile field — the number a Partner
+-- rings on arrival — and dropping it here would take it out of public.users
+-- with them. An auth identity may legitimately carry both.
+--
+-- An identity row per address, exactly as the administrator above has one:
+-- GoTrue lists an account's identities from this table, and an account whose
+-- address exists only on auth.users is one it can find but not describe.
+--
+-- The VENDOR accounts are deliberately absent. A vendor is never asked for an
+-- email; the phone number IS the credential.
+update auth.users u
+   set email               = v.email,
+       email_confirmed_at  = now(),
+       raw_app_meta_data   = '{"provider":"email","providers":["email","phone"]}'::jsonb
+  from (values
+    ('00000000-0000-4000-8000-000000000021', 'ama@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000022', 'kwesi@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000023', 'efua@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000024', 'abena@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000031', 'yaw@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000032', 'adjoa@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000033', 'kofi@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000034', 'esi@acity.edu.gh'),
+    ('00000000-0000-4000-8000-000000000035', 'kojo@acity.edu.gh')
+  ) as v(id, email)
+ where u.id = v.id::uuid;
+
+insert into auth.identities (
+  id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+)
+select gen_random_uuid(), u.id, u.id::text,
+       jsonb_build_object('sub', u.id::text, 'email', u.email, 'email_verified', true),
+       'email', now(), now(), now()
+  from auth.users u
+ where u.email is not null
+   and u.id <> '00000000-0000-4000-8000-000000000001'
+   and not exists (
+     select 1 from auth.identities i
+      where i.user_id = u.id and i.provider = 'email'
+   );
+
+-- ---------------------------------------------------------------------------
 -- public.users — profiles
 -- ---------------------------------------------------------------------------
 -- The on_auth_user_created trigger has ALREADY created a base profile for each

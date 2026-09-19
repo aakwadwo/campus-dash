@@ -531,17 +531,19 @@ describe('meal scans', () => {
       assert.equal(done.success, true);
       assert.equal((await getOrder(orderId)).order_status, 'COMPLETED');
 
-      // THE LEDGER. No vendor row — the university's system settles the food.
+      // THE LEDGER. The university's system settles the food; the PACK is the
+      // store's, and Campus Dash keeps the flat fee.
       const settled = await allocationsFor(orderId);
-      assert.equal(
-        settled.some((a) => a.payee_type === 'VENDOR'),
-        false,
-        'the store is owed nothing BY CAMPUS DASH for a scan'
+      const byPayee = Object.fromEntries(
+        settled.map((a) => [a.payee_type, Number(a.amount_pesewas)])
       );
-      assert.deepEqual(
-        settled.map((a) => [a.payee_type, Number(a.amount_pesewas)]),
-        [['PLATFORM', SCAN_FEE + PACK_FEE]],
-        'GH₵6.00: the flat fee and the pack they asked for'
+      assert.equal(byPayee.VENDOR, PACK_FEE, 'the pack they asked for is the store’s money');
+      assert.equal(byPayee.PLATFORM, SCAN_FEE, 'GH₵2.00: the flat fee, and nothing else');
+      assert.equal(byPayee.PARTNER, undefined, 'nobody carried it');
+      assert.equal(
+        settled.reduce((sum, a) => sum + Number(a.amount_pesewas), 0),
+        SCAN_FEE + PACK_FEE,
+        'GH₵6.00, every pesewa of it allocated once'
       );
     });
 
@@ -569,15 +571,12 @@ describe('meal scans', () => {
         assert.equal(order.order_status, 'PREPARING', 'the store has it');
         assert.equal(order.delivery_status, 'SEARCHING', 'and dispatch opened at payment');
 
-        const paid = await allocationsFor(orderId);
-        assert.equal(
-          paid.some((a) => a.payee_type === 'VENDOR'),
-          false
+        // AT PAYMENT: the pack to the store, everything else held by the
+        // platform until a Partner earns their part of it.
+        const paid = Object.fromEntries(
+          (await allocationsFor(orderId)).map((a) => [a.payee_type, Number(a.amount_pesewas)])
         );
-        assert.deepEqual(
-          paid.map((a) => [a.payee_type, Number(a.amount_pesewas)]),
-          [['PLATFORM', total]]
-        );
+        assert.deepEqual(paid, { VENDOR: PACK_FEE, PLATFORM: SCAN_FEE + PARTNER_FEE });
 
         const accepted = await acceptAs(ACTORS.partnerYaw, orderId);
         assert.equal(accepted.success, true);
@@ -630,8 +629,8 @@ describe('meal scans', () => {
           settled.map((a) => [a.payee_type, Number(a.amount_pesewas)])
         );
         assert.equal(byPayee.PARTNER, PARTNER_FEE, 'the Partner earns the carry, not the meal');
-        assert.equal(byPayee.PLATFORM, SCAN_FEE + PACK_FEE, 'GH₵6.00 of the GH₵11.00');
-        assert.equal(byPayee.VENDOR, undefined);
+        assert.equal(byPayee.PLATFORM, SCAN_FEE, 'GH₵2.00 of the GH₵11.00: the flat fee');
+        assert.equal(byPayee.VENDOR, PACK_FEE, 'GH₵4.00: the pack is the store’s');
         assert.equal(
           settled.reduce((sum, a) => sum + Number(a.amount_pesewas), 0),
           total,
@@ -681,7 +680,7 @@ describe('meal scans', () => {
       );
     });
 
-    test('the store is paid nothing by Campus Dash, and the board says so', async () => {
+    test('the store is paid the pack by Campus Dash, and the board says a pack goes with it', async () => {
       const { order_id: orderId } = await submitScan();
       await payScan(orderId);
 
@@ -691,7 +690,8 @@ describe('meal scans', () => {
         ).rows.find((r) => r.order_id === orderId)
       );
 
-      assert.equal(Number(row.vendor_amount_pesewas), 0, 'Campus Dash owes them nothing');
+      assert.equal(Number(row.vendor_amount_pesewas), PACK_FEE, 'the pack, and not the meal');
+      assert.equal(row.pack_included, true, 'a Partner order always carries a pack');
       assert.equal(
         Number(row.scan_value_pesewas),
         WAFFLE,

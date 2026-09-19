@@ -75,7 +75,9 @@ function Message({ state }) {
         {state.registerHref ? (
           <>
             {' '}
-            <TextLink href={state.registerHref}>Register your store</TextLink>
+            <TextLink href={state.registerHref}>
+              {state.registerHref === '/login' ? 'Sign in with email' : 'Register your store'}
+            </TextLink>
           </>
         ) : null}
       </ErrorNote>

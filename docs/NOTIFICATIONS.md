@@ -22,15 +22,38 @@ factory. No business logic moves.
 
 ## Who hears what
 
-| Event                 | Customer             | Store                       | Partner                        |
-| --------------------- | -------------------- | --------------------------- | ------------------------------ |
-| Order created, unpaid |                      |                             |                                |
-| **Payment confirmed** | ✓                    | ✓ _(NEW PAID ORDER + link)_ |                                |
-| Ready                 | ✓ _(how to collect)_ |                             |                                |
-| Partner assigned      | ✓ _(delivery code)_  | ✓ _(no code)_               | ✓ _(earnings, wait for Ready)_ |
-| Partner picked up     | ✓                    |                             | ✓                              |
-| Delivered             | ✓                    |                             | ✓ _(added to earnings)_        |
-| Cancelled             | ✓                    | ✓                           | ✓                              |
+These are the ORDER-SCOPED events a live order actually fires, and the table is
+the one in `lib/orders/notify.js`. A blank cell is silence, and silence is the
+default: what somebody is not texted about is on the screen that belongs to them
+— the customer's tracking page, the store's board, the Partner's dashboard.
+
+`AUDIENCES` also still carries entries for `ORDER_SUBMITTED`, `ORDER_ACCEPTED`,
+`ORDER_REJECTED` and `ORDER_PREPARING`. Nothing emits any of them: they belong
+to the vendor-acceptance flow that paid-first ordering removed, and they are
+left in place for the same reason the `order_status` enum keeps REJECTED and
+EXPIRED — real rows still point at that history. They are not part of the policy
+below.
+
+The capability messages — approval and rejection for a store or a Partner, the
+offer broadcast, a payout — are not order-scoped and are sent from
+`lib/notifications/dispatch.js`. See **Names in messages** for what each carries.
+
+| Event                 | Customer                    | Store                       | Partner                 |
+| --------------------- | --------------------------- | --------------------------- | ----------------------- |
+| Order created, unpaid |                             |                             |                         |
+| **Payment confirmed** |                             | ✓ _(NEW PAID ORDER + link)_ |                         |
+| Ready — collection    | ✓ _(how the handoff works)_ |                             |                         |
+| Ready — Partner order |                             |                             | ✓ _(go and collect it)_ |
+| Partner assigned      | ✓ _(who took it. NO CODE)_  |                             |                         |
+| Partner picked up     |                             |                             |                         |
+| Delivered             |                             |                             |                         |
+| Cancelled             | ✓                           | ✓                           |                         |
+
+READY is ONE event with one audience list (`[CUSTOMER, PARTNER]`) and is split
+into two rows here because the template decides the rest: `renderSms` returns
+null for a customer whose order a Partner is bringing, so that audience resolves
+to a skip. Somebody about to walk to a counter needs to know when; somebody
+waiting in their room is watching the page.
 
 **NOBODY IS TEXTED WHEN AN ORDER IS CREATED.** It is not a ticket yet — nothing
 has been paid, and the customer is looking at the pay button as the message
@@ -38,9 +61,19 @@ would arrive. A store's "new order" message is the PAYMENT one, and it says PAID
 because that is the fact that makes the order real. There is no accept-or-reject
 prompt in it, because there is nothing left to accept.
 
-**No handoff code is ever sent by SMS**, to anybody. The store reads theirs off
-their own screen, behind their own session; a message is a copy in a second
-place that outlives the delivery it was sent for.
+**THE CUSTOMER IS NOT TEXTED THAT THEIR PAYMENT SUCCEEDED.** They are holding
+the phone that just told them.
+
+**No handoff code is ever sent by SMS, to anybody — and that now includes the
+customer's own delivery code.** All three codes are four digits and every one of
+them lives on exactly one screen, behind exactly one session: the store reads
+the handoff code off their own board, and the customer reads their delivery code
+off their own tracking page. An SMS is a copy in a second place, and it is
+forwardable, screenshottable and permanent — it outlives by months the delivery
+it was sent for. PARTNER_ASSIGNED used to end "Your code is 4821. Give it to
+them on arrival"; it now says who took the order and sends them to the screen.
+`tests/sms-rules.test.js` plants both codes in the context and asserts that no
+template anywhere renders either.
 
 **For a collection, the READY message explains the handoff** — "they will give
 you a 4-digit code, enter it in the app". That code does not exist until the
@@ -210,23 +243,31 @@ exactly as it is for SMS.
 forwardable, screenshottable and permanent, and it outlives the delivery it was
 sent for; the dashboard's copy expires when the authorisation does.
 
-**A handoff code, to anybody.** The store reads it off their own screen; nobody
-receives it by SMS. Putting it in a message would give the person collecting
-both halves of the proof, and would leave a copy of it on a phone long after the
-delivery it belonged to was over.
+**A handoff code, to anybody — including the customer's own delivery code.** The
+store reads the handoff code off their own screen and the customer reads their
+delivery code off theirs; neither arrives by SMS. Putting the store's in a
+message would give the person collecting both halves of the proof. The
+customer's was in one for a while, and the objection to it is the second half of
+the same sentence: a message leaves a copy of a four-digit secret on a phone
+long after the delivery it belonged to was over, and it can be forwarded to
+somebody who was never entitled to it.
 
 ## Names in messages
 
 A message that names a person names them by **first name only**, and only when
 the recipient is entitled to know who they are.
 
-- `PARTNER_ASSIGNED` tells the CUSTOMER "Kwame has accepted your order". A
-  surname adds nothing to finding somebody at your door and is theirs, not ours
-  to hand out.
-- The same event tells the PARTNER the order number, the vendor and their
-  earning, and **no customer name and no customer phone number**. Both are on
-  the dashboard, gated on this Partner still being the assigned one — and an
-  SMS outlives that gate. It is forwardable, screenshottable and permanent.
+- `PARTNER_ASSIGNED` tells the CUSTOMER "Kwame has accepted your order", and
+  nothing else — no code, no phone number, no amount. A surname adds nothing to
+  finding somebody at your door and is theirs, not ours to hand out.
+- **The same event tells the PARTNER nothing at all.** There is no PARTNER
+  template for it and the audience list does not name them: they pressed accept
+  a second ago and are looking at the job. Being texted about your own action is
+  the noise this table was trimmed to remove. What they are told later is that
+  the order is READY, which is the one thing that happens without them.
+- The Partner is never sent a customer's name or phone number by SMS in any
+  message. Both are on the dashboard, gated on this Partner still being the
+  assigned one — and an SMS outlives that gate.
 - `DELIVERY_AVAILABLE` goes to every available Partner and therefore carries
   nothing about anybody: no customer, no destination, no name, no amount owed to
   a named person. Its whole job is to get somebody to open their own dashboard.

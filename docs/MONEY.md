@@ -9,6 +9,7 @@ the database, not in transit, not in a price input box.
 customer pays TOTAL
       │
       ├── VENDOR    = food subtotal    → SPLIT at the charge, or settled DAILY
+      │               (+ the pack on a scan order)
       ├── PLATFORM  = service fee (+ delivery fee until a Partner earns it)
       └── PARTNER   = delivery fee     → settled WEEKLY, by transfer
                        carved out of PLATFORM at the moment of delivery
@@ -58,8 +59,8 @@ Everything above is a **food order**: Campus Dash sold the food, there is a real
 subtotal, and the service fee is a percentage of it.
 
 A **scan order** is not that. The student's campus meal entitlement pays the
-store for the food; Campus Dash sold no food, `orders.subtotal_pesewas` is zero
-and no VENDOR allocation is written at all. So the fee cannot be a percentage of
+store for the food; Campus Dash sold no food and `orders.subtotal_pesewas` is
+zero. The only thing the store is owed through Campus Dash is the pack. So the fee cannot be a percentage of
 anything — there is nothing of ours to take a percentage of.
 
 |             | Food order                        | Scan order                        |
@@ -69,7 +70,13 @@ anything — there is nothing of ours to take a percentage of.
 |             | 6.95%                             | GH₵2.00, whatever is in it        |
 | Pack fee    | never (CHECK constraint)          | GH₵4.00, optional on a collection |
 | Partner fee | `delivery_fee_pesewas`, GH₵5.00   | `delivery_fee_pesewas`, GH₵5.00   |
-| VENDOR row  | the subtotal                      | **none is written**               |
+| VENDOR row  | the subtotal                      | **the pack**, when one is charged |
+
+The store's share is one expression for both, `subtotal + pack`, used by the
+ledger (`create_order_allocations`), the Paystack split
+(`vendorSharePesewas` in `lib/orders/state.js`) and the store's own screens. The
+pack is zero on a food order by CHECK constraint, so food economics are
+unchanged to the pesewa.
 
 `price_order()` reads `service_fee_bps`; `price_scan_order()` does not read it at
 all. Taking a percentage of the value a scan covered would be charging a

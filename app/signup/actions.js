@@ -55,7 +55,9 @@ function collect(formData) {
     email: String(formData.get('email') ?? '').trim(),
     // STUDENT OR STAFF. Staff eat lunch and staff can be Partners; there was
     // previously no way to be either without claiming a year group.
-    affiliation: String(formData.get('affiliation') ?? 'STUDENT').trim(),
+    // Never defaulted: an unanswered question is refused by the validation, not
+    // answered "student" on somebody's behalf.
+    affiliation: String(formData.get('affiliation') ?? '').trim(),
     graduationYear: String(formData.get('graduation_year') ?? '').trim(),
     gender: String(formData.get('gender') ?? '').trim(),
     phoneRaw: String(formData.get('phone') ?? '').trim(),
@@ -136,7 +138,6 @@ export async function startSignUpAction(_prev, formData) {
     ...carry(details),
     email: checked.email,
     sentAt: Date.now(),
-    notice: `We sent a 6-digit code to ${checked.email}.`,
   };
 }
 

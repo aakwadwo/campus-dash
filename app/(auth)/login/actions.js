@@ -76,7 +76,6 @@ export async function requestEmailCode(_prevState, formData) {
     step: 'code',
     email,
     sentAt: Date.now(),
-    notice: `We sent a 6-digit code to ${email}.`,
   };
 }
 
@@ -194,7 +193,15 @@ export async function requestOtp(_prevState, formData) {
     };
   }
 
-  const { error } = await supabase.auth.signInWithOtp({ phone });
+  // NEVER CREATES AN ACCOUNT. The number belongs to a store (checked above),
+  // so the identity already exists. If GoTrue cannot find one holding this
+  // number, the store belongs to an account that signs in by EMAIL, a customer
+  // who opened a store before phones were verified on the same account, and
+  // letting GoTrue mint a user here would split that person in two.
+  const { error } = await supabase.auth.signInWithOtp({
+    phone,
+    options: { shouldCreateUser: false },
+  });
   trace('signInWithOtp.done', { ok: !error, status: error?.status ?? 200, code: error?.code });
 
   if (error) {
@@ -202,6 +209,19 @@ export async function requestOtp(_prevState, formData) {
       `[auth] signInWithOtp failed (${error.code ?? error.status ?? 'unknown'}):`,
       error.message
     );
+
+    if (
+      error.code === 'otp_disabled' ||
+      /signups? not allowed|user not found/i.test(error.message)
+    ) {
+      return {
+        step: 'phone',
+        phone,
+        error:
+          'This store is on an account that signs in with a school email. Sign in with your email, then open your store from there.',
+        registerHref: '/login',
+      };
+    }
 
     if (error.status === 429) {
       // Supabase's own rate limits are the defence here; surface them plainly.

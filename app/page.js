@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import SiteHeader from './site-header';
 import SiteFooter from './site-footer';
+import LandingBanner, { BANNER } from './landing-banner';
+import ContactLine from './contact-line';
 import { listVendors } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
 import { redirectVendorOnlyAccount } from '@/lib/auth/session';
@@ -61,6 +63,24 @@ const HOW_IT_WORKS = [
   [ReceiptIcon, 'Pay once', 'One payment covers the food, the Partner and our fee.'],
 ];
 
+/**
+ * The two secondary audiences, as quiet rows. Signposts, not pitches. A row the
+ * banner is already pointing at is left out, so the same invitation never
+ * appears twice on one screen; replace the banner and the row comes back.
+ */
+const SIGNPOSTS = [
+  {
+    href: '/partner/apply',
+    title: 'Become a Campus Dash Partner',
+    body: 'Help other students get what they need across campus, and earn on every order.',
+  },
+  {
+    href: '/vendor/signup',
+    title: 'Sell on Campus Dash',
+    body: 'Register your store with your phone number. No email needed.',
+  },
+];
+
 export default async function Home() {
   // A vendor who is not a customer is sent to their store. Everyone else,
   // signed in or out, gets the homepage. See vendorOnlyHome() in landing.js.
@@ -118,6 +138,12 @@ export default async function Home() {
               <ChevronRightIcon className="size-4" />
             </Link>
           </div>
+        </Container>
+
+        {/* ----------------------------------------------------------------
+            The banner slot. What it says lives in app/landing-banner.js. */}
+        <Container size="wide" className="pb-8 sm:pb-11">
+          <LandingBanner />
         </Container>
 
         {/* ----------------------------------------------------------------
@@ -186,36 +212,21 @@ export default async function Home() {
             pitches. */}
         <Container size="wide" className="border-line mt-8 border-t pt-2 sm:mt-11 sm:pt-3">
           <ul className="divide-line divide-y">
-            <li>
-              <Link
-                href="/partner/apply"
-                className="press-sm group flex min-h-16 items-center gap-4 py-5"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold">Become a Campus Dash Partner</span>
-                  <span className="text-muted mt-1 block text-sm leading-relaxed">
-                    Help other students get what they need across campus, and earn on every order.
+            {SIGNPOSTS.filter((row) => row.href !== BANNER?.cta?.href).map((row) => (
+              <li key={row.href}>
+                <Link href={row.href} className="press-sm flex min-h-16 items-center gap-4 py-5">
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">{row.title}</span>
+                    <span className="text-muted mt-1 block text-sm leading-relaxed">
+                      {row.body}
+                    </span>
                   </span>
-                </span>
-                <ChevronRightIcon className="text-faint size-5 shrink-0" />
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/vendor/signup"
-                className="press-sm flex min-h-16 items-center gap-4 py-5"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold">Sell on Campus Dash</span>
-                  <span className="text-muted mt-1 block text-sm leading-relaxed">
-                    Register your store. We text a code to your phone, and you are in. No email
-                    needed.
-                  </span>
-                </span>
-                <ChevronRightIcon className="text-faint size-5 shrink-0" />
-              </Link>
-            </li>
+                  <ChevronRightIcon className="text-faint size-5 shrink-0" />
+                </Link>
+              </li>
+            ))}
           </ul>
+          <ContactLine className="mt-6" />
         </Container>
       </main>
 

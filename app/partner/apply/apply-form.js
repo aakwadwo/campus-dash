@@ -191,7 +191,7 @@ function StudentIdUpload({ path, onUploaded }) {
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <label className="press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-full border text-sm font-semibold transition-colors">
-          {path ? 'Choose another' : 'Choose a file'}
+          {path ? 'Choose another' : 'Choose photo'}
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -206,7 +206,11 @@ function StudentIdUpload({ path, onUploaded }) {
           />
         </label>
 
-        <CameraCapture onCaptured={accept} label={path ? 'Retake photo' : 'Take a photo'} />
+        <CameraCapture
+          onCaptured={accept}
+          disabled={busy}
+          label={path ? 'Retake photo' : 'Take photo'}
+        />
       </div>
 
       {busy ? <p className="text-muted mt-2 text-sm">Uploading…</p> : null}

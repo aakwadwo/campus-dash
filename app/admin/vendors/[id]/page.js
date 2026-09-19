@@ -63,7 +63,8 @@ export default async function VendorDetailPage({ params }) {
         .from('vendor_images')
         .select('id, storage_path, caption, sort_order')
         .eq('vendor_id', id)
-        .order('sort_order'),
+        .order('sort_order')
+        .order('created_at'),
       supabase.from('vendor_categories').select('id, name, is_active').order('sort_order'),
       // Only the COUNT: whether this store has ever traded is the one thing the
       // delete panel needs, and admin_delete_vendor() checks it again anyway.
