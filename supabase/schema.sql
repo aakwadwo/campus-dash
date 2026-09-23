@@ -10099,8 +10099,8 @@ CREATE OR REPLACE FUNCTION "public"."vendor_menu"("p_vendor_id" "uuid") RETURNS 
     from public.menu_items m
    where m.vendor_id = p_vendor_id
      and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
-   -- ON FIRST. The items a store is serving are the ones it is looking for.
-   order by m.is_active desc, m.sort_order, m.name;
+   -- NEWEST FIRST, AND NEVER BY WHETHER IT IS ON. See the header.
+   order by m.created_at desc, m.sort_order, m.name, m.id;
 $$;
 
 

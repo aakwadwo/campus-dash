@@ -35,8 +35,12 @@
 -- Its own table rather than a column on orders, because the assigned Partner
 -- can SELECT their order's row and has no business reading "no pepper". One
 -- row per order at most; no row means the customer wrote nothing.
+--
+-- SAFE TO RUN TWICE. A replay of this file against a database that already had
+-- it once stopped here and left the functions below in an older form; the
+-- table and its policy are the only two statements that could not repeat.
 
-create table public.order_notes (
+create table if not exists public.order_notes (
   order_id   uuid primary key references public.orders (id) on delete cascade,
   body       text not null,
   created_at timestamptz not null default now(),
@@ -54,6 +58,7 @@ revoke all on table public.order_notes from anon, authenticated;
 grant select on table public.order_notes to authenticated;
 grant all on table public.order_notes to service_role;
 
+drop policy if exists order_notes_read_customer_or_admin on public.order_notes;
 create policy order_notes_read_customer_or_admin on public.order_notes
   for select to authenticated
   using (

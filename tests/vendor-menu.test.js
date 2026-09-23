@@ -457,6 +457,20 @@ describe('vendor menu management', () => {
       assert.deepEqual(await customerSees(), [MENU.jollof], 'and only that item is on offer');
     });
 
+    // The path a vendor reported broken: add a dish, then switch it on.
+    test('a newly added item turned on while closed opens the store', async () => {
+      await setOpen(false);
+      const item = await create({ name: 'Kenkey and Fish', price: 3000 });
+
+      const result = await setActive(item.id, true);
+      assert.equal(result.is_active, true);
+      assert.equal(result.store_open, true);
+      assert.deepEqual(await customerSees(), [item.id]);
+
+      const off = await setActive(item.id, false);
+      assert.equal(off.store_open, false, 'and it was the last one on');
+    });
+
     test('closing the store turns every active item off and keeps the catalogue', async () => {
       const before = await menuFor();
       await setOpen(false);
@@ -557,6 +571,74 @@ describe('vendor menu management', () => {
   // =========================================================================
   // THE PHOTOGRAPH
   // =========================================================================
+  /**
+   * THE STORE'S LIST HOLDS STILL. It used to sort ON items first, so a switch
+   * moved the row under the thumb that pressed it. Now it is the catalogue in
+   * the order it was built, newest first, and a switch changes one thing.
+   */
+  describe('the store’s list keeps its order', () => {
+    const order = async () => (await menuFor()).map((i) => i.id);
+
+    test('a newly added item comes first, ahead of everything older', async () => {
+      const before = await order();
+      const older = await create({ name: 'Banku and Tilapia' });
+      const newer = await create({ name: 'Kenkey and Fish' });
+
+      assert.deepEqual(await order(), [newer.id, older.id, ...before]);
+    });
+
+    test('turning an item on does not move it', async () => {
+      await create({ name: 'Banku and Tilapia' });
+      const target = await create({ name: 'Kenkey and Fish' });
+      await create({ name: 'Red Red' });
+      const before = await order();
+
+      await setActive(target.id, true);
+
+      assert.deepEqual(await order(), before);
+      const row = (await menuFor()).find((i) => i.id === target.id);
+      assert.equal(row.is_active, true, 'and it is on');
+    });
+
+    test('turning an item off does not move it, and ON and OFF stay interleaved', async () => {
+      const [first, second] = await activeIds();
+      const before = await order();
+
+      await setActive(first, false);
+      assert.deepEqual(await order(), before);
+
+      await setActive(first, true);
+      await setActive(second, false);
+      assert.deepEqual(await order(), before);
+
+      const states = (await menuFor()).map((i) => i.is_active);
+      assert.ok(states.includes(true) && states.includes(false), 'a mix of on and off');
+    });
+
+    test('the order is the same on every read', async () => {
+      await create({ name: 'Banku and Tilapia' });
+      const first = await order();
+      assert.deepEqual(await order(), first);
+      assert.deepEqual(await order(), first);
+    });
+
+    test('the store still opens and closes with its menu, without the list moving', async () => {
+      await setOpen(false);
+      const item = await create({ name: 'Kenkey and Fish' });
+      const before = await order();
+
+      assert.equal((await setActive(item.id, true)).store_open, true, 'the first one on opens it');
+      assert.deepEqual(await order(), before);
+
+      assert.equal(
+        (await setActive(item.id, false)).store_open,
+        false,
+        'the last one off closes it'
+      );
+      assert.deepEqual(await order(), before);
+    });
+  });
+
   describe('a photograph on a dish', () => {
     test('attaching one, and replacing it, hands back the path that was replaced', async () => {
       const item = await create({ name: 'Photogenic' });
