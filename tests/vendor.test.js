@@ -806,6 +806,11 @@ describe('vendor module', () => {
   // =========================================================================
   // Open / closed
   // =========================================================================
+  /**
+   * CLOSING CLEARS THE ACTIVE MENU, so reopening means putting something back
+   * on. Pressing Open with nothing on is refused outright — an open store with
+   * an empty menu is a customer walking to a counter for nothing.
+   */
   test('a vendor can close and reopen their own stall', async () => {
     await asUser(
       ACTORS.vendor1Staff,
@@ -816,13 +821,23 @@ describe('vendor module', () => {
     const closed = await expectRejection(submitOrder({ vendorId: VENDORS.one }));
     assert.match(closed.message, /not accepting orders/);
 
+    const empty = await expectRejection(
+      asUser(ACTORS.vendor1Staff, (c) =>
+        c.query('select public.vendor_set_accepting_orders($1, true)', [VENDORS.one])
+      )
+    );
+    assert.match(empty.message, /turn at least one item on/i);
+
     await asUser(
       ACTORS.vendor1Staff,
-      (c) => c.query('select public.vendor_set_accepting_orders($1, true)', [VENDORS.one]),
+      (c) => c.query('select * from public.vendor_set_menu_item_active($1, true)', [MENU.jollof]),
       { commit: true }
     );
 
-    const order = await submitOrder({ vendorId: VENDORS.one });
+    const order = await submitOrder({
+      vendorId: VENDORS.one,
+      items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+    });
     assert.ok(order.order_id);
   });
 

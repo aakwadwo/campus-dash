@@ -1,6 +1,6 @@
 import { ButtonLink } from '@/app/ui';
 
-export const metadata = { title: 'Account suspended' };
+export const metadata = { title: 'Account suspended', robots: { index: false, follow: false } };
 
 /**
  * A dead end, made as un-hostile as possible.

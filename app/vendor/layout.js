@@ -12,7 +12,9 @@ import { VendorTabs, VendorBottomBar } from './vendor-nav';
  * crawler that already has the URL actually honours.
  */
 export const metadata = {
-  title: 'Vendor',
+  // An object, not a string: a plain string here would stop the root
+  // template reaching every page below, and their tabs would lose the name.
+  title: { default: 'Vendor', template: '%s · Campus Dash' },
   robots: { index: false, follow: false },
 };
 

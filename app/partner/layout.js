@@ -11,7 +11,9 @@ import { CampusDashMark } from '@/app/brand';
  * crawler that already has the URL actually honours.
  */
 export const metadata = {
-  title: 'Partner',
+  // An object, not a string: a plain string here would stop the root
+  // template reaching every page below, and their tabs would lose the name.
+  title: { default: 'Partner', template: '%s · Campus Dash' },
   robots: { index: false, follow: false },
 };
 

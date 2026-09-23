@@ -252,10 +252,9 @@ a real database.
 
 So, signed in at `/admin`:
 
-1. **Locations** — `/admin/locations`. Build the real Academic City tree:
-   campus → block → floor → room. Only rows marked deliverable can be chosen as
-   a destination. Add the places you actually deliver to; do not invent a
-   plausible-looking campus.
+1. **Locations** — already there. The real Academic City tree is reference
+   data, installed by `schema.sql` and by migration `20261007000001`. Use
+   `/admin/locations` only to correct or extend it; do not invent places.
 2. **Vendors** — `/admin/vendors`. Create the vendor, set its location and walk
    time, then add its menu items.
 3. **Vendor staff** — the person must **sign in once at `/login` by phone
@@ -342,13 +341,14 @@ configured so that a code is issued. The phone provider stays on for vendors.
 
 ## What an empty hosted project needs before anybody can use it
 
-`schema.sql` installs the tables, functions, policies, the terms documents and
-the twelve vendor categories. It installs **no people and no places**. So:
+`schema.sql` installs the tables, functions, policies, the terms documents, the
+twelve vendor categories and the Academic City campus tree. It installs **no
+people**. So:
 
 1. `npm run admin:create` — the first administrator. Give it an
    `@acity.edu.gh` address if you also want that account to be able to order.
-2. `/admin/locations` — the campus tree. Nothing can be delivered until at
-   least one location is `is_deliverable`.
+2. `/admin/locations` — check the campus tree. It is installed already;
+   correct it here rather than in SQL.
 3. `/admin/pilot` — the Partner fee, and the scan and pack fees if any store
    honours meal scans.
    The 5% service fee is already correct; do not change it.

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { matchesQuery } from '@/lib/util/catalogue';
@@ -160,11 +161,11 @@ function ItemResult({ item, vendor }) {
       className="press-sm hover:bg-surface-2 -mx-2 flex min-h-16 items-center gap-3 rounded-lg px-2 py-2.5 transition-colors"
     >
       {vendor?.image_url ? (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
+        <Image
           src={vendor.image_url}
           alt=""
-          loading="lazy"
+          width={44}
+          height={44}
           className="rounded-input size-11 shrink-0 object-cover"
         />
       ) : (

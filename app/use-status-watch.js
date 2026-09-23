@@ -88,3 +88,53 @@ export function useStatusWatch({ url, enabled, initial, signatureOf, onChange, i
     };
   }, [url, enabled, initial, intervalMs]);
 }
+
+/**
+ * Runs `tick` every `intervalMs` while the screen is VISIBLE, and at once when
+ * it becomes visible again. For screens that have no cheap status to ask and
+ * must re-render to learn anything (a Partner's offer list), so the least they
+ * can do is not re-render for a phone in a pocket.
+ *
+ * One tick at a time: the next is scheduled when the last has settled.
+ */
+export function useVisibleInterval(tick, { intervalMs, enabled = true }) {
+  const tickRef = useRef(tick);
+  useEffect(() => {
+    tickRef.current = tick;
+  });
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    let stopped = false;
+    let timer = null;
+
+    const schedule = () => {
+      clearTimeout(timer);
+      if (!stopped && !document.hidden) timer = setTimeout(run, intervalMs);
+    };
+
+    async function run() {
+      if (stopped || document.hidden) return;
+      try {
+        await tickRef.current();
+      } catch {
+        // The next tick tries again.
+      }
+      schedule();
+    }
+
+    function onVisibility() {
+      if (document.hidden) clearTimeout(timer);
+      else run();
+    }
+
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [intervalMs, enabled]);
+}

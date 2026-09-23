@@ -6,7 +6,15 @@ import { useRouter } from 'next/navigation';
 import { setAcceptingOrdersAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
-import { Button, Stat, Unavailable, ChevronRightIcon, SuccessNote, ErrorNote } from '@/app/ui';
+import {
+  Button,
+  ButtonLink,
+  Stat,
+  Unavailable,
+  ChevronRightIcon,
+  SuccessNote,
+  ErrorNote,
+} from '@/app/ui';
 
 /**
  * The store's day on one screen.
@@ -41,7 +49,15 @@ const GROUPS = [
   },
 ];
 
-export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8000, today }) {
+export default function OrderBoard({
+  vendor,
+  buckets,
+  initialPending,
+  hasActiveItems = true,
+  pollMs = 8000,
+  today,
+  payout = null,
+}) {
   const router = useRouter();
   const [openState, toggleOpen, toggling] = useActionState(setAcceptingOrdersAction, {});
   const pending = buckets.NEW.length;
@@ -80,20 +96,33 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
               aria-hidden
             />
             <span className={open ? 'text-good font-semibold' : 'text-muted font-semibold'}>
-              {open ? 'Open for orders' : 'Closed to new orders'}
+              {open ? 'Open for orders' : hasActiveItems ? 'Closed to new orders' : 'Closed'}
             </span>
+            {!open && !hasActiveItems ? (
+              <span className="text-muted">· nothing on your menu</span>
+            ) : null}
           </p>
         </div>
 
-        <form action={toggleOpen} className="shrink-0">
-          <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
-          <input type="hidden" name="accepting" value={open ? 'false' : 'true'} />
-          {/* OPENING is the primary action when closed; closing is a quiet one,
-              because it is the button nobody should hit by accident. */}
-          <Button type="submit" variant={open ? 'secondary' : 'primary'} pending={toggling}>
-            {toggling ? (open ? 'Closing…' : 'Opening…') : open ? 'Close store' : 'Open store'}
-          </Button>
-        </form>
+        {/* OPENING WITH AN EMPTY MENU IS REFUSED BY THE DATABASE, so the button
+            is not offered: a customer walking to a counter that has nothing for
+            them is the thing this rule exists to prevent, and the way out is
+            one tap away rather than behind a failed press. */}
+        {!open && !hasActiveItems ? (
+          <ButtonLink href="/vendor/menu" className="shrink-0">
+            Set your menu
+          </ButtonLink>
+        ) : (
+          <form action={toggleOpen} className="shrink-0">
+            <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
+            <input type="hidden" name="accepting" value={open ? 'false' : 'true'} />
+            {/* OPENING is the primary action when closed; closing is a quiet one,
+                because it is the button nobody should hit by accident. */}
+            <Button type="submit" variant={open ? 'secondary' : 'primary'} pending={toggling}>
+              {toggling ? (open ? 'Closing…' : 'Opening…') : open ? 'Close store' : 'Open store'}
+            </Button>
+          </form>
+        )}
       </header>
 
       {openState.message ? (
@@ -108,7 +137,7 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
       {today ? (
         <dl className="mt-6 grid grid-cols-2 gap-3">
           {/* SALES, counted and summed the same way: orders that pay this store
-              something through Campus Dash. A meal scan with no pack is made
+              something through Campus Dash. A Meal Scan with no pack is made
               and handed over like any other, but earns nothing through us, so
               it is on the board and not in these two numbers. */}
           <Stat label="Sales today" value={today.orders} />
@@ -119,6 +148,25 @@ export default function OrderBoard({ vendor, buckets, initialPending, pollMs = 8
           Today&apos;s totals could not be loaded. Your orders below are still up to date.
         </Unavailable>
       )}
+
+      {/* WHEN IT REACHES YOUR PHONE. Only when something is on its way: a
+          pending payout of GH₵0.00 is not information. Paystack settles split
+          money on the next working day, and does not give an hour, so neither
+          does this. */}
+      {payout && payout.pendingPesewas > 0 ? (
+        <dl className="border-line mt-3 flex items-baseline justify-between gap-4 border-t pt-3 text-sm">
+          <div>
+            <dt className="text-muted">Pending payout</dt>
+            <dd className="text-ink mt-0.5 font-semibold tabular-nums">
+              {formatPesewas(payout.pendingPesewas)}
+            </dd>
+          </div>
+          <div className="text-right">
+            <dt className="text-muted">Next payout</dt>
+            <dd className="text-ink mt-0.5 font-semibold">{payout.next}</dd>
+          </div>
+        </dl>
+      ) : null}
 
       {/* 3. WHAT NEEDS ME. */}
       <div className="mt-8 space-y-7">
@@ -200,12 +248,17 @@ function OrderCard({ order, vendorId, tone }) {
   const scan = order.order_type === 'SCAN';
   const needsScanCheck = scan && ['UPLOADED', 'RELEASED'].includes(order.scan_status);
 
+  // TAP FOR DETAILS. The card is a summary — what it is, how long it has been
+  // waiting, and whether somebody is standing there. What to DO about that,
+  // including the four digits and who reads them to whom, belongs on the order
+  // itself: a board is read at a glance across a counter, and instructions on
+  // every card are the thing that stops being read.
   const callout = needsScanCheck
-    ? { text: 'Check the meal scan before you hand anything over', strong: true }
+    ? { text: 'Check the Meal Scan', strong: true }
     : order.awaiting_handoff
-      ? { text: 'Someone is at the counter. Open to read out the code', strong: true }
+      ? { text: 'Someone is collecting', strong: true }
       : order.vendor_completed_at
-        ? { text: 'Handed over. Nothing more to do', strong: false }
+        ? { text: 'Handed over', strong: false }
         : order.bucket === 'READY'
           ? { text: 'Waiting to be collected', strong: false }
           : null;
@@ -216,7 +269,7 @@ function OrderCard({ order, vendorId, tone }) {
       className={`press rounded-card hover:border-brand-600 flex items-center gap-4 border px-4 py-3.5 transition-colors ${tone}`}
     >
       {/* THE NUMBER THE COUNTER CALLS OUT. Three digits, restarting at 001
-          every morning, unique to this store — not a database key. A meal scan
+          every morning, unique to this store — not a database key. A Meal Scan
           takes one exactly like everything else, because the queue is the
           queue. */}
       <span className="w-16 shrink-0 text-3xl leading-none font-bold tabular-nums">
@@ -226,7 +279,7 @@ function OrderCard({ order, vendorId, tone }) {
         <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
           {scan ? (
             <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 text-xs font-semibold">
-              Meal scan
+              Meal Scan
             </span>
           ) : null}
           {/* AN OPERATIONAL FACT, so it is on the card: somebody has to put the

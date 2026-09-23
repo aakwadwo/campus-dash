@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { listPartnerApplications, partnerActivity } from '@/lib/admin';
-import { getPartnerDocumentUrl } from '@/lib/admin/documents';
+import { getPartnerDocumentUrls } from '@/lib/admin/documents';
 import {
   Panel,
   Badge,
@@ -42,13 +42,15 @@ export default async function PartnersPage() {
 
   // Signed URLs are minted per render and live for two minutes. The bucket is
   // private with no policies, so this is the only way an image is ever exposed.
-  const withDocuments = await Promise.all(
-    applications.map(async (application) => ({
-      ...application,
-      studentIdUrl: await getPartnerDocumentUrl(application.student_id_image_path),
-      faceUrl: await getPartnerDocumentUrl(application.face_image_path),
-    }))
+  // All of them in one storage request.
+  const urls = await getPartnerDocumentUrls(
+    applications.flatMap((a) => [a.student_id_image_path, a.face_image_path])
   );
+  const withDocuments = applications.map((application) => ({
+    ...application,
+    studentIdUrl: urls.get(application.student_id_image_path) ?? null,
+    faceUrl: urls.get(application.face_image_path) ?? null,
+  }));
 
   const pending = withDocuments.filter((a) => a.status === 'PENDING_REVIEW');
   const decided = withDocuments.filter((a) => a.status !== 'PENDING_REVIEW');

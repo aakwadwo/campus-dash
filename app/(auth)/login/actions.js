@@ -147,6 +147,15 @@ export async function verifyEmailCode(_prevState, formData) {
  * was expecting them. None of that is sign-in; the first two are side effects
  * of GoTrue's `signInWithOtp` creating a user when it does not find one.
  *
+ * AND THE GATE HAS TO ASK THE TABLE GOTRUE ASKS. It used to read
+ * public.users.phone, which is not where a phone OTP is resolved — auth.users
+ * is — and the two genuinely disagree after a phone collision: the store
+ * owner's profile carries the number while a second, empty identity is the one
+ * holding it in auth. So the gate said yes, GoTrue signed in the empty
+ * identity, and a store owner landed on sign-up. See the migration
+ * 20261005000001; vendor_phone_sign_in_status() now answers about the identity
+ * that will actually be signed in.
+ *
  * REGISTRATION IS A DIFFERENT DOOR and is untouched. /vendor/signup verifies a
  * number in order to CREATE a store, which is precisely when a code should go
  * to a number with nothing behind it.
@@ -169,21 +178,35 @@ export async function requestOtp(_prevState, formData) {
   const supabase = await createClient();
   trace('client.ready');
 
-  // ASKED BEFORE A CODE IS SENT. phone_can_sign_in_as_vendor() returns a bare
-  // boolean about a number the caller already has, and nothing else — no name,
-  // no store, no account id.
+  // ASKED BEFORE A CODE IS SENT, and asked of auth.users — the table GoTrue
+  // itself resolves a phone OTP against. It returns one of three words and
+  // nothing else: no name, no store, no account id.
   //
   // A LOOKUP THAT FAILS DOES NOT BLOCK SIGN-IN. If the database cannot be
   // reached, a real vendor must still be able to get in and deal with whatever
   // is broken; the cost of failing open is an SMS to a number that has no
   // store, which is the situation that existed before this check.
-  const { data: isVendor, error: lookupError } = await supabase.rpc('phone_can_sign_in_as_vendor', {
+  const { data: status, error: lookupError } = await supabase.rpc('vendor_phone_sign_in_status', {
     p_phone: phone,
   });
 
   if (lookupError) {
     console.error('[auth] vendor lookup failed, allowing the code:', lookupError.message);
-  } else if (!isVendor) {
+  } else if (status === 'EMAIL_ACCOUNT') {
+    // THE STORE IS REAL AND THIS IS NOT ITS CREDENTIAL. Either the owner signs
+    // in by school email and has never proven the number to GoTrue, or the
+    // number is confirmed on a different identity entirely. Sending a code
+    // would sign somebody into an account that owns nothing — which is exactly
+    // the bug that made a store owner see a sign-up screen.
+    trace('requestOtp.refused', { reason: 'store signs in by email' });
+    return {
+      step: 'phone',
+      phone,
+      error:
+        'This store is on an account that signs in with a school email. Sign in with your email, then open your store from there.',
+      registerHref: '/login',
+    };
+  } else if (status === 'NONE') {
     trace('requestOtp.refused', { reason: 'not a vendor' });
     return {
       step: 'phone',

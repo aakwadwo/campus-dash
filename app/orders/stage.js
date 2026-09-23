@@ -39,6 +39,28 @@ export const STAGE = {
     badge: 'brand',
     detail: 'The store has your order.',
   },
+  // --- Meal Scan -------------------------------------------------------------
+  // The store has to look at the scan before it starts cooking, and on a
+  // Partner order before anybody is even sent for. That is a real wait and it
+  // used to read simply "Being prepared", which was wrong about what was
+  // happening and gave somebody nothing to expect.
+  SCAN_AWAITING_CHECK: {
+    label: 'Checking your Meal Scan',
+    tone: 'text-brand-700',
+    badge: 'brand',
+    detail: 'The store is verifying it. Your order starts as soon as they approve it.',
+  },
+  // THE ORDER IS OVER, and saying so gently would be the unkind version: the
+  // money is gone and the only way forward is a new order. The screen puts
+  // "Order again" under this.
+  SCAN_INVALID: {
+    label: 'Meal Scan not accepted',
+    tone: 'text-bad',
+    badge: 'bad',
+    detail:
+      'The store could not accept this Meal Scan, so the order was cancelled. It cannot be refunded. Place a new order with a valid Meal Scan.',
+  },
+
   PREPARING: {
     label: 'Being prepared',
     tone: 'text-brand-700',
@@ -157,6 +179,9 @@ export const LIVE_STAGES = new Set([
   'PAYMENT_REQUIRED',
   'PAYMENT_PROCESSING',
   'PAID_AWAITING_KITCHEN',
+  // Something is still expected to happen: somebody at a counter has to look
+  // at the scan. SCAN_INVALID is deliberately NOT here — it is the end.
+  'SCAN_AWAITING_CHECK',
   'PREPARING',
   'PREPARING_SEARCHING',
   'PREPARING_PARTNER_ASSIGNED',

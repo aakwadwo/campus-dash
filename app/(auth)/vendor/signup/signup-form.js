@@ -191,16 +191,16 @@ export default function VendorSignUpForm({
       </Field>
 
       {/* THE NUMBER THE ACCOUNT ALREADY HAS, and it can be changed. It becomes
-          how the store signs in, so a number not yet proven on this account is
-          confirmed with a code; one that is already proven is not asked again.
-          A changed number replaces the one on the account, after its code. */}
+          how the store signs in, so it is ALWAYS confirmed with a code —
+          including when it is left exactly as it was. A customer's profile
+          number was typed at sign-up and never proven, and a credential that
+          rests on an unverified field is not a credential. A changed number
+          replaces the one on the account, after its own code. */}
       <Field
         label="Phone number"
         hint={
           account?.phone
-            ? account.verified
-              ? 'Your account’s number. Change it if the store uses another.'
-              : 'Your account’s number. We’ll text it a code, since it becomes how your store signs in.'
+            ? 'Your account’s number. Change it if the store uses another — either way we text it a code, because it becomes how your store signs in.'
             : 'This is how you sign in, and how we reach you about orders.'
         }
       >
@@ -236,8 +236,6 @@ export default function VendorSignUpForm({
             <Spinner />
             Sending code…
           </span>
-        ) : account?.verified ? (
-          'Continue'
         ) : (
           'Send verification code'
         )}
@@ -388,6 +386,9 @@ function Carried({ values, phone }) {
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
       {/* E.164, and the one the code was sent to. */}
       <input type="hidden" name="verified_phone" value={phone ?? ''} />
+      {/* WHICH REQUEST SENT IT. A phone change and a sign-in code are checked
+          by different Supabase calls, and the answer has to match the ask. */}
+      <input type="hidden" name="otp_type" value={values.otpType ?? 'sms'} />
     </>
   );
 }

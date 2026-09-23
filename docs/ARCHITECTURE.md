@@ -240,13 +240,44 @@ never in an SMS.
 
 ## Locations
 
-No GPS. A database-backed campus tree the admin can manage:
+No GPS, no live location. A database-backed campus tree the admin can manage,
+holding the real Academic City places (written by
+`20261007000001_campus_places_and_additional_information.sql`):
 
 ```
-Academic City → Hostel Block A → Floor 2 → Room 204
+Academic City → Hostel A → Hostel A Entrance
+                         → C Floor → C17
+              → Academic Block → First Floor → Library
+              → Sports & recreation → Football Field
 ```
 
-The customer picks a destination; the Partner sees the destination zone.
+Any node can be a destination. A floor is a complete answer and a room is
+optional, so an order stores exactly the precision the customer chose —
+`location_path()` renders it as people say it: "Hostel A Entrance",
+"Hostel A · C Floor · C17", "Football Field". The checkout's picker
+(`app/destination-picker.js`, fed by `destination_places()`) shows
+recognisable places first; opening a hostel selects its entrance.
+
+The destination is fixed once the order is paid. A customer who moves rings
+their Partner, whose number they have from assignment — nothing rewrites a
+location after the fact. Before accepting, a Partner sees the block and floor;
+the exact place arrives with the assignment.
+
+The customer can write two optional notes, each for ONE reader, and they are
+never one field:
+
+- **Order information** is about the food ("no pepper") and is for the STORE.
+  It lives in `order_notes`, written by `submit_order_for()` /
+  `submit_scan_order()` in the transaction that creates the order, so it exists
+  before payment and before any store sees the order. The store reads it only
+  through `vendor_order_detail().order_information`; a Partner cannot read it.
+- **Additional information** is for the PARTNER ("near the stairs, call when
+  you arrive"). It is `orders.destination_note`, kept only on a Partner order,
+  and reaches the Partner through `partner_active_delivery()` from assignment.
+  The store never sees it.
+
+Both are optional and at most 280 characters. The structured destination is a
+third thing and is not text: there is no free-form location field.
 
 ## Where the safety actually lives
 
@@ -254,6 +285,33 @@ Not in the UI, and not in route handlers. Clients hold **SELECT grants only**;
 every write is a SECURITY DEFINER function performing a conditional UPDATE, and
 race-sensitive rules are additionally backed by partial unique indexes. See
 `docs/DATABASE.md` for the full constraint list.
+
+## What is cached, and what is asked
+
+**Cached across requests** (`lib/customer/catalogue.js`): the storefront list,
+each store and its menu, categories, the searchable item list, the campus
+places and `pricing_config`. All are read as the anon role, so a cached answer
+can never hold anything one person alone may see. Every write that changes one
+of them expires its tag the moment it succeeds (`invalidateAfter()`, called by
+the RPC helpers in `lib/vendor`, `lib/admin` and `lib/orders/transitions`); the
+60s TTL only catches writes made outside the app. Submission re-checks the
+store, every item and every price, so a stale page can never charge anyone
+the wrong amount.
+
+**Never cached:** orders, payments, dispatch, capabilities, anything with a
+person in it.
+
+**Polling asks a small question.** A customer's order screen polls
+`/api/orders/[id]/status` (`customer_order_signal()`, an opaque signature) and
+re-renders only when it changes; a store's order screen does the same through
+`/api/vendor/orders/[id]/status`. Payment confirmation backs off (2s → 13s)
+because each check is a Paystack verify. Every poll pauses while the screen is
+hidden and fires at once when it comes back (`app/use-status-watch.js`).
+
+**Sessions.** The proxy and `getCapabilities()` use `getClaims()`, verified
+locally against the project's ES256 key set; the only network call on an
+ordinary page is `my_capabilities()`, which PostgREST authorises with the same
+JWT.
 
 ## Folder layout
 

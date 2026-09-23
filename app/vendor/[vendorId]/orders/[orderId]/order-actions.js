@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { markReadyAction, redeemScanAction, refuseScanAction } from '@/app/vendor/actions';
 import { Button, CodeDisplay, ErrorNote, SuccessNote, Callout, Completion, Card } from '@/app/ui';
+import { orderLabel } from '@/lib/orders/state';
 import { useStatusWatch } from '@/app/use-status-watch';
 
 /**
@@ -107,8 +108,8 @@ export default function OrderActions({ order, vendorId, handoffCode, scanUrl = n
 
       {scanRefused ? (
         <Callout tone="bad">
-          You marked this meal scan as one you could not honour. Campus Dash will follow it up with
-          the customer — there is nothing more for you to do.
+          You marked this Meal Scan invalid, so this order is cancelled. The customer has been told
+          to place a new one. There is nothing more for you to do.
         </Callout>
       ) : null}
 
@@ -130,14 +131,25 @@ export default function OrderActions({ order, vendorId, handoffCode, scanUrl = n
       {/* THE HANDOFF. The store HOLDS the code and READS IT OUT; whoever is
           taking the food types it into their own app. Whoever holds the secret
           must not also be the one confirming, or the code proves nothing — so
-          this is a display, never a form. */}
+          this is a display, never a form.
+
+          THE INSTRUCTION LIVES HERE AND NOT ON THE BOARD. The card says
+          somebody is collecting; this screen is where the store finds out what
+          to do about it, which is two steps and worth writing out once. */}
       {order.order_status === 'READY' && order.handoff_code_available && !completed ? (
         handoffCode ? (
-          <CodeDisplay
-            label="Someone is collecting this order"
-            hint="Read this out. Hand over once they have entered it."
-            code={handoffCode}
-          />
+          <>
+            <CodeDisplay
+              label="Someone is collecting this order"
+              hint="Read these four digits out. Hand the food over once they have entered them."
+              code={handoffCode}
+            />
+            <p className="text-muted text-sm leading-relaxed">
+              Ask them which order number they are collecting first. If it is not{' '}
+              <span className="text-ink font-semibold tabular-nums">{orderLabel(order)}</span>, this
+              is not their order.
+            </p>
+          </>
         ) : (
           <Callout tone="warn">
             The code could not be loaded. Pull down or reload this page to try again.
@@ -175,85 +187,129 @@ export default function OrderActions({ order, vendorId, handoffCode, scanUrl = n
 }
 
 /**
- * Checking the meal scan.
+ * Checking the Meal Scan.
  *
- * The image is shown at full width because the whole point is reading it, and
- * the two answers are deliberately asymmetric: verifying is one tap, refusing
- * asks for a reason. A refusal stops the order and goes to Campus Dash, so it
- * should cost a sentence — and the sentence is the only record of what went
- * wrong at the counter.
+ * THE STORE IS THE ONLY PARTY THAT CAN DO THIS. Campus Dash has no integration
+ * with the university's system, so the judgement is a person looking at an
+ * image with the food in front of them — which is why the image is shown at
+ * full width and why the two answers are deliberately asymmetric.
+ *
+ * APPROVAL IS THE GATE. Until it happens the order cannot be marked ready and,
+ * on a Partner order, no Partner is even looked for.
  */
 function ScanCheck({ order, vendorId, scanUrl }) {
   const [redeemed, redeem, redeeming] = useActionState(redeemScanAction, {});
-  const [refused, refuse, refusing] = useActionState(refuseScanAction, {});
-  const [refusalOpen, setRefusalOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   return (
     <Card className="border-brand-600 ring-brand-600/25 p-5 ring-1">
-      <h2 className="font-semibold">Check the meal scan</h2>
+      <h2 className="font-semibold">Check the Meal Scan</h2>
       <p className="text-muted mt-1 text-sm leading-relaxed">
         The customer has already paid for this food through the campus meal system. Check the scan
-        is good before you hand anything over.
+        is good before you start.
       </p>
 
       {scanUrl ? (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
           src={scanUrl}
-          alt="The customer's meal scan"
+          alt="The customer's Meal Scan"
           className="border-line rounded-card mt-4 w-full border"
         />
       ) : (
         <Callout tone="warn" className="mt-4">
-          The scan image could not be loaded. Reload this page to try again.
+          The Meal Scan could not be loaded. Reload this page to try again.
         </Callout>
       )}
 
-      <div className="mt-4 space-y-3">
-        <form action={redeem}>
-          <input type="hidden" name="order_id" value={order.order_id} />
-          <input type="hidden" name="vendor_id" value={vendorId} />
-          <Button type="submit" size="lg" block pending={redeeming}>
-            {redeeming ? 'Recording…' : 'Scan is good'}
-          </Button>
-        </form>
-
-        {refusalOpen ? (
-          <form action={refuse} className="space-y-2.5">
+      {confirming ? (
+        <InvalidScanConfirm
+          order={order}
+          vendorId={vendorId}
+          onCancel={() => setConfirming(false)}
+        />
+      ) : (
+        <div className="mt-4 space-y-3">
+          <form action={redeem}>
             <input type="hidden" name="order_id" value={order.order_id} />
             <input type="hidden" name="vendor_id" value={vendorId} />
-            <label className="block">
-              <span className="text-sm font-medium">What is wrong with it?</span>
-              <input
-                name="reason"
-                required
-                maxLength={200}
-                placeholder="Already used today"
-                className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-3 text-base outline-none"
-              />
-            </label>
-            <div className="flex gap-2">
-              <Button type="submit" variant="danger" pending={refusing}>
-                {refusing ? 'Recording…' : 'Refuse this scan'}
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setRefusalOpen(false)}>
-                Cancel
-              </Button>
-            </div>
+            <Button type="submit" size="lg" block pending={redeeming}>
+              {redeeming ? 'Recording…' : 'Scan is good'}
+            </Button>
           </form>
-        ) : (
+
+          {/* THE IRREVERSIBLE ONE, and it does not look like the other. A
+              quiet link rather than a second large button: the two answers are
+              not equally likely and they are not equally undoable. */}
           <button
             type="button"
-            onClick={() => setRefusalOpen(true)}
-            className="text-muted hover:text-bad press-sm min-h-11 text-sm font-medium transition-colors"
+            onClick={() => setConfirming(true)}
+            className="text-muted hover:text-bad press-sm block min-h-11 w-full text-center text-sm font-medium transition-colors"
           >
-            I cannot honour this scan
+            Scan is invalid
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {redeemed.message && !redeemed.ok ? <ErrorNote>{redeemed.message}</ErrorNote> : null}
-      {refused.message && !refused.ok ? <ErrorNote>{refused.message}</ErrorNote> : null}
     </Card>
+  );
+}
+
+/**
+ * The confirmation, and it is the whole point of this screen.
+ *
+ * MARKING A MEAL SCAN INVALID CANNOT BE UNDONE and it ends somebody's paid
+ * order. So the consequences are listed before the button rather than hinted
+ * at after it, the button says what it does rather than "Confirm", and the
+ * reason is asked for here — the store types it once, for the audit trail and
+ * for the administrator who picks the order up, and it is never forwarded to
+ * the customer's phone.
+ */
+function InvalidScanConfirm({ order, vendorId, onCancel }) {
+  const [refused, refuse, refusing] = useActionState(refuseScanAction, {});
+
+  return (
+    <form action={refuse} className="border-bad/30 bg-bad/5 rounded-card mt-4 border p-4">
+      <input type="hidden" name="order_id" value={order.order_id} />
+      <input type="hidden" name="vendor_id" value={vendorId} />
+
+      <h3 className="text-bad font-semibold">Mark this Meal Scan invalid?</h3>
+      <ul className="text-muted mt-2 space-y-1.5 text-sm leading-relaxed">
+        <li>This order ends here. You will not prepare or hand over anything.</li>
+        <li>The customer has to place a completely new order with a valid Meal Scan.</li>
+        <li>They cannot attach another scan to this one.</li>
+        <li>What they paid is not refunded.</li>
+        <li>This cannot be undone.</li>
+      </ul>
+
+      <label className="mt-4 block">
+        <span className="text-sm font-medium">What is wrong with it?</span>
+        <input
+          name="reason"
+          required
+          maxLength={200}
+          autoFocus
+          placeholder="Already used today"
+          className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-3 text-base outline-none"
+        />
+        <span className="text-faint mt-1 block text-xs">
+          For Campus Dash. The customer is told the scan was not accepted, not what you wrote.
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="submit" variant="danger" pending={refusing}>
+          {refusing ? 'Recording…' : 'Yes, mark it invalid'}
+        </Button>
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={refusing}>
+          Go back
+        </Button>
+      </div>
+
+      {refused.message && !refused.ok ? (
+        <ErrorNote className="mt-3">{refused.message}</ErrorNote>
+      ) : null}
+    </form>
   );
 }

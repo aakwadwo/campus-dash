@@ -202,11 +202,25 @@ describe('operational switches', () => {
       { commit: true }
     );
 
+  const setActive = (itemId, active) =>
+    asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select * from public.vendor_set_menu_item_active($1, $2)', [itemId, active]),
+      { commit: true }
+    );
+
   const availability = (itemId) =>
     asService(
       async (c) =>
         (await c.query('select is_available from public.menu_items where id = $1', [itemId]))
           .rows[0].is_available
+    );
+
+  const isActive = (itemId) =>
+    asService(
+      async (c) =>
+        (await c.query('select is_active from public.menu_items where id = $1', [itemId])).rows[0]
+          .is_active
     );
 
   test('a sold-out item is visible to a customer but cannot be ordered', async () => {
@@ -233,17 +247,25 @@ describe('operational switches', () => {
     assert.match(refused.message, /unavailable/);
   });
 
+  /**
+   * A STORE REOPENS BY PUTTING SOMETHING ON, which is the shape the active menu
+   * gave this: closing clears what is being served and opening is the
+   * consequence of choosing today's first dish. The sold-out marks still clear
+   * themselves on the CLOSED → OPEN transition, wherever that transition comes
+   * from, because running out of jollof is a fact about a service.
+   */
   test('reopening the store puts everything back on the menu', async () => {
     await soldOut(MENU.jollof);
     await soldOut(MENU.waakye);
     assert.equal(await availability(MENU.jollof), false);
 
     await setOpen(false);
-    assert.equal(await availability(MENU.jollof), false, 'closing changes nothing about the menu');
+    assert.equal(await availability(MENU.jollof), false, 'closing changes nothing about sold out');
+    assert.equal(await isActive(MENU.jollof), false, 'but it does clear the active menu');
 
-    await setOpen(true);
+    await setActive(MENU.jollof, true);
     assert.equal(await availability(MENU.jollof), true);
-    assert.equal(await availability(MENU.waakye), true);
+    assert.equal(await availability(MENU.waakye), true, 'every mark, not only the one turned on');
 
     const order = await submitOrder({ items: [{ menu_item_id: MENU.jollof, quantity: 1 }] });
     assert.ok(order.order_id, 'and it is orderable again without a vendor touching anything');
@@ -261,7 +283,7 @@ describe('operational switches', () => {
     assert.equal(await availability(MENU.shawarma), false);
 
     await setOpen(false);
-    await setOpen(true);
+    await setActive(MENU.jollof, true);
     assert.equal(await availability(MENU.shawarma), false);
   });
 

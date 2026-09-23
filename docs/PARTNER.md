@@ -210,7 +210,7 @@ The customer's side of this is symmetrical and no wider: they are told the
 Partner's FIRST name — "Kwame has accepted your order" — from assignment until
 completion, and nothing afterwards.
 
-The offer list shows a zone (`Hostel Block A`), never a room. Every available
+The offer list shows a zone and a floor (`Hostel A`, `C Floor`), never a room. Every available
 Partner sees that list, and a student's room number is not something to
 broadcast to a pool of people who have not been given the job yet.
 

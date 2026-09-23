@@ -157,7 +157,7 @@ describe('order notifications', () => {
       storeName: 'Asumadu Specials',
       itemCount: 3,
       orderSummary: '2× Jollof Rice and 1 more item',
-      appUrl: 'https://www.campusdash.app',
+      appUrl: 'https://campusdash.app',
       totalPesewas: 9700,
       earningsPesewas: 500,
       amountPesewas: 2000,

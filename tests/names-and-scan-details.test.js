@@ -390,16 +390,18 @@ describe('first names and the scan brief', () => {
     assert.deepEqual(notMine, [], 'somebody else’s errand tells them nothing');
   });
 
-  test('the brief opens on assignment and closes when the delivery ends', async () => {
+  /**
+   * THE PARTNER IS TOLD NOTHING ABOUT A MEAL SCAN, at any point.
+   *
+   * partner_scan_brief() used to open the customer's note to the assigned
+   * Partner, because the Partner was the one carrying the entitlement to a
+   * counter that had never seen the order. The store has the order on its own
+   * board now and verifies the scan before dispatch even opens, so there is
+   * nothing for a Partner to be briefed about — and the function is dropped
+   * rather than left granted to nobody.
+   */
+  test('there is no scan brief for a Partner any more', async () => {
     const order = await submitScan();
-
-    // Unpaid and unassigned: nobody may read it.
-    const before = await asUser(
-      ACTORS.partnerYaw,
-      async (c) =>
-        (await c.query('select * from public.partner_scan_brief($1)', [order.order_id])).rows
-    );
-    assert.deepEqual(before, []);
 
     await asService(async (c) => {
       const { rows } = await c.query("select * from public.create_payment_intent($1, 'fake', $2)", [
@@ -413,39 +415,40 @@ describe('first names and the scan brief', () => {
       ]);
     });
 
-    await partnerAccept(order.order_id, ACTORS.partnerYaw);
-
-    const during = await asUser(
-      ACTORS.partnerYaw,
-      async (c) =>
-        (await c.query('select * from public.partner_scan_brief($1)', [order.order_id])).rows[0]
-    );
-    assert.match(during.details, /Jollof with chicken/, 'the assigned Partner is told what to ask');
-    assert.equal(during.restaurant_name, 'Wafflemania (test)');
-    // AND WHAT THE ORDER ACTUALLY IS. The note is context; the items are the
-    // order, and a Partner who has both does not have to ring anybody.
-    assert.equal(during.items.length, 1);
-
-    // An unassigned Partner gets nothing, at the same moment.
-    const otherPartner = await asUser(
-      ACTORS.partnerAdjoa,
-      async (c) =>
-        (await c.query('select * from public.partner_scan_brief($1)', [order.order_id])).rows
-    );
-    assert.deepEqual(otherPartner, []);
-
-    // And when the assignment goes away, so does the brief.
+    // Approval is what opens the search, so the store goes first.
     await asUser(
-      ACTORS.partnerYaw,
-      (c) => c.query('select public.partner_cancel_delivery($1, $2)', [order.order_id, 'gave up']),
+      ACTORS.wafflemaniaStaff,
+      (c) => c.query('select * from public.vendor_redeem_scan($1)', [order.order_id]),
       { commit: true }
     );
-    const after = await asUser(
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+
+    const gone = await asService(
+      async (c) =>
+        (
+          await c.query(
+            `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname = 'partner_scan_brief'`
+          )
+        ).rows
+    );
+    assert.deepEqual(gone, [], 'the function does not exist');
+
+    // And the note itself is still the customer's and the store's.
+    const mine = await asUser(
+      ACTORS.customerAma,
+      async (c) =>
+        (await c.query('select * from public.my_scan_order($1)', [order.order_id])).rows[0]
+    );
+    assert.match(mine.details, /Jollof with chicken/);
+
+    const partnerRows = await asUser(
       ACTORS.partnerYaw,
       async (c) =>
-        (await c.query('select * from public.partner_scan_brief($1)', [order.order_id])).rows
+        (await c.query('select * from public.order_scans where order_id = $1', [order.order_id]))
+          .rows
     );
-    assert.deepEqual(after, [], 'losing the assignment revokes the brief, not just the image');
+    assert.deepEqual(partnerRows, [], 'the carrying Partner cannot read the row either');
   });
 
   test('an administrator sees the details on the errand', async () => {
@@ -459,7 +462,7 @@ describe('first names and the scan brief', () => {
   });
 
   test('details longer than the column allows are refused', async () => {
-    const error = await expectRejection(submitScan({ details: 'x'.repeat(1001) }));
-    assert.match(error.message, /under 1000 characters/i);
+    const error = await expectRejection(submitScan({ details: 'x'.repeat(281) }));
+    assert.match(error.message, /order information under 280 characters/i);
   });
 });

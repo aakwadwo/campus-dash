@@ -39,6 +39,13 @@ function collect(formData) {
     // Verification uses this rather than re-deriving it from what was typed, so
     // the number being verified is provably the number that was sent to.
     verifiedPhone: String(formData.get('verified_phone') ?? '').trim(),
+    // WHICH KIND OF CODE IS IN FLIGHT. A number being moved onto this identity
+    // is a 'phone_change'; a number already confirmed on it, or on no identity
+    // at all, is an ordinary 'sms' sign-in code. Verification has to ask
+    // Supabase the same question the request asked, and guessing it from
+    // "is somebody signed in" was wrong for exactly one case — a vendor
+    // re-proving the number their account already holds.
+    otpType: formData.get('otp_type') === 'phone_change' ? 'phone_change' : 'sms',
     accepted: formData.get('accept_terms') === 'on',
   };
 }
@@ -151,6 +158,7 @@ function carry(d) {
     description: d.description,
     categoryId: d.categoryId,
     phoneRaw: d.phoneRaw,
+    otpType: d.otpType,
   };
 }
 
@@ -216,27 +224,30 @@ export async function startVendorSignUpAction(_prev, formData) {
       return fail('That number is already on another Campus Dash account. Use a different one.');
     }
 
-    // ALREADY PROVEN ON THIS ACCOUNT: the session is the proof and the number
-    // is already a credential here. Nothing to verify again.
-    if (account.verifiedPhone === phone) {
-      try {
-        await createStore(d, applicantName);
-      } catch (error) {
-        return fail(actionFailure(error, CONTEXT).message);
-      }
-      revalidatePath('/', 'layout');
-      redirect('/vendor/application');
-    }
+    // A CODE IS ALWAYS SENT. The number becomes how this store signs in, and
+    // whichever number the applicant ends up on — the one their customer
+    // profile already carried, or one they typed over it — it is proven on THIS
+    // account before the store exists. A customer's profile phone was collected
+    // at sign-up and never verified, so trusting it here would make an
+    // unverified field into a credential.
+    //
+    // TWO REQUESTS, ONE SCREEN. Moving a number ONTO this identity is a phone
+    // change; re-proving one the identity already holds is an ordinary sign-in
+    // code, because GoTrue sends nothing for a "change" to the number it is
+    // already on. Which one was asked for rides back with the code, so
+    // verification cannot guess wrong.
+    const reproving = account.verifiedPhone === phone;
+    const otpType = reproving ? 'sms' : 'phone_change';
 
-    // THE NUMBER BECOMES A SIGN-IN CREDENTIAL, so it is proven ON THIS ACCOUNT.
-    // A phone change sends the code to the number and, once confirmed, writes
-    // it onto this same auth identity. signInWithOtp would instead look for an
-    // identity holding the number, find none, and mint a second one: the
-    // failure that left customer-vendors unable to sign in to their store.
     const supabase = await createClient();
-    const { error } = await supabase.auth.updateUser({ phone });
+    const { error } = reproving
+      ? // NEVER CREATES AN ACCOUNT: the number is confirmed on this very
+        // identity, so there is one to find.
+        await supabase.auth.signInWithOtp({ phone, options: { shouldCreateUser: false } })
+      : await supabase.auth.updateUser({ phone });
+
     if (error) {
-      console.error('[vendor-signup] could not send the phone-change code:', error.message);
+      console.error('[vendor-signup] could not send the code:', error.message);
       if (error.status === 429)
         return fail('Too many codes requested. Wait a moment and try again.');
       if (/already|exists|registered/i.test(error.message ?? '')) {
@@ -247,7 +258,7 @@ export async function startVendorSignUpAction(_prev, formData) {
 
     return at({
       step: 'code',
-      ...carry({ ...d, applicantName }),
+      ...carry({ ...d, applicantName, otpType }),
       phone,
       sentAt: Date.now(),
     });
@@ -273,7 +284,7 @@ export async function startVendorSignUpAction(_prev, formData) {
 
   return at({
     step: 'code',
-    ...carry(d),
+    ...carry({ ...d, otpType: 'sms' }),
     phone,
     // Starts the resend cooldown. The code screen counts down from this.
     sentAt: Date.now(),
@@ -306,12 +317,17 @@ export async function resendVendorCodeAction(_prev, formData) {
   const back = (extra) => at({ step: 'code', ...carry(d), phone, ...extra });
 
   const supabase = await createClient();
-  // A signed-in account is proving a number for ITSELF (a phone change); a new
-  // store owner is signing in with one. Same code screen, different request.
-  const signedIn = Boolean(await currentUserId());
-  const { error } = signedIn
-    ? await supabase.auth.resend({ type: 'phone_change', phone })
-    : await supabase.auth.signInWithOtp({ phone });
+  // THE SAME REQUEST THE FIRST CODE CAME FROM, carried back rather than
+  // re-derived from "is somebody signed in" — which was right for a customer
+  // moving a new number onto their account and wrong for a vendor re-proving
+  // the one they already had.
+  const { error } =
+    d.otpType === 'phone_change'
+      ? await supabase.auth.resend({ type: 'phone_change', phone })
+      : await supabase.auth.signInWithOtp({
+          phone,
+          options: { shouldCreateUser: !(await currentUserId()) },
+        });
 
   if (error) {
     console.error('[vendor-signup] could not resend the code:', error.message);
@@ -348,14 +364,15 @@ export async function finishVendorSignUpAction(_prev, formData) {
   const supabase = await createClient();
   const account = await signedInAccount();
 
-  // ON THIS ACCOUNT, or a new one. A signed-in customer confirms a phone change,
-  // which writes the number onto the identity they already have; somebody with
-  // no account signs in with the number, which is how a vendor-only account is
-  // made.
+  // THE TYPE THE CODE WAS ASKED FOR, carried from the request. A signed-in
+  // customer moving a new number onto their account confirms a phone change,
+  // which writes it onto the identity they already have; everybody else — a
+  // vendor re-proving the number their account already holds, or somebody with
+  // no account at all — verifies an ordinary sign-in code.
   const { error: verifyError } = await supabase.auth.verifyOtp({
     phone,
     token,
-    type: account ? 'phone_change' : 'sms',
+    type: d.otpType,
   });
 
   if (verifyError) {

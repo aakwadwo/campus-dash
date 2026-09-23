@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { getCapabilities } from '@/lib/auth/session';
 import { listVendors, listCategories, listSearchableItems } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
@@ -6,15 +5,15 @@ import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import VendorSearch from './vendor-search';
 import ContactLine from '../contact-line';
-import { Container, Callout, ScanIcon, ChevronRightIcon, TextLink } from '../ui';
+import { Container, Callout, ChevronRightIcon, TextLink } from '../ui';
 
 export const metadata = {
-  title: 'Browse stores around Academic City',
+  title: 'Browse',
   description:
     'Every store open on campus right now, with what they have and what it costs. Collect it yourself or have a Campus Dash Partner bring it.',
   alternates: { canonical: '/order' },
   openGraph: {
-    title: 'Browse stores around Academic City',
+    title: 'Browse · Campus Dash',
     description: 'Every store open on campus right now, with what they have and what it costs.',
     url: '/order',
   },
@@ -58,19 +57,12 @@ export default async function VendorListPage() {
 
       <main className="flex-1 pb-24 sm:pb-0">
         <Container size="wide" className="pt-8 sm:pt-12">
-          <div className="mb-5 flex items-baseline justify-between gap-6">
-            <h1 className="text-display text-2xl font-semibold sm:text-4xl">Browse</h1>
-            {/* The scan route, deliberately quiet: one short link, not a panel
-                competing with the stores. */}
-            <Link
-              href="/scan"
-              className="text-muted hover:text-ink press-sm inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-medium transition-colors"
-            >
-              <ScanIcon className="text-brand-700 size-[18px]" />
-              Use a meal scan
-              <ChevronRightIcon className="size-4" />
-            </Link>
-          </div>
+          {/* ONE LIST OF STORES. "Use a meal scan" used to sit here as a
+              second way to browse, which meant a student had to decide how
+              they were paying before they had decided what to eat — and one
+              who did not know the feature existed never found it. A store that
+              takes a Meal Scan says so on its own page. */}
+          <h1 className="text-display mb-5 text-2xl font-semibold sm:text-4xl">Browse</h1>
 
           <VendorSearch vendors={vendors} categories={categories} items={items} />
 

@@ -342,10 +342,27 @@ describe('customer profile', () => {
   // THE VENDOR DOOR
   // =========================================================================
   describe('vendor sign-in is for vendors', () => {
-    const canSignIn = (phone) =>
+    const statusFor = (phone) =>
       asAnon(
         async (c) =>
-          (await c.query('select public.phone_can_sign_in_as_vendor($1) as ok', [phone])).rows[0].ok
+          (await c.query('select public.vendor_phone_sign_in_status($1) as status', [phone]))
+            .rows[0].status
+      );
+
+    /**
+     * THE QUESTION IS ASKED OF auth.users, which is the table GoTrue resolves a
+     * phone OTP against. public.users.phone is a PROFILE field and the two can
+     * genuinely disagree — see the EMAIL_ACCOUNT case below, which is the
+     * production bug this function was rewritten for.
+     */
+    const confirmAuthPhone = (userId, phone) =>
+      asService((c) =>
+        c.query(
+          `update auth.users
+              set phone = $2, phone_confirmed_at = now()
+            where id = $1`,
+          [userId, phone.replace('+', '')]
+        )
       );
 
     test('a number that owns a store may be sent a code', async () => {
@@ -358,7 +375,8 @@ describe('customer profile', () => {
             )
           ).rows[0].phone
       );
-      assert.equal(await canSignIn(phone), true);
+      await confirmAuthPhone(ACTORS.vendor1Staff, phone);
+      assert.equal(await statusFor(phone), 'VENDOR');
     });
 
     /**
@@ -368,14 +386,14 @@ describe('customer profile', () => {
      * that Campus Dash was expecting them.
      */
     test('a number with no store may not', async () => {
-      assert.equal(await canSignIn('+233209999999'), false, 'a number nobody holds');
+      assert.equal(await statusFor('+233209999999'), 'NONE', 'a number nobody holds');
 
       const customerPhone = await asService(
         async (c) =>
           (await c.query('select phone from public.users where id = $1', [ACTORS.customerAma]))
             .rows[0].phone
       );
-      assert.equal(await canSignIn(customerPhone), false, 'a customer is not a vendor');
+      assert.equal(await statusFor(customerPhone), 'NONE', 'a customer is not a vendor');
     });
 
     /**
@@ -389,17 +407,79 @@ describe('customer profile', () => {
           async (c) =>
             (await c.query('select phone from public.users where id = $1', [owner])).rows[0].phone
         );
-        assert.equal(await canSignIn(phone), true, owner);
+        await confirmAuthPhone(owner, phone);
+        assert.equal(await statusFor(phone), 'VENDOR', owner);
       }
     });
 
-    test('it returns a bare boolean and nothing about the account', async () => {
+    /**
+     * THE PRODUCTION BUG, in one test.
+     *
+     * A store owner's number sits on their PROFILE while a second, empty auth
+     * identity is the one holding it in auth.users — which is what
+     * handle_new_auth_user_for() leaves behind when a phone collides, and
+     * deliberately so: a contact detail somebody else holds is not the new
+     * identity's to take.
+     *
+     * The old check read public.users and said yes. GoTrue then signed in the
+     * EMPTY identity, and a vendor landed on a sign-up screen with no store.
+     */
+    test('a number confirmed on a DIFFERENT identity is not a vendor sign-in', async () => {
+      const phone = await asService(
+        async (c) =>
+          (await c.query('select phone from public.users where id = $1', [ACTORS.vendor1Staff]))
+            .rows[0].phone
+      );
+
+      const orphan = '99999999-0000-4000-8000-0000000000a1';
+      try {
+        // The owner signs in by something else; the number is on their profile.
+        await asService((c) =>
+          c.query('update auth.users set phone = null, phone_confirmed_at = null where id = $1', [
+            ACTORS.vendor1Staff,
+          ])
+        );
+        assert.equal(
+          await statusFor(phone),
+          'EMAIL_ACCOUNT',
+          'a store exists, but a code would not reach it'
+        );
+
+        // And with the orphan identity actually present, which is the real shape.
+        await asService((c) =>
+          c.query(
+            `insert into auth.users (id, instance_id, aud, role, phone, phone_confirmed_at,
+                                     created_at, updated_at)
+             values ($1::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated',
+                     'authenticated', $2, now(), now(), now())`,
+            [orphan, phone.replace('+', '')]
+          )
+        );
+        assert.equal(
+          await statusFor(phone),
+          'EMAIL_ACCOUNT',
+          'the empty identity is never offered a vendor code'
+        );
+      } finally {
+        // THE CREDENTIAL GOES BACK. auth.users is outside
+        // resetTransactionalState(), so a file that moves a sign-in number and
+        // leaves it moved signs nobody in for the rest of the run.
+        await asService((c) => c.query('delete from auth.users where id = $1', [orphan]));
+        await confirmAuthPhone(ACTORS.vendor1Staff, phone);
+      }
+    });
+
+    test('it returns one word and nothing about the account', async () => {
       const result = await asAnon(
         async (c) =>
-          (await c.query('select public.phone_can_sign_in_as_vendor($1) as ok', ['+233200000011']))
-            .rows[0]
+          (
+            await c.query('select public.vendor_phone_sign_in_status($1) as status', [
+              '+233200000011',
+            ])
+          ).rows[0]
       );
-      assert.deepEqual(Object.keys(result), ['ok'], 'no name, no store, no account id');
+      assert.deepEqual(Object.keys(result), ['status'], 'no name, no store, no account id');
+      assert.ok(['VENDOR', 'EMAIL_ACCOUNT', 'NONE'].includes(result.status));
     });
   });
 });

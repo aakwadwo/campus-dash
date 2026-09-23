@@ -77,9 +77,10 @@ export default async function VendorSignUpPage() {
 /**
  * What the signed-in account already knows, so the form does not ask again.
  *
- * The phone is shown the way Ghanaians write it (0XXXXXXXXX). `verified` says
- * whether it is already a credential on this account; if it is and it is not
- * changed, no code is sent at all.
+ * The phone is shown the way Ghanaians write it (0XXXXXXXXX). A code is always
+ * sent to whichever number the applicant ends up on, changed or not: the number
+ * on a customer profile was typed at sign-up and never proven, and it is about
+ * to become how a store signs in.
  */
 async function accountFacts() {
   const supabase = await createClient();
@@ -103,11 +104,9 @@ async function accountFacts() {
     .maybeSingle();
 
   const phone = profile?.phone ?? null;
-  const authPhone = user.phone ? `+${String(user.phone).replace(/^\+/, '')}` : null;
   return {
     name: profile?.full_name ?? null,
     phone: phone ? phone.replace(/^\+233/, '0') : '',
-    verified: Boolean(user.phone_confirmed_at) && authPhone === phone,
     isStudent: customer?.affiliation ? (customer.affiliation === 'STUDENT' ? 'yes' : 'no') : null,
   };
 }

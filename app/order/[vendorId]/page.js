@@ -1,6 +1,7 @@
+import Image from 'next/image';
 import { notFound } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
-import { getVendorWithMenu, listDeliverableLocations } from '@/lib/customer';
+import { getVendorWithMenu, listDestinationPlaces } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
 import { getPlatformConfig } from '@/lib/platform-config';
 import SiteHeader from '../../site-header';
@@ -30,7 +31,7 @@ export async function generateMetadata({ params }) {
     title: vendor.name,
     description,
     alternates: { canonical: `/order/${vendorId}` },
-    openGraph: { title: vendor.name, description, url: `/order/${vendorId}` },
+    openGraph: { title: `${vendor.name} · Campus Dash`, description, url: `/order/${vendorId}` },
   };
 }
 
@@ -43,17 +44,17 @@ export async function generateMetadata({ params }) {
  */
 export default async function VendorMenuPage({ params }) {
   const { vendorId } = await params;
-  const me = await getCapabilities();
-
-  const result = await getVendorWithMenu(vendorId);
-  if (!result) notFound();
-
-  // Where a Partner could bring it. Fetched here rather than on demand so the
-  // Partner option does not pop a second loading state inside the checkout.
-  const [locations, platform] = await Promise.all([
-    listDeliverableLocations().catch(() => []),
+  // ALL AT ONCE. None of these depends on another: who is looking, the store
+  // (already read once for the metadata, and shared), where a Partner could
+  // bring it, and the fees. The places are fetched here rather than on demand
+  // so the Partner option does not pop a second loading state in the checkout.
+  const [me, result, locations, platform] = await Promise.all([
+    getCapabilities(),
+    getVendorWithMenu(vendorId),
+    listDestinationPlaces().catch(() => []),
     getPlatformConfig(),
   ]);
+  if (!result) notFound();
 
   const { vendor } = result;
   // Items only; the dishes are listed by name and price. Store photos are the
@@ -80,12 +81,18 @@ export default async function VendorMenuPage({ params }) {
               card, so they live here and nowhere else. */}
       <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-end sm:gap-8">
         {primary ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={primary.url}
-            alt=""
-            className="rounded-panel bg-surface-2 aspect-[16/10] w-full object-cover"
-          />
+          // THE FIRST THING ON THE PAGE, so it is fetched first rather than
+          // lazily.
+          <div className="rounded-panel bg-surface-2 relative aspect-[16/10] w-full overflow-hidden">
+            <Image
+              src={primary.url}
+              alt=""
+              fill
+              preload
+              sizes="(min-width: 640px) 50vw, 100vw"
+              className="object-cover"
+            />
+          </div>
         ) : (
           <ImagePlaceholder name={vendor.name} className="rounded-panel" />
         )}
@@ -105,6 +112,18 @@ export default async function VendorMenuPage({ params }) {
                 Closed
               </span>
             )}
+            {/* MEAL SCAN ACCEPTED, said on the store page and nowhere else —
+                it is a fact about this store, and the switch that uses it is
+                one screen away at the checkout. An administrator decides which
+                stores carry it. */}
+            {vendor.can_accept_scans ? (
+              <>
+                <span className="text-faint">·</span>
+                <span className="bg-brand-50 text-brand-800 rounded px-2 py-0.5 text-xs font-semibold">
+                  Meal Scan accepted
+                </span>
+              </>
+            ) : null}
             {vendor.category_name ? (
               <>
                 <span className="text-faint">·</span>
@@ -128,11 +147,11 @@ export default async function VendorMenuPage({ params }) {
         <ul className="-mx-4 mt-4 flex gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
           {more.map((image) => (
             <li key={image.id} className="shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
+              <Image
                 src={image.url}
                 alt={image.caption ?? ''}
-                loading="lazy"
+                width={192}
+                height={128}
                 className="rounded-card bg-surface-2 h-24 w-36 object-cover sm:h-32 sm:w-48"
               />
             </li>
@@ -141,7 +160,9 @@ export default async function VendorMenuPage({ params }) {
       ) : null}
 
       {!vendor.is_accepting_orders ? (
-        <p className="text-muted mt-6 text-sm">Closed right now. You can look, but not order.</p>
+        <p className="text-muted mt-6 text-sm">
+          Closed right now. Their menu comes back when they open.
+        </p>
       ) : null}
       <OrderingGate me={me} className="mt-6" />
     </div>
@@ -166,6 +187,10 @@ export default async function VendorMenuPage({ params }) {
             // For the LABEL on the Partner option only. The figure that is
             // charged always comes back from quote_order().
             deliveryFeePesewas={Number(platform.delivery_fee_pesewas ?? 0)}
+            // For the pack CHECKBOX's label on a Meal Scan collection. Whether
+            // a pack is charged at all, and whether it is compulsory, comes
+            // back from quote_scan_order().
+            packFeePesewas={Number(platform.scan_pack_fee_pesewas ?? 0)}
             gate={
               me.can_order
                 ? null

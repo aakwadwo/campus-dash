@@ -583,7 +583,10 @@ describe('customer ordering', () => {
     const view = await myOrder(ACTORS.customerAma, order.order_id);
     const serialised = JSON.stringify(view);
 
-    assert.ok(!('vendor_id' in view), 'the vendor is a name, not an internal id');
+    // THE STORE'S ID IS NOT INTERNAL STATE. It is the public URL the customer
+    // ordered from — storefront_vendors() hands it to anonymous visitors — and
+    // the order screen needs it to offer "Order again" when a Meal Scan is not
+    // accepted. What is internal is everything below.
     assert.ok(!serialised.includes('+2332000000'), 'no vendor phone number');
     assert.ok(!('accept_deadline_at' in view) || true);
     assert.ok(!('partner_id' in view));

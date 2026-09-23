@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 import SiteHeader from '@/app/site-header';
 import SiteFooter from '@/app/site-footer';
@@ -7,14 +8,14 @@ import { CampusDashMark } from '@/app/brand';
 import { Container, ButtonLink, ChevronRightIcon, Disclosure } from '@/app/ui';
 
 export const metadata = {
-  title: 'What Campus Dash is building',
+  title: 'About',
   description:
-    'Campus Dash makes campus life easier by connecting students, vendors and the wider campus community through simple, convenient access to the things they need.',
+    'Campus Dash is how Academic City orders from the stores on campus. Pay once, then collect it yourself or have a Campus Dash Partner bring it to you.',
   alternates: { canonical: '/about' },
   openGraph: {
-    title: 'What Campus Dash is building',
+    title: 'About · Campus Dash',
     description:
-      'Campus Dash makes campus life easier by connecting students, vendors and the wider campus community through simple, convenient access to the things they need.',
+      'Campus Dash is how Academic City orders from the stores on campus. Pay once, then collect it yourself or have a Campus Dash Partner bring it to you.',
     url: '/about',
   },
 };
@@ -22,7 +23,7 @@ export const metadata = {
 export const dynamic = 'force-dynamic';
 
 /**
- * What Campus Dash is building, and why.
+ * What Campus Dash is, what it does, and why it exists.
  *
  * SHORT STATEMENTS FIRST. Each idea is one line a person can take in while
  * scrolling; the reasoning behind it is one tap away rather than a paragraph
@@ -38,7 +39,7 @@ export const dynamic = 'force-dynamic';
 const WHY = [
   {
     title: 'Because the walk and the queue are time nobody wanted to spend.',
-    body: 'Lunch is the errand every student runs, several times a week, between lectures that do not wait. Campus Dash puts every store around Academic City in one place, with what it has right now and what it costs, so the decision takes a minute and the walk is optional.',
+    body: 'Lunch is the errand every student runs, several times a week, between lectures that do not wait. Campus Dash puts the stores around Academic City in one place, with what it has right now and what it costs, so the decision takes a minute and the walk is optional.',
   },
   {
     title: 'Because a campus is small enough to look after itself.',
@@ -97,8 +98,8 @@ export default async function AboutPage() {
               Campus Food Brought to You
             </h1>
             <p className="mt-5 max-w-xl text-lg leading-relaxed text-white/80">
-              Campus Dash makes campus life easier by connecting students, vendors and the wider
-              campus community through simple, convenient access to the things they need.
+              Campus Dash is how Academic City orders from the stores on campus. Pay once, then
+              collect it yourself or have a Campus Dash Partner bring it to you.
             </p>
             <div className="mt-8">
               <ButtonLink href="/order" size="lg" className="px-7">
@@ -115,11 +116,11 @@ export default async function AboutPage() {
             <ul className="flex gap-2 overflow-x-auto px-4 py-4 sm:justify-center sm:px-6">
               {photos.map((photo) => (
                 <li key={photo.id} className="shrink-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
+                  <Image
                     src={photo.url}
                     alt={photo.name}
-                    loading="lazy"
+                    width={224}
+                    height={144}
                     className="rounded-card bg-surface-2 h-28 w-40 object-cover sm:h-36 sm:w-56"
                   />
                 </li>
@@ -129,20 +130,26 @@ export default async function AboutPage() {
         ) : null}
 
         {/* --------------------------------------------------------------
-            What we are building, in two lines. */}
+            What it does, plainly, then why in one line. */}
         <Container size="wide" className="pt-14 sm:pt-20">
           <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] sm:gap-16">
             <h2 className="text-display text-3xl font-semibold text-balance sm:text-4xl">
-              Food is where we start.
+              What Campus Dash does
             </h2>
             <div className="text-muted space-y-4 text-lg leading-relaxed">
               <p>
-                It is the errand every student runs, so it is the first thing worth building
-                properly.
+                You choose a store, pay once, and either collect your order at the counter or have a
+                Campus Dash Partner bring it to where you are on campus. The store only ever sees
+                paid orders, and a four-digit code at each handoff makes sure the food reaches the
+                right person.
+              </p>
+              <p>
+                At stores that take them, your Meal Scan can pay for the food. You see every fee
+                before you pay.
               </p>
               <p className="text-ink font-medium">
-                What we are really building is the simplest way for a campus to get the things it
-                needs, from the people already on it.
+                It exists so a meal fits between lectures, stores reach the whole campus, and the
+                students and staff who carry orders earn for helping.
               </p>
             </div>
           </div>
@@ -158,36 +165,6 @@ export default async function AboutPage() {
                 <p className="text-muted max-w-2xl leading-relaxed">{item.body}</p>
               </Disclosure>
             ))}
-          </div>
-        </Container>
-
-        {/* --------------------------------------------------------------
-            Beyond food. A direction, stated as one. */}
-        <Container size="wide" className="pt-14 sm:pt-20">
-          <div className="bg-surface border-line rounded-panel border p-6 sm:p-10">
-            <h2 className="text-display text-2xl font-semibold sm:text-3xl">Then, beyond food.</h2>
-            <p className="text-muted mt-3 max-w-2xl leading-relaxed">
-              The same stores, Partners and single payment work for anything a campus moves around
-              itself. That is where Campus Dash is going.
-            </p>
-            <ul className="mt-6 flex flex-wrap gap-2">
-              {[
-                'Food, today',
-                'Snacks and drinks',
-                'Groceries',
-                'Printing and stationery',
-                'Everyday essentials',
-              ].map((label, index) => (
-                <li
-                  key={label}
-                  className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${
-                    index === 0 ? 'bg-brand-700 text-white' : 'bg-surface-2 text-muted'
-                  }`}
-                >
-                  {label}
-                </li>
-              ))}
-            </ul>
           </div>
         </Container>
 

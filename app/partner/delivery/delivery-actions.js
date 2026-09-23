@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useVisibleInterval } from '@/app/use-status-watch';
 import {
   cancelDeliveryAction,
   completeDeliveryAction,
@@ -23,7 +24,7 @@ import { Button, CodeInput, ErrorNote, SuccessNote, Callout, Field, Input } from
  * would be an invitation to walk to a counter early and an attempt counter to
  * burn on nothing.
  */
-export default function DeliveryActions({ delivery, isScan = false }) {
+export default function DeliveryActions({ delivery }) {
   const router = useRouter();
   const [cancelState, cancel, cancelling] = useActionState(cancelDeliveryAction, {});
   const [completeState, complete, completing] = useActionState(completeDeliveryAction, {});
@@ -42,11 +43,10 @@ export default function DeliveryActions({ delivery, isScan = false }) {
 
   // Nothing on this screen can change except the kitchen, so it is polled only
   // while that is what is being waited on.
-  useEffect(() => {
-    if (!waitingForKitchen) return;
-    const timer = setInterval(() => router.refresh(), 10000);
-    return () => clearInterval(timer);
-  }, [waitingForKitchen, router]);
+  useVisibleInterval(() => router.refresh(), {
+    intervalMs: 10000,
+    enabled: waitingForKitchen,
+  });
 
   const result = [completeState, pickupState, reportState, confirmState, cancelState].find(
     (s) => s.message
@@ -55,15 +55,13 @@ export default function DeliveryActions({ delivery, isScan = false }) {
   return (
     <div className="space-y-3">
       {/* THE PICKUP CODE, entered by the Partner. The store reads it out; the
-          Partner types it in. A MEAL SCAN ORDER IS NO DIFFERENT any more: the
-          store checks the scan, hands the food over and reads out the same four
-          digits, so there is one collection path rather than two. */}
+          Partner types it in. A MEAL SCAN ORDER IS NO DIFFERENT: the store
+          approved the scan before this Partner was even looked for, so by now
+          it is an ordinary order with an ordinary handoff. */}
       {waitingForKitchen ? (
         <Callout tone="warn">
           <p role="status" className="font-medium">
-            {isScan
-              ? `Waiting for ${delivery.vendor_name} to check the scan and mark this ready. The code box appears here the moment they do.`
-              : `Waiting for ${delivery.vendor_name} to mark this ready. The code box appears here the moment they do.`}
+            {`Waiting for ${delivery.vendor_name} to mark this ready. The code box appears here the moment they do.`}
           </p>
         </Callout>
       ) : null}

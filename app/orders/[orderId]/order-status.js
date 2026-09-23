@@ -14,6 +14,8 @@ import {
   abandonUnpaidOrderAction,
 } from '@/app/order/actions';
 import { formatPesewas } from '@/lib/util/money';
+import DestinationPicker from '@/app/destination-picker';
+import { useStatusWatch } from '@/app/use-status-watch';
 import {
   Callout,
   CodeDisplay,
@@ -21,9 +23,9 @@ import {
   ErrorNote,
   SuccessNote,
   Button,
+  ButtonLink,
   Field,
   Input,
-  Select,
   TEXT_LINK_CLASS,
 } from '@/app/ui';
 
@@ -34,8 +36,12 @@ import {
  * The customer can start a payment. They cannot mark one paid — that only ever
  * happens when a verified provider event reaches the server.
  */
+// Quick at first, when a payment usually lands, then patient.
+const PAYMENT_CHECK_DELAYS_MS = [2000, 3000, 5000, 8000, 13000];
+
 export default function OrderStatus({
   order,
+  signal = null,
   email = null,
   pollMs = 6000,
   fulfilmentOptions = null,
@@ -69,6 +75,10 @@ export default function OrderStatus({
   // reading this screen.
   const live = [
     'PAID_AWAITING_KITCHEN',
+    // The store is looking at the Meal Scan. Somebody else moves this one, so
+    // the screen has to keep asking — without it a customer sits on "Checking
+    // your Meal Scan" long after it was approved.
+    'SCAN_AWAITING_CHECK',
     'PREPARING',
     'PREPARING_SEARCHING',
     'PREPARING_PARTNER_ASSIGNED',
@@ -78,20 +88,66 @@ export default function OrderStatus({
     'READY',
   ].includes(order.stage);
 
-  // Poll only while something is actually expected to change.
+  // WAITING ON SOMEBODY ELSE. A four-byte question every few seconds — has
+  // anything on this order moved? — and a full re-render only when it has.
+  // It used to be the other way round: the whole page, sign-in and all, every
+  // six seconds, hidden tab or not, to learn that nothing had happened.
+  useStatusWatch({
+    url: `/api/orders/${order.order_id}/status`,
+    enabled: live && Boolean(signal),
+    initial: signal,
+    signatureOf: (status) => status?.signal,
+    onChange: () => router.refresh(),
+    intervalMs: pollMs,
+  });
+
+  // WAITING ON THE PAYMENT PROVIDER. Each check asks Paystack server to
+  // server, which is the safety net for a webhook that has not arrived — so it
+  // starts quick, because that is when the answer usually lands, and backs off
+  // rather than asking Paystack every two seconds for as long as somebody
+  // leaves the tab open. Nothing is asked while the screen is hidden, and
+  // coming back to it asks at once. The action revalidates this page itself,
+  // so its response is the re-render.
   useEffect(() => {
-    if (!processing && !live) return;
+    if (!processing) return undefined;
 
-    const timer = setInterval(
-      async () => {
-        if (processing) await refreshOrderAction(order.order_id);
-        router.refresh();
-      },
-      processing ? 2000 : pollMs
-    );
+    let stopped = false;
+    let timer = null;
+    let attempt = 0;
 
-    return () => clearInterval(timer);
-  }, [processing, live, pollMs, order.order_id, router]);
+    const schedule = () => {
+      clearTimeout(timer);
+      if (stopped || document.hidden) return;
+      timer = setTimeout(
+        check,
+        PAYMENT_CHECK_DELAYS_MS[Math.min(attempt, PAYMENT_CHECK_DELAYS_MS.length - 1)]
+      );
+    };
+
+    async function check() {
+      if (stopped || document.hidden) return;
+      attempt += 1;
+      try {
+        await refreshOrderAction(order.order_id);
+      } catch {
+        // A dropped connection: the next check tries again.
+      }
+      schedule();
+    }
+
+    function onVisibility() {
+      if (document.hidden) clearTimeout(timer);
+      else check();
+    }
+
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [processing, order.order_id]);
 
   /**
    * The provider's checkout is on another origin, so getting there is a full
@@ -291,6 +347,25 @@ export default function OrderStatus({
     );
   }
 
+  // THE MEAL SCAN WAS NOT ACCEPTED, so this order is over. The one useful thing
+  // left on the screen is the way to start again — subtle rather than a
+  // celebration, because somebody has just lost money, and a link rather than a
+  // large primary button for the same reason. There is deliberately no way to
+  // attach another scan to this order: that would be a second entitlement
+  // against one payment, and the database has no function for it.
+  if (order.stage === 'SCAN_INVALID') {
+    return (
+      <div className="space-y-3">
+        {order.cancellation_reason ? (
+          <p className="text-muted text-sm leading-relaxed">{order.cancellation_reason}</p>
+        ) : null}
+        <ButtonLink href={`/order/${order.vendor_id}`} variant="secondary" size="lg" block>
+          Order again at {order.vendor_name}
+        </ButtonLink>
+      </div>
+    );
+  }
+
   // Nobody took the job. The food is made and paid for, so this is the
   // customer's decision — not something the system does to them.
   if (order.stage === 'NO_PARTNER') {
@@ -340,6 +415,7 @@ export default function OrderStatus({
  */
 function FulfilmentChoice({ order, options, locations, action, pending, state, onCancel }) {
   const [choice, setChoice] = useState(order.fulfilment_type ?? 'PICKUP');
+  const [destination, setDestination] = useState(null);
 
   const priceFor = (type) => options.find((o) => o.fulfilment_type === type) ?? null;
   const delivery = priceFor('DELIVERY');
@@ -375,23 +451,30 @@ function FulfilmentChoice({ order, options, locations, action, pending, state, o
         />
       </div>
 
+      {/* Additional information is for the Partner, so it is asked only with
+          one. Order information belongs to the food and is not changed here. */}
       {choice === 'DELIVERY' && deliveryAvailable ? (
-        <div className="space-y-3">
-          <Field label="Where on campus?">
-            <Select name="destination_location_id" required defaultValue="">
-              <option value="" disabled>
-                Choose a destination
-              </option>
-              {locations.map((location) => (
-                <option key={location.location_id} value={location.location_id}>
-                  {location.path}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Anything else?" hint="Optional.">
-            <Input name="destination_note" placeholder="Call when you reach the gate" />
-          </Field>
+        <div>
+          <h4 className="mb-2.5 text-sm font-medium">Where should your Partner bring it?</h4>
+          <DestinationPicker
+            places={locations}
+            value={destination}
+            onChange={setDestination}
+            name="destination_location_id"
+          />
+          <label className="mt-5 block">
+            <span className="text-sm font-medium">
+              Additional information <span className="text-muted font-normal">(optional)</span>
+            </span>
+            <textarea
+              name="destination_note"
+              defaultValue={order.destination_note ?? ''}
+              maxLength={280}
+              rows={2}
+              placeholder="I'm near the stairs. Call when you arrive."
+              className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-2 block w-full resize-none border px-3 py-2.5 text-base outline-none"
+            />
+          </label>
         </div>
       ) : null}
 

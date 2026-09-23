@@ -192,8 +192,9 @@ describe('vendor fulfilment', () => {
         rows[0].amount_pesewas,
       ]);
     });
-    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    // THE STORE APPROVES THE MEAL SCAN FIRST — that is what opens the search.
     await vendorRedeemScan(order.order_id, ACTORS.wafflemaniaStaff);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await vendorReady(order.order_id, ACTORS.wafflemaniaStaff);
     await partnerConfirmPickup(order.order_id, ACTORS.partnerYaw);
 

@@ -11,6 +11,12 @@ export const metadata = {
   description:
     'The terms for ordering with Campus Dash, selling on Campus Dash, and carrying orders as a Campus Dash Partner.',
   alternates: { canonical: '/terms' },
+  openGraph: {
+    title: 'Terms · Campus Dash',
+    description:
+      'The terms for ordering with Campus Dash, selling on Campus Dash, and carrying orders as a Campus Dash Partner.',
+    url: '/terms',
+  },
 };
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +24,15 @@ const AUDIENCE_LABEL = {
   CUSTOMER: 'Customer terms',
   VENDOR: 'Store terms',
   PARTNER: 'Partner terms',
+};
+
+// What each document is about, so somebody can open the one they need. The
+// VERSION is deliberately not shown: it is recorded against every acceptance
+// for audit, and means nothing to somebody reading.
+const AUDIENCE_SUMMARY = {
+  CUSTOMER: 'Ordering, paying, collecting and refunds',
+  PARTNER: 'Carrying orders and earning',
+  VENDOR: 'Running a store and getting paid',
 };
 
 const AUDIENCES = ['CUSTOMER', 'PARTNER', 'VENDOR'];
@@ -66,7 +81,8 @@ export default async function TermsPage({ searchParams }) {
         <Container size="narrow" className="pt-8 sm:pt-12">
           <h1 className="text-display text-3xl font-semibold sm:text-4xl">Terms</h1>
           <p className="text-muted mt-2 leading-relaxed">
-            What you agree to when you order, sell or carry orders on Campus Dash.
+            How Campus Dash works, and what you agree to when you order, carry orders or run a store
+            on it.
           </p>
 
           {outstanding.length > 0 ? (
@@ -87,7 +103,11 @@ export default async function TermsPage({ searchParams }) {
                 <Disclosure
                   key={audience}
                   title={AUDIENCE_LABEL[audience] ?? document.title}
-                  summary={`Version ${document.version}${outstandingBy.has(audience) ? ' · waiting for you' : ''}`}
+                  summary={
+                    outstandingBy.has(audience)
+                      ? 'Waiting for your agreement'
+                      : (AUDIENCE_SUMMARY[audience] ?? null)
+                  }
                   defaultOpen={asked === audience || outstandingBy.has(audience)}
                 >
                   <TermsBody text={document.body} />

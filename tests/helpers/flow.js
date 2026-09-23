@@ -23,19 +23,23 @@ export async function submitOrder({
   items = [{ menu_item_id: MENU.jollof, quantity: 1 }],
   fulfilment = 'DELIVERY',
   destination = LOCATIONS.room204,
+  // Additional information, for the Partner.
   note = null,
+  // Order information, for the store.
+  orderNote = null,
 } = {}) {
   return asUser(
     customer,
     async (c) => {
       const { rows } = await c.query(
-        'select * from public.submit_order($1, $2::jsonb, $3, $4, $5)',
+        'select * from public.submit_order($1, $2::jsonb, $3, $4, $5, $6)',
         [
           vendorId,
           JSON.stringify(items),
           fulfilment,
           fulfilment === 'DELIVERY' ? destination : null,
           note,
+          orderNote,
         ]
       );
       return rows[0];
@@ -67,7 +71,9 @@ export async function submitScanOrder({
   fulfilment = 'DELIVERY',
   destination = LOCATIONS.room204,
   path = null,
+  // Order information. p_details is its parameter name on a scan order.
   details = null,
+  orderNote = null,
   note = null,
   wantsPack = false,
 } = {}) {
@@ -92,7 +98,7 @@ export async function submitScanOrder({
             'image/jpeg',
             120000,
             fulfilment === 'DELIVERY' ? destination : null,
-            details,
+            orderNote ?? details,
             note,
             wantsPack,
           ]

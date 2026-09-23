@@ -71,9 +71,43 @@ function contentSecurityPolicy() {
     .join('; ');
 }
 
+/**
+ * STORE PHOTOGRAPHS, RESIZED FOR THE SLOT THEY FILL.
+ *
+ * A store's photo is kept at up to 1600px (app/image-resize.js) and was served
+ * at that size everywhere — including as a 44px search thumbnail and a 56px
+ * order-history row, on the phone data plans most customers are on. Next's
+ * optimizer serves each slot a WebP at the width it actually needs.
+ *
+ * Only the public vendor-images bucket of THIS project may be optimised, so the
+ * optimizer cannot be pointed at anybody else's content. Uploads land at a new
+ * random path every time and are never rewritten, so a long cache is safe.
+ */
+function imagesConfig() {
+  const supabase = config.isSupabaseConfigured() ? new URL(config.supabaseUrl()) : null;
+  return {
+    remotePatterns: supabase
+      ? [
+          {
+            protocol: supabase.protocol.replace(':', ''),
+            hostname: supabase.hostname,
+            port: supabase.port,
+            pathname: '/storage/v1/object/public/vendor-images/**',
+          },
+        ]
+      : [],
+    formats: ['image/webp'],
+    qualities: [75],
+    minimumCacheTTL: 60 * 60 * 24 * 30,
+    // The local Supabase stack is on 127.0.0.1. Never in production.
+    dangerouslyAllowLocalIP: !config.isProduction(),
+  };
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  images: imagesConfig(),
   // The local Supabase stack reaches the app on 127.0.0.1 (and from inside
   // Docker via host.docker.internal), so the dev server must accept those
   // origins for its own assets. Development only; ignored in production.

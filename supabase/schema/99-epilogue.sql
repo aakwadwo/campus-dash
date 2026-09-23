@@ -192,7 +192,170 @@ ON CONFLICT ("id") DO NOTHING;
 
 
 -- ---------------------------------------------------------------------------
--- Terms documents (version 1 was placeholder text; version 2 is the real text)
+-- The Academic City campus
+-- ---------------------------------------------------------------------------
+-- The places a customer can choose as a destination. Reference data, not
+-- seed: without it nobody can ask for a Campus Dash Partner. Identical to the
+-- block in 20261007000001_campus_places_and_additional_information.sql, and
+-- written so that running it on a database that already has the tree changes
+-- nothing.
+
+-- THE TREE ITSELF, written so that running it twice changes nothing.
+--
+-- A node that already exists under the same parent with the same name is
+-- REUSED, never duplicated — a hosted project whose administrator already
+-- typed in "Hostel A" keeps that row and every order pointing at it. A node
+-- that does not exist is created with an id derived from its parent and its
+-- name, so two environments built from empty agree on every id.
+--
+-- Anything active that is NOT in this list is switched off, not deleted. An
+-- order that named it keeps its foreign key and its readable label; it simply
+-- stops being offered to the next customer. Campus Dash does not invent places.
+create or replace function pg_temp.campus_place(
+  p_parent uuid, p_kind public.location_kind, p_name text, p_deliverable boolean, p_sort integer
+) returns uuid
+language plpgsql
+as $fn$
+declare
+  v_id uuid;
+begin
+  select id into v_id
+    from public.locations
+   where parent_id is not distinct from p_parent and lower(name) = lower(p_name);
+
+  if v_id is null then
+    insert into public.locations (id, parent_id, kind, name, is_deliverable, sort_order)
+    values (md5('campus-dash:location:' || coalesce(p_parent::text, '') || '/' || lower(p_name))::uuid,
+            p_parent, p_kind, p_name, p_deliverable, p_sort)
+    returning id into v_id;
+  else
+    update public.locations
+       set is_deliverable = p_deliverable, is_active = true, sort_order = p_sort
+     where id = v_id;
+  end if;
+
+  insert into pg_temp.campus_places (id) values (v_id) on conflict do nothing;
+  return v_id;
+end;
+$fn$;
+
+create temporary table if not exists campus_places (id uuid primary key);
+
+do $tree$
+declare
+  v_root   uuid;
+  v_block  uuid;
+  v_floor  uuid;
+  v_group  uuid;
+  v_hostel text;
+  v_letter text;
+  v_i      integer;
+  v_h      integer := 0;
+  v_f      integer;
+begin
+  -- The campus root: the existing one if an administrator already made it.
+  select id into v_root
+    from public.locations
+   where kind = 'CAMPUS' and parent_id is null
+   order by (lower(name) = 'academic city') desc, is_active desc, sort_order, created_at
+   limit 1;
+  if v_root is null then
+    v_root := pg_temp.campus_place(null, 'CAMPUS', 'Academic City', false, 0);
+  else
+    insert into pg_temp.campus_places (id) values (v_root) on conflict do nothing;
+  end if;
+
+  -- ACADEMIC BLOCK. A floor stands on its own; a room is optional precision.
+  v_block := pg_temp.campus_place(v_root, 'BLOCK', 'Academic Block', false, 10);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'Ground Floor', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'A1', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'A2', true, 2);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'A3', true, 3);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Make Lab', true, 4);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'First Floor', true, 2);
+  for v_i in 1..6 loop
+    perform pg_temp.campus_place(v_floor, 'ROOM', 'L' || v_i, true, v_i);
+  end loop;
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Computer Lab 1', true, 7);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Computer Lab 2', true, 8);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Library', true, 9);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'Second Floor', true, 3);
+  for v_i in 7..12 loop
+    perform pg_temp.campus_place(v_floor, 'ROOM', 'L' || v_i, true, v_i - 6);
+  end loop;
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Media Lab', true, 7);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Math Center', true, 8);
+
+  -- ADMINISTRATIVE BLOCK.
+  v_block := pg_temp.campus_place(v_root, 'BLOCK', 'Administrative Block', false, 20);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'Ground Floor', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'SCA', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Finance', true, 2);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Old Cafeteria', true, 3);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'First Floor', true, 2);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'IT Office', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Marketing & Admissions Office', true, 2);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Reception/Lounge', true, 3);
+  v_floor := pg_temp.campus_place(v_block, 'FLOOR', 'Second Floor', true, 3);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Registry Office', true, 1);
+  perform pg_temp.campus_place(v_floor, 'ROOM', 'Faculty Office', true, 2);
+
+  -- HOSTELS. The entrance is where somebody who just says "Hostel A" is met;
+  -- a floor stands on its own; a room is optional.
+  foreach v_hostel in array array['A', 'B'] loop
+    v_h := v_h + 1;
+    v_block := pg_temp.campus_place(v_root, 'BLOCK', 'Hostel ' || v_hostel, false, 30 + v_h);
+    perform pg_temp.campus_place(v_block, 'COMMON_AREA', 'Hostel ' || v_hostel || ' Entrance', true, 0);
+    v_f := 0;
+    foreach v_letter in array array['A', 'B', 'C', 'D'] loop
+      v_f := v_f + 1;
+      v_floor := pg_temp.campus_place(v_block, 'FLOOR', v_letter || ' Floor', true, v_f);
+      for v_i in 1..32 loop
+        perform pg_temp.campus_place(v_floor, 'ROOM', v_letter || v_i, true, v_i);
+      end loop;
+    end loop;
+  end loop;
+
+  -- LANDMARKS, grouped the way people describe them. The group is how the
+  -- picker files them; the place is what everybody reads.
+  v_group := pg_temp.campus_place(v_root, 'BLOCK', 'Sports & recreation', false, 40);
+  perform pg_temp.campus_place(v_group, 'FIELD', 'Football Field', true, 1);
+  perform pg_temp.campus_place(v_group, 'FIELD', 'Basketball Court', true, 2);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Slabs', true, 3);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Rec Center Top', true, 4);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Rec Center Down', true, 5);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Old Cafeteria', true, 6);
+
+  v_group := pg_temp.campus_place(v_root, 'BLOCK', 'Facilities', false, 50);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Wafflemania', true, 1);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Engineering Workshop', true, 2);
+
+  v_group := pg_temp.campus_place(v_root, 'BLOCK', 'Parking', false, 60);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Academic Block Car Park', true, 1);
+  perform pg_temp.campus_place(v_group, 'COMMON_AREA', 'Hostel Car Park', true, 2);
+
+  -- Everything else under this campus stops being offered.
+  update public.locations l
+     set is_active = false
+   where l.is_active
+     and l.id not in (select id from pg_temp.campus_places)
+     and l.id in (
+       with recursive below as (
+         select id from public.locations where parent_id = v_root
+         union all
+         select c.id from public.locations c join below b on c.parent_id = b.id
+       )
+       select id from below
+     );
+end;
+$tree$;
+
+drop function pg_temp.campus_place(uuid, public.location_kind, text, boolean, integer);
+drop table pg_temp.campus_places;
+
+
+-- ---------------------------------------------------------------------------
+-- Terms documents (version 1 was placeholder text; versions 2 and 3 are real)
 -- ---------------------------------------------------------------------------
 -- THESE ARE NOT LEGAL TERMS. They exist so the acceptance mechanism has
 -- something to present and record. Real text must come from a lawyer familiar
@@ -336,6 +499,115 @@ values
    'When these terms change, we publish a new version and ask you to accept it. The version you accepted, and when, is recorded.',
    "now"())
 ON CONFLICT ("audience", "version") DO NOTHING;
+
+-- Version 3: the same three documents, brought up to date with the product —
+-- Meal Scan handling, additional information, and when Paystack pays a store.
+-- From 20261007000002_terms_version_three.sql.
+insert into public.terms_documents (audience, version, title, body, published_at)
+values
+  ('CUSTOMER', 3, 'Campus Dash customer terms',
+   E'Campus Dash lets you order from stores around Academic City University and either collect your order yourself or have a Campus Dash Partner bring it to you on campus. These terms apply whenever you order.\n\n'
+   '## Your account\n'
+   'Customer accounts are for Academic City students and staff. You sign in with a code sent to your @acity.edu.gh address. One person, one account. The same account can also carry orders as a Partner or run a store.\n'
+   'Keep your phone number accurate. It is how a Partner reaches you when they arrive.\n\n'
+   '## Ordering\n'
+   'Stores set their own prices and decide what is available. You order from one store at a time. At checkout you choose to collect it yourself or to have a Campus Dash Partner bring it to you, and you see the full price before you pay.\n'
+   'If a Partner is bringing it, you choose where on campus from the list: a building, a floor, or a room if you want to be that precise. There is one optional box for additional information, such as "extra napkins" or "call when you arrive". The store and your Partner can read it.\n\n'
+   '## Prices and fees\n'
+   'Your total can include:\n'
+   '- the food, at the store''s price\n'
+   '- a Campus Dash service fee, shown as its own line\n'
+   '- the Campus Dash Partner fee, only if a Partner brings your order\n'
+   '- a pack fee on a Meal Scan order, when a pack is included\n'
+   'What you see at checkout is what you are charged. A later price change never changes an order you have already placed.\n\n'
+   '## Payment\n'
+   'You pay once, through Paystack, before the store sees your order. An order is only confirmed when Paystack confirms the payment to us. Coming back to Campus Dash from the payment page does not, on its own, confirm anything.\n'
+   'Until you pay, you can change how you get it or abandon the order. Nothing is charged for an order you abandon.\n\n'
+   '## Meal Scan orders\n'
+   'If a store accepts Meal Scans, you can pay for eligible items with your campus meal scan instead. The food is settled between you and the university, not by Campus Dash. You pay Campus Dash a flat service fee, the pack fee when a pack is included, and the Partner fee if a Partner brings it. A pack is optional when you collect and always included with a Partner.\n'
+   'The store checks your scan before preparing anything. If the store cannot accept it, the order is cancelled and you can place a new one. Upload only a scan that belongs to you. It is seen by you, the store and Campus Dash administrators, never by a Partner.\n\n'
+   '## Preparation and collection\n'
+   'Once your payment is confirmed, the store starts on your order. There is no separate step where the store accepts it. When the food is ready, the store marks it ready and you are told.\n'
+   'When you collect, the store reads you a 4-digit code at the counter. Enter it in Campus Dash to confirm you have your order.\n'
+   'When a Partner brings it, Campus Dash shows you a 4-digit code. Read it to your Partner only once your order is in your hands.\n'
+   'Too many wrong codes locks the code for a few minutes, for everybody, to stop guessing.\n\n'
+   '## Where you are\n'
+   'The place you choose is where your Partner comes. It stays as you chose it: Campus Dash does not track your location. If you move, call your Partner. Their number is on your order while they are carrying it.\n'
+   'If your Partner cannot reach you after waiting, they may record that you were not there, and Campus Dash will review what happens next.\n\n'
+   '## Cancellations and refunds\n'
+   'You cannot cancel an order once it is paid, and it is not refunded because you changed your mind.\n'
+   'A refund may apply when a paid order cannot be fulfilled, for example:\n'
+   '- the store cannot make your order\n'
+   '- your order never reached the store because of a problem on our side\n'
+   '- you were charged more than once for the same order\n'
+   'Refunds are not automatic. A person at Campus Dash reviews each case and, where a refund applies, returns what you paid for that order to your original payment method.\n'
+   'If something is wrong or missing, report it from the order or call us.\n\n'
+   '## What Campus Dash can and cannot do\n'
+   'Campus Dash works on campus only. Stores open and close when they choose, and Partners are students and staff who are available when they are. A Partner is never guaranteed: if none is found in time, you can collect your order yourself.\n\n'
+   '## Respect\n'
+   'Partners are students and staff helping the campus community. Treat them, and the people at every store, with respect. Campus Dash may restrict or suspend an account that abuses the service or the people in it.\n\n'
+   '## Your information\n'
+   'A store sees what you ordered and your additional information. It never sees where your order is going or your phone number. Your Partner sees your first name, where you chose, your additional information and your phone number, and only while they are carrying your order. Nobody is shown your surname.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish the new terms and ask you to accept them. What you accepted, and when, is recorded.',
+   now()),
+
+  ('VENDOR', 3, 'Campus Dash store terms',
+   E'Your store stays your business. Campus Dash brings you orders that are already paid for and, when a customer asks, a Campus Dash Partner to carry them. These terms apply when you run a store on Campus Dash.\n\n'
+   '## Your account and approval\n'
+   'You sign in with a code sent to your phone number. Keep that number working. One account runs one store.\n'
+   'A Campus Dash administrator reviews every store before it goes live, and may pause, restrict or suspend a store that does not keep to these terms.\n\n'
+   '## Your store and menu\n'
+   'You set your prices and choose what is available. Keep your menu accurate, mark items sold out when they are, and close the store when you are not taking orders.\n'
+   'Your store photos must be your own and must show your store or what you sell.\n'
+   'You are responsible for the food and goods you sell, for preparing them safely, and for any licence or permission your business needs.\n\n'
+   '## Orders\n'
+   'You only ever receive orders that have been paid for, so there is nothing to accept or reject. Start preparing when an order arrives, and mark it ready only when it is ready.\n'
+   'Read any additional information the customer left. It is usually about the food.\n'
+   'When somebody comes to collect, read them the 4-digit code shown on the order, whether they are the customer or a Campus Dash Partner. Hand the order over only once they have entered it.\n'
+   'If you cannot fulfil a paid order, tell Campus Dash straight away.\n\n'
+   '## Meal Scan orders\n'
+   'If your store accepts Meal Scans, you check each scan before preparing the food, and you only accept a scan you would accept at your counter. If you cannot accept it, say why: the order is cancelled. Campus Dash does not verify scans with the university.\n'
+   'The food on a Meal Scan order is settled between the student and the university, not by Campus Dash. When a pack is included, the pack fee is yours and you pack the order in it.\n\n'
+   '## Getting paid\n'
+   'You receive the full price of the food you sell through Campus Dash, and the pack fee on Meal Scan orders that include one. Campus Dash takes no commission from your prices. The customer pays the Campus Dash service fee and any Partner fee on top.\n'
+   'When you add your mobile money details under Getting paid, Campus Dash registers them with Paystack. From then on your share of each order is set aside for you by Paystack as the customer pays, and Paystack pays it into your account on the next working day. Weekends and Ghana public holidays are not working days, so sales from Friday to Sunday usually arrive on Monday morning. Campus Dash does not hold or send this money.\n'
+   'Until your details are registered, Campus Dash settles what you are owed directly. Keep your payout details accurate.\n'
+   'If an order is refunded because it could not be fulfilled, you are not owed that order, and an amount already paid to you for it may be recovered.\n\n'
+   '## Customer information\n'
+   'You see what was ordered and any additional information. You do not see where an order is going or the customer''s phone number. Do not try to collect customers'' personal details through Campus Dash.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish the new terms and ask you to accept them. What you accepted, and when, is recorded.',
+   now()),
+
+  ('PARTNER', 3, 'Campus Dash Partner terms',
+   E'Campus Dash Partners are students and staff who carry orders across campus, help the campus community and earn for doing it. These terms apply when you carry orders as a Partner.\n\n'
+   '## Becoming a Partner\n'
+   'You apply from your customer account with a photo of your student or staff ID. A Campus Dash administrator reviews every application. Being a Partner is part of your one Campus Dash account, not a separate one.\n'
+   'You are an independent Partner, not an employee of Campus Dash or of any store. You choose when you are available and which orders you take.\n\n'
+   '## Taking and carrying orders\n'
+   'Before you take an order, you see the store, the building and floor it is going to, and what you earn. Once you take it, you also see the exact place the customer chose, their first name, any additional information they left, and their phone number.\n'
+   'You may carry more than one order at a time, up to the limit Campus Dash sets. You cannot carry your own order, or an order from a store you own.\n'
+   'Collect only once the store has marked the order ready. At the store, enter the 4-digit code the store reads out to you. At the destination, enter the 4-digit code the customer reads out to you. Never ask a customer for their code before they have their order.\n'
+   'If the customer has moved, call them. If you cannot find them, wait for the time shown in the app and try to call before recording that they were not there.\n'
+   'If you cannot finish an order you have taken, release it in the app as early as you can so another Partner can take it.\n\n'
+   '## Customer information\n'
+   'A customer''s phone number is shown to you only while you are carrying their order, and only so you can reach them about it. Do not save it, share it or use it for anything else. You never see a customer''s Meal Scan.\n\n'
+   '## Earnings\n'
+   'You earn the Campus Dash Partner fee, currently GH₵5, for each order you complete.\n'
+   'Earnings are paid weekly to your mobile money account once your available balance reaches GH₵20. A smaller balance carries forward to the next week. Keep your payout details accurate.\n\n'
+   '## Conduct\n'
+   'Handle every order with care, keep food sealed, and treat customers and store staff with respect. Customers may rate completed deliveries. Campus Dash may restrict or suspend a Partner who does not keep to these terms.\n\n'
+   '## Contact\n'
+   'Call Campus Dash on 0531275217 or 0594667183.\n\n'
+   '## Changes\n'
+   'When these terms change, we publish the new terms and ask you to accept them. What you accepted, and when, is recorded.',
+   now())
+on conflict (audience, version) do nothing;
 
 
 -- ============================================================================

@@ -277,8 +277,12 @@ redirect checkout — see `docs/PAYMENTS.md`. Money OUT stays shut until
   `/login/admin`, which is deliberately not linked from any public page.
   Ordering additionally requires customer sign-up at `/signup`.
   **The vendor door is for accounts that exist**: `/login/vendor` asks
-  `phone_can_sign_in_as_vendor()` before sending anything, so it cannot be used
-  to text an arbitrary number or provision an identity with no store.
+  `vendor_phone_sign_in_status()` before sending anything, so it cannot be used
+  to text an arbitrary number, provision an identity with no store, or sign
+  somebody into an identity that holds the number and owns nothing. It answers
+  against `auth.users`, which is the table GoTrue resolves a phone OTP against —
+  `public.users.phone` is a profile field and the two genuinely disagree after a
+  phone collision.
   Registration at `/vendor/signup` is the other door and is unchanged.
 - A customer's phone number is a PROFILE FIELD, not a credential: it is the
   number a Partner rings on arrival. A vendor's phone number IS the credential.

@@ -38,7 +38,7 @@ export default async function AdminOrderPage({ params }) {
   if (!money) notFound();
 
   const supabase = await createClient();
-  const [{ data: order }, { data: events }, { data: items }] = await Promise.all([
+  const [{ data: order }, { data: events }, { data: items }, { data: note }] = await Promise.all([
     supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
     supabase
       .from('order_events')
@@ -49,6 +49,8 @@ export default async function AdminOrderPage({ params }) {
       .from('order_items')
       .select('name_snapshot, unit_price_pesewas, quantity, line_total_pesewas')
       .eq('order_id', orderId),
+    // Order information, the customer's note for the store.
+    supabase.from('order_notes').select('body').eq('order_id', orderId).maybeSingle(),
   ]);
 
   if (!order) notFound();
@@ -127,7 +129,8 @@ export default async function AdminOrderPage({ params }) {
               destination ?? (order.fulfilment_type === 'PICKUP' ? 'Collected in person' : '-')
             }
           />
-          <Fact label="Destination note" value={order.destination_note} />
+          <Fact label="Order information" value={note?.body ?? scan?.details} />
+          <Fact label="Additional information" value={order.destination_note} />
           <Fact label="Partner" value={money.partner_name ?? 'none assigned'} />
           <Fact label="Placed" value={when(order.created_at)} />
           <Fact label="Completed" value={when(order.completed_at)} />

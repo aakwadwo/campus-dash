@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 import { STAGE, LIVE_STAGES } from './stage';
 import { Money, ImagePlaceholder, ChevronRightIcon } from '../ui';
@@ -25,11 +26,11 @@ export default function OrderRow({ order, imageUrl = null }) {
       className="press-sm hover:bg-surface-2 -mx-2 flex items-center gap-3.5 rounded-xl px-2 py-3 transition-colors"
     >
       {imageUrl ? (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
+        <Image
           src={imageUrl}
           alt=""
-          loading="lazy"
+          width={56}
+          height={56}
           className="rounded-input bg-surface-2 size-14 shrink-0 object-cover"
         />
       ) : (

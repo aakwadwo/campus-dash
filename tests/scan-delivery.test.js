@@ -196,6 +196,17 @@ describe('meal scans', () => {
     );
   }
 
+  /** The store says the Meal Scan is not valid. Irreversible, and it cancels. */
+  async function refuseAs(staff, orderId, reason) {
+    return asUser(
+      staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_refuse_scan($1, $2)', [orderId, reason]))
+          .rows[0],
+      { commit: true }
+    );
+  }
+
   async function markReadyAs(staff, orderId) {
     return asUser(
       staff,
@@ -394,7 +405,13 @@ describe('meal scans', () => {
       assert.match(error.message, /cannot be paid for with a meal scan/i);
     });
 
-    test('marking an item ineligible takes it off the scan menu immediately', async () => {
+    /**
+     * THE CHECKOUT READS THE ORDINARY MENU NOW. There is no scan_menu(): a
+     * Meal Scan is a switch on the store's own checkout, so the storefront
+     * read carries scan_eligible and the screen marks the lines the store will
+     * not honour one for. price_scan_order() is still the enforcement.
+     */
+    test('marking an item ineligible stops it being paid for with a Meal Scan', async () => {
       await asService((c) =>
         c.query('update public.menu_items set scan_eligible = false where id = $1', [
           SCAN_MENU.waffle,
@@ -403,11 +420,16 @@ describe('meal scans', () => {
 
       const menu = await asAnon(
         async (c) =>
-          (await c.query('select * from public.scan_menu($1)', [VENDORS.wafflemania])).rows
+          (
+            await c.query('select id, scan_eligible from public.menu_items where vendor_id = $1', [
+              VENDORS.wafflemania,
+            ])
+          ).rows
       );
       assert.equal(
-        menu.some((item) => item.id === SCAN_MENU.waffle),
-        false
+        menu.find((item) => item.id === SCAN_MENU.waffle)?.scan_eligible,
+        false,
+        'the storefront read says so, so the checkout can mark it'
       );
 
       const error = await expectRejection(quoteScan());
@@ -441,26 +463,37 @@ describe('meal scans', () => {
       assert.match(error.message, /no Partners are available/i);
     });
 
-    test('only stores with something eligible are listed', async () => {
-      const listed = await asAnon(
-        async (c) => (await c.query('select * from public.scan_restaurants()')).rows
+    /**
+     * A MEAL SCAN IS NOT A PLACE TO GO. The separate catalogue is gone: a
+     * customer browses the one list of stores, and a store that takes a Meal
+     * Scan says so on its own page. can_accept_scans is what the storefront
+     * reads, and an administrator is the only one who sets it.
+     */
+    test('the browsing mode is gone, and the store flag is what is left', async () => {
+      const listed = await asService(
+        async (c) =>
+          (
+            await c.query(
+              `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = 'public'
+                  and p.proname in ('scan_restaurants', 'scan_menu')`
+            )
+          ).rows
       );
-      const ids = listed.map((r) => r.id);
-      assert.ok(ids.includes(VENDORS.wafflemania));
-      assert.ok(ids.includes(VENDORS.yellowBar));
-      assert.equal(ids.includes(VENDORS.one), false, 'an ordinary store is not a scan store');
+      assert.deepEqual(listed, [], 'no scan catalogue, no scan menu');
 
-      // A store that takes scans but has marked nothing is a dead end, and
-      // listing it only sends somebody to an empty menu to find that out.
-      await asService((c) =>
-        c.query('update public.menu_items set scan_eligible = false where vendor_id = $1', [
-          VENDORS.yellowBar,
-        ])
+      const storefront = await asAnon(
+        async (c) =>
+          (await c.query('select * from public.storefront_vendor($1)', [VENDORS.wafflemania]))
+            .rows[0]
       );
-      const after = await asAnon(
-        async (c) => (await c.query('select * from public.scan_restaurants()')).rows
+      assert.equal(storefront.can_accept_scans, true, 'the store page says Meal Scan accepted');
+
+      const ordinary = await asAnon(
+        async (c) =>
+          (await c.query('select * from public.storefront_vendor($1)', [VENDORS.one])).rows[0]
       );
-      assert.equal(after.map((r) => r.id).includes(VENDORS.yellowBar), false);
+      assert.equal(ordinary.can_accept_scans, false, 'and an ordinary store does not');
     });
   });
 
@@ -569,7 +602,11 @@ describe('meal scans', () => {
 
         order = await getOrder(orderId);
         assert.equal(order.order_status, 'PREPARING', 'the store has it');
-        assert.equal(order.delivery_status, 'SEARCHING', 'and dispatch opened at payment');
+        assert.equal(
+          order.delivery_status,
+          'NONE',
+          'and NOBODY is being looked for yet — the store checks the scan first'
+        );
 
         // AT PAYMENT: the pack to the store, everything else held by the
         // platform until a Partner earns their part of it.
@@ -578,16 +615,19 @@ describe('meal scans', () => {
         );
         assert.deepEqual(paid, { VENDOR: PACK_FEE, PLATFORM: SCAN_FEE + PARTNER_FEE });
 
+        // THE STORE VERIFIES, not the Partner — and approving is what opens
+        // the search.
+        assert.equal((await redeemAs(staff, orderId)).success, true);
+        order = await getOrder(orderId);
+        assert.equal(order.scan_status, 'REDEEMED');
+        assert.equal(order.delivery_status, 'SEARCHING', 'approval opened dispatch');
+
         const accepted = await acceptAs(ACTORS.partnerYaw, orderId);
         assert.equal(accepted.success, true);
 
         order = await getOrder(orderId);
         assert.equal(order.delivery_status, 'ASSIGNED');
-        assert.equal(order.scan_status, 'RELEASED', 'assignment releases the scan to that Partner');
-
-        // THE STORE VERIFIES, not the Partner.
-        assert.equal((await redeemAs(staff, orderId)).success, true);
-        assert.equal((await getOrder(orderId)).scan_status, 'REDEEMED');
+        assert.equal(order.scan_status, 'REDEEMED', 'and the Partner changed nothing about it');
 
         assert.equal((await markReadyAs(staff, orderId)).success, true);
 
@@ -854,6 +894,188 @@ describe('meal scans', () => {
       assert.match(ready.reason, /check the meal scan/i);
     });
 
+    /**
+     * AN INVALID MEAL SCAN ENDS THE ORDER, and that is the change.
+     *
+     * It used to set scan_status = REFUSED and stop there, leaving the order
+     * PREPARING — a state where the store had said it would not honour the
+     * entitlement and could still press Ready on the food, and where a Partner
+     * already carrying it went on carrying it.
+     */
+    test('marking it invalid cancels the order outright', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+
+      const refused = await refuseAs(ACTORS.wafflemaniaStaff, orderId, 'Already used today');
+      assert.equal(refused.success, true);
+
+      const order = await getOrder(orderId);
+      assert.equal(order.scan_status, 'REFUSED');
+      assert.equal(order.order_status, 'CANCELLED_BY_VENDOR', 'there is nothing left to prepare');
+      assert.ok(order.cancelled_at);
+      assert.match(order.cancellation_reason, /could not accept this Meal Scan/i);
+      assert.equal(order.delivery_status, 'NONE', 'and nobody is being sent');
+    });
+
+    test('nothing can be done with the order afterwards', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+      await refuseAs(ACTORS.wafflemaniaStaff, orderId, 'blurred');
+
+      const ready = await markReadyAs(ACTORS.wafflemaniaStaff, orderId);
+      assert.equal(ready.success, false, 'the store cannot mark it ready');
+
+      const redeemed = await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+      assert.equal(redeemed.success, false, 'and cannot change its mind');
+
+      const accepted = await acceptAs(ACTORS.partnerYaw, orderId);
+      assert.equal(accepted.success, false, 'and no Partner can take it');
+
+      assert.equal((await getOrder(orderId)).order_status, 'CANCELLED_BY_VENDOR');
+    });
+
+    /**
+     * NO SECOND SCAN ON A PAID ORDER. That would be a second entitlement
+     * against one payment, and there is deliberately no function for it: the
+     * row is keyed on the order and nobody but the service role may write it.
+     */
+    test('the customer cannot attach another Meal Scan to the same order', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+      await refuseAs(ACTORS.wafflemaniaStaff, orderId, 'not readable');
+
+      const writes = [
+        [
+          'update public.order_scans set image_path = $2 where order_id = $1',
+          [orderId, `${ACTORS.customerAma}/scans/second.jpg`],
+        ],
+        [
+          `insert into public.order_scans (order_id, customer_id, image_path, content_type, byte_size)
+             values ($1, $2, $3, 'image/jpeg', 100)`,
+          [orderId, ACTORS.customerAma, `${ACTORS.customerAma}/scans/second.jpg`],
+        ],
+      ];
+
+      for (const [sql, params] of writes) {
+        const error = await expectRejection(
+          asUser(ACTORS.customerAma, (c) => c.query(sql, params))
+        );
+        assert.match(error.message, /permission denied/i, sql);
+      }
+
+      // And there is no RPC that would do it for them.
+      const functions = await asService(
+        async (c) =>
+          (
+            await c.query(
+              `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = 'public'
+                  and (p.proname ilike '%replace%scan%' or p.proname ilike '%scan%replace%'
+                       or p.proname ilike '%retry%scan%' or p.proname ilike '%reupload%')`
+            )
+          ).rows
+      );
+      assert.deepEqual(functions, [], 'no replace-the-scan path exists');
+    });
+
+    test('the store must say why, and a blank reason changes nothing', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+
+      for (const reason of ['', '   ', null]) {
+        const result = await refuseAs(ACTORS.wafflemaniaStaff, orderId, reason);
+        assert.equal(result.success, false);
+        assert.match(result.reason, /say why/i);
+      }
+
+      const order = await getOrder(orderId);
+      assert.equal(order.scan_status, 'UPLOADED', 'the scan is untouched');
+      assert.equal(order.order_status, 'PREPARING', 'and so is the order');
+    });
+
+    test('a scan already approved cannot then be marked invalid', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+      await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+
+      const late = await refuseAs(ACTORS.wafflemaniaStaff, orderId, 'changed my mind');
+      assert.equal(late.success, false);
+      assert.equal((await getOrder(orderId)).scan_status, 'REDEEMED');
+      assert.equal((await getOrder(orderId)).order_status, 'PREPARING');
+    });
+
+    test('another store cannot mark somebody else’s Meal Scan invalid', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+
+      const error = await expectRejection(
+        asUser(ACTORS.vendor1Staff, (c) =>
+          c.query('select * from public.vendor_refuse_scan($1, $2)', [orderId, 'mine now'])
+        )
+      );
+      assert.match(error.message, /not authorised/i);
+      assert.equal((await getOrder(orderId)).scan_status, 'UPLOADED');
+    });
+
+    /**
+     * THE PIPELINE THE CUSTOMER READS. Every one of these comes from
+     * customer_order_stage(), which now sees the order type and the scan too —
+     * without them a paid Meal Scan read "Being prepared" through the whole
+     * verification wait, and a refused one read "Cancelled".
+     */
+    test('the customer’s stage follows the Meal Scan through', async () => {
+      const { order_id: orderId } = await submitScan();
+
+      const stageOf = (id) =>
+        asUser(
+          ACTORS.customerAma,
+          async (c) =>
+            (await c.query('select * from public.customer_order_detail($1)', [id])).rows[0].stage
+        );
+
+      assert.equal(await stageOf(orderId), 'PAYMENT_REQUIRED', '1. submitted, not yet paid');
+
+      await payScan(orderId);
+      assert.equal(await stageOf(orderId), 'SCAN_AWAITING_CHECK', '2-3. paid, awaiting the store');
+
+      await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+      assert.equal(
+        await stageOf(orderId),
+        'PREPARING_SEARCHING',
+        '4-6. approved, being made, and a Partner is being found'
+      );
+
+      await acceptAs(ACTORS.partnerYaw, orderId);
+      assert.equal(await stageOf(orderId), 'PREPARING_PARTNER_ASSIGNED');
+
+      await markReadyAs(ACTORS.wafflemaniaStaff, orderId);
+      assert.equal(await stageOf(orderId), 'PARTNER_ASSIGNED', '7-8. ready, Partner collecting');
+    });
+
+    test('an invalid Meal Scan reads as itself, not as a cancellation', async () => {
+      const { order_id: orderId } = await submitScan();
+      await payScan(orderId);
+      await refuseAs(ACTORS.wafflemaniaStaff, orderId, 'Already used today');
+
+      const view = await asUser(
+        ACTORS.customerAma,
+        async (c) =>
+          (await c.query('select * from public.customer_order_detail($1)', [orderId])).rows[0]
+      );
+      assert.equal(view.stage, 'SCAN_INVALID');
+      assert.match(view.cancellation_reason, /Meal Scan/i);
+      // THE WAY BACK. The screen offers "Order again" at this store, so the id
+      // has to be on the customer's own order.
+      assert.equal(view.vendor_id, VENDORS.wafflemania);
+
+      const listed = await asUser(ACTORS.customerAma, async (c) =>
+        (await c.query('select * from public.customer_order_list(30)')).rows.find(
+          (r) => r.order_id === orderId
+        )
+      );
+      assert.equal(listed.stage, 'SCAN_INVALID', 'and the history says the same thing');
+    });
+
     test('refusing without a reason is refused', async () => {
       const { order_id: orderId } = await submitScan();
       await payScan(orderId);
@@ -897,8 +1119,9 @@ describe('meal scans', () => {
     test('a provider fee cannot be deducted from anyone’s entitlement', async () => {
       const { order_id: orderId } = await submitScan();
       await payScan(orderId);
-      await acceptAs(ACTORS.partnerYaw, orderId);
+      // APPROVAL FIRST, always: it is what opens the search.
       await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+      await acceptAs(ACTORS.partnerYaw, orderId);
       await markReadyAs(ACTORS.wafflemaniaStaff, orderId);
       await asUser(
         ACTORS.partnerYaw,
@@ -968,9 +1191,59 @@ describe('meal scans', () => {
   // =========================================================================
   // DISPATCH
   // =========================================================================
-  test('two Partners race and exactly one is assigned the scan', async () => {
+  /**
+   * APPROVAL IS THE GATE, and this is the whole of it.
+   *
+   * Paying for a Meal Scan order used to open the search, so Partners were
+   * offered a job whose entitlement nobody had looked at — and which the store
+   * might be about to refuse, cancelling the order under them. The store looks
+   * first now, and vendor_redeem_scan() is the only statement that opens a scan
+   * order's search.
+   */
+  test('paying does NOT open dispatch on a Meal Scan order', async () => {
     const { order_id: orderId } = await submitScan();
     await payScan(orderId);
+
+    const order = await getOrder(orderId);
+    assert.equal(order.order_status, 'PREPARING', 'the store has it');
+    assert.equal(order.delivery_status, 'NONE', 'and nobody is being looked for yet');
+    assert.equal(order.search_deadline_at, null);
+  });
+
+  test('a Partner cannot be assigned before the store approves the scan', async () => {
+    const { order_id: orderId } = await submitScan();
+    await payScan(orderId);
+
+    const early = await acceptAs(ACTORS.partnerYaw, orderId);
+    assert.equal(early.success, false, 'there is nothing to accept');
+
+    const order = await getOrder(orderId);
+    assert.equal(order.partner_id, null);
+    assert.equal(order.delivery_status, 'NONE');
+  });
+
+  test('a paid scan order is not in the offer pool until it is approved', async () => {
+    const { order_id: orderId } = await submitScan();
+    await payScan(orderId);
+
+    const offered = (partner) =>
+      asUser(partner, async (c) =>
+        (await c.query('select order_id from public.get_delivery_offers()')).rows.map(
+          (r) => r.order_id
+        )
+      );
+
+    assert.equal((await offered(ACTORS.partnerYaw)).includes(orderId), false, 'before approval');
+    await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+    assert.equal((await offered(ACTORS.partnerYaw)).includes(orderId), true, 'after it');
+  });
+
+  test('approving opens the search, and two Partners race for exactly one slot', async () => {
+    const { order_id: orderId } = await submitScan();
+    await payScan(orderId);
+    await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+
+    assert.equal((await getOrder(orderId)).delivery_status, 'SEARCHING');
 
     const [first, second] = await Promise.all([
       acceptAs(ACTORS.partnerYaw, orderId),
@@ -981,20 +1254,22 @@ describe('meal scans', () => {
     assert.equal(wins, 1, 'exactly one acceptance wins');
   });
 
-  test('accepting does not redeem the scan, and does not collect it', async () => {
+  test('accepting does not collect it, and touches the scan not at all', async () => {
     const { order_id: orderId } = await submitScan();
     await payScan(orderId);
+    await redeemAs(ACTORS.wafflemaniaStaff, orderId);
     await acceptAs(ACTORS.partnerYaw, orderId);
 
     const order = await getOrder(orderId);
-    assert.equal(order.scan_status, 'RELEASED', 'released to read, not redeemed');
+    assert.equal(order.scan_status, 'REDEEMED', 'the store settled it, not the Partner');
     assert.equal(order.delivery_status, 'ASSIGNED');
     assert.notEqual(order.delivery_status, 'PICKED_UP');
   });
 
-  test('a Partner cannot collect before the store has verified and marked it ready', async () => {
+  test('a Partner cannot collect before the store has marked it ready', async () => {
     const { order_id: orderId } = await submitScan();
     await payScan(orderId);
+    await redeemAs(ACTORS.wafflemaniaStaff, orderId);
     await acceptAs(ACTORS.partnerYaw, orderId);
 
     const early = await asUser(
@@ -1008,9 +1283,10 @@ describe('meal scans', () => {
     assert.match(early.reason, /not ready yet/i);
   });
 
-  test('when the search expires the scan is NOT marked redeemed', async () => {
+  test('when the search expires the scan stays exactly as the store left it', async () => {
     const { order_id: orderId } = await submitScan();
     await payScan(orderId);
+    await redeemAs(ACTORS.wafflemaniaStaff, orderId);
 
     await asService((c) =>
       c.query(
@@ -1022,7 +1298,7 @@ describe('meal scans', () => {
 
     const order = await getOrder(orderId);
     assert.equal(order.delivery_status, 'FAILED_NO_PARTNER');
-    assert.equal(order.scan_status, 'UPLOADED', 'nobody redeemed anything');
+    assert.equal(order.scan_status, 'REDEEMED', 'nobody un-approved anything');
   });
 
   // =========================================================================
@@ -1056,24 +1332,25 @@ describe('meal scans', () => {
       );
     });
 
-    test('the assigned Partner can read it, and an unassigned one cannot', async () => {
+    test('the assigned Partner cannot read it either', async () => {
       const { order_id: orderId } = await submitScan();
       await payScan(orderId);
+      await redeemAs(ACTORS.wafflemaniaStaff, orderId);
       await acceptAs(ACTORS.partnerYaw, orderId);
 
-      assert.equal(await pathAs(ACTORS.partnerYaw, orderId), scanPath());
       assert.equal(
-        await pathAs(ACTORS.partnerAdjoa, orderId),
+        await pathAs(ACTORS.partnerYaw, orderId),
         null,
-        'Partner B never gets what Partner A was assigned'
+        'the store already judged it; the Partner only carries the food'
       );
+      assert.equal(await pathAs(ACTORS.partnerAdjoa, orderId), null);
     });
 
-    test('a Partner loses the scan the moment the assignment does', async () => {
+    test('reassignment changes nothing, because nobody had it', async () => {
       const { order_id: orderId } = await submitScan();
       await payScan(orderId);
+      await redeemAs(ACTORS.wafflemaniaStaff, orderId);
       await acceptAs(ACTORS.partnerYaw, orderId);
-      assert.equal(await pathAs(ACTORS.partnerYaw, orderId), scanPath());
 
       await asUser(
         ACTORS.admin,
@@ -1085,12 +1362,10 @@ describe('meal scans', () => {
         { commit: true }
       );
 
-      assert.equal(
-        await pathAs(ACTORS.partnerYaw, orderId),
-        null,
-        'the previous Partner keeps nothing'
-      );
-      assert.equal((await getOrder(orderId)).scan_status, 'UPLOADED');
+      assert.equal(await pathAs(ACTORS.partnerYaw, orderId), null);
+      // THE APPROVAL STANDS. A scan the store has already honoured is not
+      // un-honoured by a Partner dropping the job; the food is still made.
+      assert.equal((await getOrder(orderId)).scan_status, 'REDEEMED');
     });
 
     test('an administrator can read it', async () => {
@@ -1147,24 +1422,20 @@ describe('meal scans', () => {
     });
 
     /**
-     * THE WINDOW CLOSES AT THE END OF THE DELIVERY, not merely when the
-     * assignment is taken away.
+     * A PARTNER NEVER READS A MEAL SCAN, AT ANY POINT.
      *
-     * released_to is revoked by release_scan_on_assignment(), which fires when
-     * partner_id goes null — a cancellation or a reassignment. It does NOT fire
-     * at completion, because partner_complete_delivery() keeps partner_id for
-     * the earnings row and the Partner's own history. So `released_to =
-     * auth.uid()` stayed true for ever after a delivery, and every reader that
-     * authorised on it alone handed the scan back indefinitely.
+     * There used to be a window here — released on assignment, shut at the end
+     * of the delivery — because the Partner carried the entitlement to a
+     * counter that had never seen the order. The store verifies it on its own
+     * board now, BEFORE dispatch even opens, so a Partner holding a link to
+     * somebody's meal entitlement is exposure with nothing on the other side
+     * of it. The right was removed rather than narrowed.
      *
-     * partner_may_read_scan() asks the other question — released to you AND
-     * still carrying it — and both readers ask it: scan_image_path() and the
-     * order_scans policy. The policy matters as much as the function, because
-     * `authenticated` holds SELECT on order_scans and a finished Partner could
-     * otherwise read image_path straight off the table without calling
-     * anything.
+     * Both doors are checked at every point in the delivery, because
+     * `authenticated` holds SELECT on order_scans and a function that returns
+     * null means nothing if the row can be read straight off the table.
      */
-    describe('the Partner’s window', () => {
+    describe('the Partner has no window', () => {
       const rowsFor = (userId, orderId) =>
         asUser(
           userId,
@@ -1172,7 +1443,7 @@ describe('meal scans', () => {
             (await c.query('select * from public.order_scans where order_id = $1', [orderId])).rows
         );
 
-      /** Both doors at once: nothing is closed unless the row is closed too. */
+      /** Both doors at once: the function, and the table behind it. */
       async function readsFor(userId, orderId) {
         return {
           path: await pathAs(userId, orderId),
@@ -1180,11 +1451,17 @@ describe('meal scans', () => {
         };
       }
 
+      const shut = async (userId, orderId, when) => {
+        const seen = await readsFor(userId, orderId);
+        assert.deepEqual(seen, { path: null, rows: 0 }, when);
+      };
+
+      /** Paid, approved by the store, accepted, collected. */
       async function carriedToPickedUp() {
         const { order_id: orderId } = await submitScan();
         await payScan(orderId);
-        await acceptAs(ACTORS.partnerYaw, orderId);
         await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+        await acceptAs(ACTORS.partnerYaw, orderId);
         await markReadyAs(ACTORS.wafflemaniaStaff, orderId);
 
         const collected = await asUser(
@@ -1198,57 +1475,33 @@ describe('meal scans', () => {
             ).rows[0],
           { commit: true }
         );
-        assert.equal(collected.success, true);
+        assert.equal(collected.success, true, 'the Partner is carrying it');
         return orderId;
       }
 
-      test('ASSIGNED: the carrying Partner reads the scan and its row', async () => {
+      test('SEARCHING: an offer carries no scan', async () => {
         const { order_id: orderId } = await submitScan();
         await payScan(orderId);
+        await redeemAs(ACTORS.wafflemaniaStaff, orderId);
+        await shut(ACTORS.partnerYaw, orderId, 'before accepting');
+      });
+
+      test('ASSIGNED: the carrying Partner still reads nothing', async () => {
+        const { order_id: orderId } = await submitScan();
+        await payScan(orderId);
+        await redeemAs(ACTORS.wafflemaniaStaff, orderId);
         await acceptAs(ACTORS.partnerYaw, orderId);
 
-        assert.equal((await getOrder(orderId)).delivery_status, 'ASSIGNED');
-        assert.deepEqual(await readsFor(ACTORS.partnerYaw, orderId), {
-          path: scanPath(),
-          rows: 1,
-        });
+        await shut(ACTORS.partnerYaw, orderId, 'assigned');
+        await shut(ACTORS.partnerAdjoa, orderId, 'and neither does anybody else');
       });
 
-      test('PICKED_UP: still open — they are holding the food', async () => {
+      test('PICKED_UP: holding the food changes nothing', async () => {
         const orderId = await carriedToPickedUp();
-
-        assert.equal((await getOrder(orderId)).delivery_status, 'PICKED_UP');
-        assert.deepEqual(await readsFor(ACTORS.partnerYaw, orderId), {
-          path: scanPath(),
-          rows: 1,
-        });
+        await shut(ACTORS.partnerYaw, orderId, 'carrying it');
       });
 
-      test('DELIVERED: shut, through the function AND the table', async () => {
-        const orderId = await carriedToPickedUp();
-
-        const done = await asUser(
-          ACTORS.partnerYaw,
-          async (c) =>
-            (
-              await c.query('select * from public.partner_complete_delivery($1, $2)', [
-                orderId,
-                await deliveryCode(orderId),
-              ])
-            ).rows[0],
-          { commit: true }
-        );
-        assert.equal(done.success, true);
-        assert.equal((await getOrder(orderId)).delivery_status, 'DELIVERED');
-
-        assert.deepEqual(
-          await readsFor(ACTORS.partnerYaw, orderId),
-          { path: null, rows: 0 },
-          'the errand is over, so the authorisation is too'
-        );
-      });
-
-      test('and the record of what happened survives being shut out', async () => {
+      test('DELIVERED: still nothing', async () => {
         const orderId = await carriedToPickedUp();
         await asUser(
           ACTORS.partnerYaw,
@@ -1259,82 +1512,76 @@ describe('meal scans', () => {
             ]),
           { commit: true }
         );
-
-        // THE FIX IS NOT "FORGET WHO IT WAS". partner_id is what the earnings
-        // row, the payout and the Partner's history all hang off, and
-        // released_to records a thing that genuinely happened. Both are still
-        // here; what changed is the question the readers ask about them.
-        assert.equal(
-          (await getOrder(orderId)).partner_id,
-          ACTORS.partnerYaw,
-          'the delivery is still theirs on the books'
-        );
-        assert.equal(
-          (
-            await asService(
-              async (c) =>
-                await c.query('select released_to from public.order_scans where order_id = $1', [
-                  orderId,
-                ])
-            )
-          ).rows[0].released_to,
-          ACTORS.partnerYaw,
-          'and the release is still recorded'
-        );
+        await shut(ACTORS.partnerYaw, orderId, 'after delivering');
       });
 
-      test('cancelling hands it back immediately, before any of that', async () => {
+      /**
+       * THE RELEASE MACHINERY IS GONE, not merely unused. A trigger that
+       * nobody calls is a trigger somebody re-wires; the function and its
+       * trigger are dropped, so the only way back is a migration that says so.
+       */
+      test('nothing releases a scan to anybody any more', async () => {
         const { order_id: orderId } = await submitScan();
         await payScan(orderId);
+        await redeemAs(ACTORS.wafflemaniaStaff, orderId);
         await acceptAs(ACTORS.partnerYaw, orderId);
-        assert.equal((await pathAs(ACTORS.partnerYaw, orderId)).length > 0, true);
 
-        const cancelled = await asUser(
-          ACTORS.partnerYaw,
+        const row = await asService(
           async (c) =>
             (
-              await c.query('select * from public.partner_cancel_delivery($1, $2)', [
-                orderId,
-                'changed my mind',
-              ])
-            ).rows[0],
-          { commit: true }
+              await c.query(
+                'select released_to, released_at from public.order_scans where order_id = $1',
+                [orderId]
+              )
+            ).rows[0]
         );
-        assert.equal(cancelled.success, true);
+        assert.equal(row.released_to, null, 'assignment releases nothing');
+        assert.equal(row.released_at, null);
 
-        assert.deepEqual(await readsFor(ACTORS.partnerYaw, orderId), { path: null, rows: 0 });
+        const gone = await asService(
+          async (c) =>
+            (
+              await c.query(
+                `select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname in ('release_scan_on_assignment',
+                                      'partner_may_read_scan',
+                                      'partner_scan_brief')`
+              )
+            ).rows
+        );
+        assert.deepEqual(gone, [], 'and the functions behind it do not exist');
       });
 
-      test('a Partner who never held it gets nothing at any point', async () => {
+      /**
+       * The AUDIT survives. What was withdrawn is the ability to fetch an
+       * image, never the record of what happened to the entitlement.
+       */
+      test('the record of what happened is untouched', async () => {
         const orderId = await carriedToPickedUp();
-        assert.deepEqual(await readsFor(ACTORS.partnerAdjoa, orderId), { path: null, rows: 0 });
+
+        const row = await asService(
+          async (c) =>
+            (
+              await c.query(
+                'select redeemed_at, redeemed_by from public.order_scans where order_id = $1',
+                [orderId]
+              )
+            ).rows[0]
+        );
+        assert.ok(row.redeemed_at, 'the store redeemed it and that is written down');
+        assert.equal(row.redeemed_by, ACTORS.wafflemaniaStaff);
       });
 
       test('the customer and an administrator are untouched by all of it', async () => {
         const orderId = await carriedToPickedUp();
-        await asUser(
-          ACTORS.partnerYaw,
-          async (c) =>
-            c.query('select * from public.partner_complete_delivery($1, $2)', [
-              orderId,
-              await deliveryCode(orderId),
-            ]),
-          { commit: true }
-        );
 
-        // NOT A NARROWING FOR ANYBODY ELSE. The scan is the customer's own
-        // document and an admin resolves disputes about it long after delivery.
-        assert.deepEqual(await readsFor(ACTORS.customerAma, orderId), {
-          path: scanPath(),
-          rows: 1,
-        });
-        assert.deepEqual(await readsFor(ACTORS.admin, orderId), { path: scanPath(), rows: 1 });
-
-        // And a signed-out caller still cannot reach the function at all.
-        const error = await expectRejection(
-          asAnon((c) => c.query('select public.scan_image_path($1)', [orderId]))
+        assert.equal(
+          (await readsFor(ACTORS.customerAma, orderId)).path,
+          scanPath(ACTORS.customerAma),
+          'their own scan, always'
         );
-        assert.match(error.message, /permission denied|does not exist/i);
+        assert.equal((await readsFor(ACTORS.admin, orderId)).rows, 1);
       });
     });
   });
@@ -1382,8 +1629,8 @@ describe('meal scans', () => {
     });
 
     test('a note longer than the column allows is refused', async () => {
-      const error = await expectRejection(submitScan({ details: 'x'.repeat(1001) }));
-      assert.match(error.message, /under 1000 characters/i);
+      const error = await expectRejection(submitScan({ details: 'x'.repeat(281) }));
+      assert.match(error.message, /order information under 280 characters/i);
     });
 
     test('a customer cannot mark their own scan redeemed', async () => {
@@ -1490,10 +1737,11 @@ describe('meal scans', () => {
      * drops one finds out immediately.
      */
     test('every function this migration dropped and recreated is closed to anon', async () => {
+      // partner_scan_brief is NOT here any more, and not because it lost its
+      // grant: it does not exist. A Partner is told nothing about a Meal Scan.
       const dropped = [
         'vendor_order_board',
         'vendor_order_detail',
-        'partner_scan_brief',
         'my_scan_order',
         'submit_scan_order',
         'quote_scan_order',

@@ -77,8 +77,10 @@ describe('scan pack allocation', () => {
     await payOrder(order.order_id);
     if (!partner) return;
     const staff = vendorId === VENDORS.yellowBar ? ACTORS.yellowBarStaff : ACTORS.wafflemaniaStaff;
-    await partnerAccept(order.order_id, ACTORS.partnerYaw);
+    // THE STORE APPROVES FIRST. A Meal Scan order's search does not open until
+    // it does, so there is nothing for a Partner to accept before this.
     await vendorRedeemScan(order.order_id, staff);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await vendorReady(order.order_id, staff);
     await completeDelivery(order.order_id, ACTORS.partnerYaw);
   }
@@ -123,8 +125,8 @@ describe('scan pack allocation', () => {
       'at payment no Partner exists, so the platform holds their fee'
     );
 
-    await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await vendorRedeemScan(order.order_id, ACTORS.wafflemaniaStaff);
+    await partnerAccept(order.order_id, ACTORS.partnerYaw);
     await vendorReady(order.order_id, ACTORS.wafflemaniaStaff);
     await completeDelivery(order.order_id, ACTORS.partnerYaw);
 

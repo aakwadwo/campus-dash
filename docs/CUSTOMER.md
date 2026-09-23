@@ -291,8 +291,14 @@ The offer carries `food_is_ready` so the Partner knows whether to set off or
 wait, and `partner_confirm_pickup()` refuses until the order is READY — checked
 before the code, so an eager attempt costs no attempt.
 
-The customer sees their **own full destination** (`… / Floor 2 / Room 204`). The
-store only ever sees the block.
+The customer sees their **own destination**, exactly as precise as they chose
+it (`Hostel A · C Floor`, or `… · C17`). The store never sees it. Two
+optional notes, each for one reader: **Order information** (every order, under
+the items) goes to the store and is stored in `order_notes` with the order,
+before payment; **Additional information** (only with a Partner, under the
+place) goes to the assigned Partner and is `orders.destination_note`. Changing
+the fulfilment before paying keeps the Partner note; nothing edits either after
+payment.
 
 ## Not built
 

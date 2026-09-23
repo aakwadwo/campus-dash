@@ -265,33 +265,13 @@ insert into public.partner_profiles (
    'partner-docs/dev/0035/student-id.jpg', 'partner-docs/dev/0035/face.jpg', null, null);
 
 -- ---------------------------------------------------------------------------
--- Locations — Academic City campus tree
+-- Locations
 -- ---------------------------------------------------------------------------
--- Illustrative structure for development. Real block, floor and room names must
--- come from the university before this is used with real students.
-insert into public.locations (id, parent_id, kind, name, is_deliverable, walk_minutes, sort_order) values
-  ('10000000-0000-4000-8000-000000000001', null, 'CAMPUS', 'Academic City', false, 0, 0);
-
-insert into public.locations (id, parent_id, kind, name, is_deliverable, walk_minutes, sort_order) values
-  ('10000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block A',   false, 5,  10),
-  ('10000000-0000-4000-8000-000000000020', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block B',   false, 7,  20),
-  ('10000000-0000-4000-8000-000000000030', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Academic Block',   false, 3,  30),
-  ('10000000-0000-4000-8000-000000000040', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Sports Complex',   false, 9,  40);
-
-insert into public.locations (id, parent_id, kind, name, is_deliverable, sort_order) values
-  ('10000000-0000-4000-8000-000000000011', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 1', false, 1),
-  ('10000000-0000-4000-8000-000000000012', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 2', false, 2),
-  ('10000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000020', 'FLOOR', 'Floor 1', false, 1),
-  ('10000000-0000-4000-8000-000000000031', '10000000-0000-4000-8000-000000000030', 'FLOOR', 'Ground Floor', false, 1);
-
-insert into public.locations (id, parent_id, kind, name, is_deliverable, sort_order) values
-  ('10000000-0000-4000-8000-000000000111', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 101', true, 1),
-  ('10000000-0000-4000-8000-000000000112', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 102', true, 2),
-  ('10000000-0000-4000-8000-000000000121', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 204', true, 1),
-  ('10000000-0000-4000-8000-000000000122', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 205', true, 2),
-  ('10000000-0000-4000-8000-000000000211', '10000000-0000-4000-8000-000000000021', 'ROOM', 'Room 110', true, 1),
-  ('10000000-0000-4000-8000-000000000311', '10000000-0000-4000-8000-000000000031', 'COMMON_AREA', 'Library Entrance', true, 1),
-  ('10000000-0000-4000-8000-000000000411', '10000000-0000-4000-8000-000000000040', 'FIELD', 'Main Field', true, 1);
+-- NONE HERE. The real Academic City tree is reference data written by
+-- 20261007000001_campus_places_and_additional_information.sql, so a local
+-- walkthrough picks from the same places a student will. The test suite keeps
+-- its own small fixture tree under a separate "Test Campus" root (see
+-- tests/helpers/db.js), so it never depends on the real names.
 
 -- ---------------------------------------------------------------------------
 -- Vendors (fictional) and their owners
@@ -308,11 +288,11 @@ insert into public.vendors (
   ('20000000-0000-4000-8000-000000000001', 'Test Kitchen One',  '+233200000011', 'ACTIVE', true,
    '00000000-0000-4000-8000-000000000011', '40000000-0000-4000-8000-000000000001',
    'Hot Ghanaian staples cooked to order.', 'Muni Owner (test)', false, now(), now(),
-   '10000000-0000-4000-8000-000000000030', 4),
+   (select location_id from public.destination_places() where label = 'Academic Block · Ground Floor'), 4),
   ('20000000-0000-4000-8000-000000000002', 'Test Grill Two',    '+233200000012', 'ACTIVE', true,
    '00000000-0000-4000-8000-000000000012', '40000000-0000-4000-8000-000000000002',
    'Shawarma, burgers and pies from the grill.', 'Grill Owner (test)', true, now(), now(),
-   '10000000-0000-4000-8000-000000000040', 6);
+   (select location_id from public.destination_places() where label = 'Slabs'), 6);
 
 -- A store still waiting on review, so /admin/vendors has a real decision to
 -- make and the vendor side has a real Pending Approval screen to show.
@@ -367,32 +347,36 @@ insert into public.vendors (
 insert into public.vendors (id, name, phone, status, is_accepting_orders, can_accept_scans, owner_user_id, category_id, location_id, walk_minutes_to_campus) values
   ('20000000-0000-4000-8000-000000000003', 'Wafflemania (test)', '+233200000053', 'ACTIVE', true, true,
    '00000000-0000-4000-8000-000000000015',
-   '40000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000030', 3),
+   '40000000-0000-4000-8000-000000000004', (select location_id from public.destination_places() where label = 'Wafflemania'), 3),
   ('20000000-0000-4000-8000-000000000004', 'Yellow Bar (test)',  '+233200000054', 'ACTIVE', true, true,
    '00000000-0000-4000-8000-000000000016',
-   '40000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000040', 5);
+   '40000000-0000-4000-8000-000000000001', (select location_id from public.destination_places() where label = 'Old Cafeteria'), 5);
 
 -- ---------------------------------------------------------------------------
 -- Menu items (prices in integer pesewas)
 -- ---------------------------------------------------------------------------
-insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order) values
-  ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, 1),
-  ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special',           'Waakye, egg, gari, stew',            3000, true, 2),
-  ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef',     'Fried rice and beef',                4000, true, 3),
-  ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water',            '500ml',                               300, true, 4),
-  ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele',                 'Spiced fried plantain',              1500, false, 5),
+-- is_active is the ACTIVE MENU: what the store is serving right now, as
+-- distinct from the catalogue it keeps. The development stores are open, so
+-- everything they sell is on. Kelewele is on the menu AND sold out, which is
+-- the pair the two columns exist to tell apart.
+insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, is_active, sort_order) values
+  ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, true, 1),
+  ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special',           'Waakye, egg, gari, stew',            3000, true, true, 2),
+  ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef',     'Fried rice and beef',                4000, true, true, 3),
+  ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water',            '500ml',                               300, true, true, 4),
+  ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele',                 'Spiced fried plantain',              1500, false, true, 5),
 
-  ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma',         'Chicken, salad, garlic sauce',       2500, true, 1),
-  ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger',              'Beef patty, cheese, fries',          4500, true, 2),
-  ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie',                 'Baked daily',                        1000, true, 3),
-  ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink',               'Assorted 350ml',                      800, true, 4),
+  ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma',         'Chicken, salad, garlic sauce',       2500, true, true, 1),
+  ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger',              'Beef patty, cheese, fries',          4500, true, true, 2),
+  ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie',                 'Baked daily',                        1000, true, true, 3),
+  ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink',               'Assorted 350ml',                      800, true, true, 4),
 
   -- The scan restaurants also sell food normally, so they are not empty stalls
   -- in the ordinary marketplace. Development data only.
-  ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle',           'Waffle, fried chicken, syrup',       3800, true, 1),
-  ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream',     'Two scoops',                         2200, true, 2),
-  ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce',                  4200, true, 1),
-  ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice',              'Freshly pressed',                    1200, true, 2);
+  ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle',           'Waffle, fried chicken, syrup',       3800, true, true, 1),
+  ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream',     'Two scoops',                         2200, true, true, 2),
+  ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce',                  4200, true, true, 1),
+  ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice',              'Freshly pressed',                    1200, true, true, 2);
 
 -- WHAT A MEAL SCAN MAY BE SPENT ON. Store-level `can_accept_scans` opts the
 -- restaurant in; this decides which of its items. Both are required, so a store

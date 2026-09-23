@@ -65,10 +65,7 @@ export default async function AccountSettingsPage() {
         </Panel>
 
         {outstanding?.length ? (
-          <Panel
-            title="Terms"
-            description="A new version has been published and needs your agreement."
-          >
+          <Panel title="Terms" description="The terms have changed and need your agreement.">
             <ButtonLink href="/terms" size="sm">
               Read and accept
             </ButtonLink>

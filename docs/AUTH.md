@@ -157,6 +157,75 @@ signInWithOtp(phone)
 verifyOtp(phone, code) ──▶ session cookies ──▶ trigger provisions public.users
 ```
 
+### The vendor door is for accounts that exist
+
+`/login/vendor` asks `vendor_phone_sign_in_status()` **before** it sends
+anything, and that function answers about `auth.users` — the table GoTrue itself
+resolves a phone OTP against. It returns one word and nothing else: no name, no
+store, no account id.
+
+| Answer          | Means                                                                      | The screen                                                   |
+| --------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `VENDOR`        | a confirmed phone identity that owns a store                               | send the code                                                |
+| `EMAIL_ACCOUNT` | a store owner carries this number, but a code would not reach that account | sign in with your school email and open the store from there |
+| `NONE`          | nothing                                                                    | register your store first                                    |
+
+**It used to read `public.users.phone`, and that was a real bug.** A phone
+number lives in two places — `auth.users`, where it is a credential, and
+`public.users`, where it is a profile field — and they genuinely disagree after
+a phone collision. `handle_new_auth_user_for()` provisions a second identity
+_without_ a number somebody else already holds, deliberately, because a contact
+detail another identity carries is not this one's to take. So the database ends
+up correct and still misleading:
+
+```
+auth.users     the number is CONFIRMED on a second, empty identity
+public.users   the number is on the store owner's row
+```
+
+The old check asked the profile and said yes. GoTrue asked auth and signed in
+the empty identity. A store owner with a working account, a working store and a
+correct code landed on the sign-up screen — and the screen was not lying: that
+session really did own nothing. Hiding the message would have hidden the only
+true thing on it.
+
+Two identities holding one number is still a mess, and it is an
+**administrator's** mess to clean up with the facts in front of them. Nothing
+here merges or deletes an identity to resolve it.
+
+Enumeration is not worth guarding here: the customer sign-in screen already says
+"no account uses that address", the alternative is a store owner waiting for an
+SMS that is never coming, and anybody probing learns only whether a number they
+already typed runs a shop on one campus.
+
+**Registration is a different door and is untouched.** `/vendor/signup` verifies
+a number in order to CREATE a store, which is precisely when a code should go to
+a number with nothing behind it.
+
+### Becoming a vendor always costs one code
+
+A customer opening a store keeps the account they have — `PARTNER ⇒ CUSTOMER`
+is a foreign key and a vendor is the same idea — and their name, their
+affiliation and their phone are read off the profile rather than asked again.
+
+But the number is **always** verified, including when they leave it exactly as
+it was. A customer's profile phone was typed at sign-up and never proven, and
+it is about to become how a store signs in; a credential resting on an
+unverified field is not a credential.
+
+Two requests serve one screen, and which one was made rides back with the code
+so verification cannot guess wrong:
+
+- a number being moved onto this identity is a **`phone_change`** —
+  `updateUser({ phone })`, which writes it onto the account they already have
+  rather than minting a second one;
+- a number already confirmed on this identity is an ordinary **`sms`** sign-in
+  code, because GoTrue sends nothing for a "change" to the number it is already
+  on.
+
+Once confirmed, `sync_my_verified_phone()` copies it onto the profile, so the
+number a Partner rings and the number the store signs in with are one number.
+
 ## The hook is an SMS-sending endpoint
 
 That is the whole security problem. Anyone who learned the URL could otherwise

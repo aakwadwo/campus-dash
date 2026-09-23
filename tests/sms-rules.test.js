@@ -149,6 +149,43 @@ describe('SMS rules', () => {
     });
 
     /**
+     * THE ONE MESSAGE THAT ENDS AN ORDER, and the reason it has to exist.
+     *
+     * Everything else that happens to a Meal Scan order shows up on the
+     * tracking page the customer is watching. This one happens while they are
+     * not watching, takes their order away, and tells them the money is not
+     * coming back — so it is the one state change worth a buzz.
+     */
+    test('IS texted when the store marks their Meal Scan invalid', () => {
+      assert.deepEqual(audiencesFor('SCAN_REFUSED'), ['CUSTOMER'], 'and nobody else');
+
+      const message = renderSms(E.SCAN_REFUSED, A.CUSTOMER, context);
+      assert.ok(message);
+      assert.match(message, /Meal Scan/, 'names the thing that went wrong');
+      assert.match(message, /cancelled/i, 'says the order is over');
+      assert.match(message, /refund/i, 'says the money is not coming back');
+      assert.match(message, /order again/i, 'and says what to do');
+    });
+
+    test('the store and the Partner hear nothing about an invalid Meal Scan', () => {
+      assert.equal(renderSms(E.SCAN_REFUSED, A.VENDOR, context), null, 'they just pressed it');
+      assert.equal(renderSms(E.SCAN_REFUSED, A.PARTNER, context), null, 'there is no Partner');
+    });
+
+    /**
+     * NO REASON TEXT. The store types why for the audit trail and for an
+     * administrator. Forwarding "the code was already used today" to a phone
+     * accuses somebody of something in a message they cannot reply to.
+     */
+    test('the message does not carry the store’s reason', () => {
+      const message = renderSms(E.SCAN_REFUSED, A.CUSTOMER, {
+        ...context,
+        refundNote: 'Already used today',
+      });
+      assert.equal(message.includes('Already used today'), false);
+    });
+
+    /**
      * A COLLECTION IS THE EXCEPTION, and the only one. Somebody about to walk
      * to a counter genuinely does not know when to set off, and the code they
      * will be asked for does not exist until this moment.

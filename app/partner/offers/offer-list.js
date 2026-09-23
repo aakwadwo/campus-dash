@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useVisibleInterval } from '@/app/use-status-watch';
 import { acceptDeliveryAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
@@ -34,11 +35,8 @@ export default function OfferList({ offers, pollMs = 10000 }) {
   // Offers go stale fast: somebody else is looking at this list too. Paused
   // while an accept is in flight, so a refresh cannot pull the page out from
   // under the navigation it is about to become.
-  useEffect(() => {
-    if (accepting) return undefined;
-    const timer = setInterval(() => router.refresh(), pollMs);
-    return () => clearInterval(timer);
-  }, [router, pollMs, accepting]);
+  // Nothing while the phone is in a pocket; at once when it comes out.
+  useVisibleInterval(() => router.refresh(), { intervalMs: pollMs, enabled: !accepting });
 
   if (offers.length === 0 && !accepting) {
     return (
@@ -72,9 +70,10 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               </span>
             </div>
 
-            {/* WHETHER TO GO NOW. A meal scan is an ordinary store order that
-                the store checks at its own counter, so it reads the same way,
-                with a small mark saying so. */}
+            {/* WHETHER TO GO NOW. A Meal Scan order is an ordinary store
+                order whose scan the store has ALREADY approved — the search
+                does not open until it has — so it reads the same way, with a
+                small mark saying so. */}
             <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
               <span
                 className={`inline-flex items-center gap-1.5 font-semibold ${
@@ -89,7 +88,7 @@ export default function OfferList({ offers, pollMs = 10000 }) {
               </span>
               {offer.order_type === 'SCAN' ? (
                 <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 text-xs font-semibold">
-                  Meal scan
+                  Meal Scan
                 </span>
               ) : null}
             </p>

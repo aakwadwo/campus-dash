@@ -100,6 +100,13 @@ describe('the admin console', () => {
     return row.order_id;
   }
 
+  /** The store approves the Meal Scan, which is what opens its search. */
+  async function approveScan(orderId, staff = ACTORS.wafflemaniaStaff) {
+    return asUser(staff, (c) => c.query('select * from public.vendor_redeem_scan($1)', [orderId]), {
+      commit: true,
+    });
+  }
+
   async function payScan(orderId) {
     return asService(async (c) => {
       const p = (
@@ -230,6 +237,9 @@ describe('the admin console', () => {
       await completedFoodOrder();
       const scanId = await scanOrder();
       await payScan(scanId);
+      // A Meal Scan order is not looking for anybody until the store has
+      // approved the scan, so approval is part of getting it into dispatch.
+      await approveScan(scanId);
 
       const d = (await oneAsAdmin('select public.admin_dashboard() v')).v;
 
@@ -273,7 +283,10 @@ describe('the admin console', () => {
 
       const scan = rows.find((r) => r.order_type === 'SCAN');
       assert.equal(scan.scan_status, 'UPLOADED');
-      assert.equal(scan.attention, 'SEARCHING_PARTNER');
+      // PAID, WITH NOBODY BEING LOOKED FOR YET. A Meal Scan order's search does
+      // not open until the store approves the scan, so a freshly paid one is
+      // work in progress at the counter rather than a hunt for a Partner.
+      assert.equal(scan.attention, 'IN_PROGRESS');
 
       const food = rows.find((r) => r.order_type === 'FOOD');
       assert.equal(food.scan_status, null, 'a food order has no scan dimension');
@@ -906,6 +919,7 @@ describe('the admin console', () => {
     test('an order with no Partner appears but does not claim to need a money decision', async () => {
       const orderId = await scanOrder();
       await payScan(orderId);
+      await approveScan(orderId);
       await asService((c) =>
         c.query(
           "update public.orders set search_deadline_at = now() - interval '1 minute' where id = $1",

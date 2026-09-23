@@ -113,9 +113,58 @@ yes; the imported drinks, no. `price_scan_order()` re-checks every item against
 the live menu, so a screen that only offered eligible items is a convenience
 rather than the enforcement.
 
-`scan_restaurants()` lists only stores with at least one eligible item available.
-A store with the switch on and nothing marked is a dead end, and listing it only
-sends somebody to an empty menu to find that out.
+**There is no separate way to browse.** `scan_restaurants()` and `scan_menu()`
+are gone with the pages they served. A customer browses the one list of stores;
+a store that takes a Meal Scan says **Meal Scan accepted** on its own page, and
+the switch is on its ordinary checkout. The separate catalogue made a student
+decide how they were paying before they had decided what to eat, and one who did
+not know the feature existed never found it.
+
+`can_accept_scans` is the administrator's, and only the administrator's:
+`admin_set_vendor_scans()` is the single function in the schema that writes it,
+and it is audited like every other vendor change.
+
+## At the checkout
+
+**Redeem by Meal Scan**, off by default, on an eligible store's ordinary
+checkout. Turning it on changes three things and nothing else:
+
+- the food line reads **GH₵0.00**, "Covered by your Meal Scan", because the
+  university's entitlement settles it;
+- a **photograph** of the scan becomes required;
+- the order arrives on the store's board to be **verified before anything is
+  cooked**.
+
+The fulfilment choice, the destination, the basket and the single payment are
+the same ones a food order uses. There is no second payment and no Meal Scan
+fee: the flat `scan_service_fee_pesewas` REPLACES the 6.95%, it is not added to
+it, and the line is labelled "Service fee" like any other.
+
+### The photograph
+
+**Photos only. PDF is gone.** It was accepted because some entitlements are
+issued that way, which was true and cost more than it was worth: the customer
+could not preview what they were about to send, the store had to open a document
+viewer at a counter, and "choose a file" opened a document picker on a phone
+when what everybody wanted was the camera roll. A screenshot of a PDF is a
+photograph, and every phone takes one in two taps.
+
+Two routes, and no third: **Choose a photo** (`accept` on the image types, which
+is what makes a phone open the camera roll) and **Take a photo**. `uploadScan()`
+refuses anything else before it reaches storage.
+
+**The preview is the point.** The customer sees the actual image, full width,
+before they pay, and can replace it as many times as they like — until the order
+exists. After that the scan is FIXED: `order_scans` is keyed on the order, no
+client holds a write grant on it, and there is no function anywhere that
+attaches a second scan to a paid order. That would be a second entitlement
+against one payment.
+
+**The warning is the last thing before the total**: "Make sure your Meal Scan is
+clear and fully visible. Once your order is paid for, payments related to an
+invalid Meal Scan are non-refundable." The store checks after the money has
+moved, and somebody about to pay is entitled to know that in the sentence before
+they do.
 
 ## State
 
@@ -127,48 +176,77 @@ UPLOADED → REDEEMED
         ↘ REFUSED
 ```
 
-`RELEASED` sits between UPLOADED and REDEEMED on a Partner order and means the
-assigned Partner may read the image.
-
-| Value      | Means                                                      |
-| ---------- | ---------------------------------------------------------- |
-| `UPLOADED` | on file; the customer, the store and an admin can see it   |
-| `RELEASED` | an assigned Partner may read it too, and only that Partner |
-| `REDEEMED` | **the store** has checked it and is honouring it           |
-| `REFUSED`  | the store would not honour it. **No money moves.**         |
+| Value      | Means                                                    |
+| ---------- | -------------------------------------------------------- |
+| `UPLOADED` | on file; the customer, the store and an admin can see it |
+| `REDEEMED` | **the store** has approved it. Dispatch opens here.      |
+| `REFUSED`  | the store marked it invalid. **The order is cancelled.** |
 
 It is a separate dimension because "the scan was honoured" and "somebody has the
 food" are different claims, and hard rule 2 forbids merging state dimensions.
 
+`RELEASED` remains in the enum and nothing writes it. It used to sit between
+UPLOADED and REDEEMED and mean "the assigned Partner may read the image" —
+see **Privacy** for why a Partner no longer reads one at all. Removing a value
+from an enum is a rewrite of every column that uses it, and the point is that
+nothing writes it any more, not that no row ever held it.
+
+**APPROVAL IS THE GATE, and it is the whole shape of this flow.**
+
+- `confirm_payment()` does **not** open dispatch for a scan order. It moves it
+  to PREPARING and leaves `delivery_status` at NONE.
+- `vendor_redeem_scan()` is the only statement that opens a scan order's
+  search, in the same update that records the approval.
+- `partner_accept_delivery()` requires `delivery_status = 'SEARCHING'` and, as
+  belt, `scan_status = 'REDEEMED'` on a scan order.
+- `vendor_mark_ready()` refuses while the scan is unsettled.
+
+So "no Partner before approval" is a fact about the database rather than about a
+button. Paying used to open the search, which offered Partners a job whose
+entitlement nobody had looked at — and which the store might be about to refuse,
+cancelling the order under them.
+
 ## The lifecycle
 
 ```
-customer picks eligible items       scan_status  UPLOADED
-attaches the scan, picks fulfilment order_status ACCEPTED, queue number 001
-pays the fee                        payment_status PAID
+customer builds a basket, turns      scan_status  UPLOADED
+  Redeem by Meal Scan on, attaches
+  a photo, picks fulfilment          order_status ACCEPTED, queue number 001
+pays the fee                         payment_status PAID
   → confirm_payment() reaches the store
-                                    order_status PREPARING
-                                    delivery SEARCHING, for a Partner order
-a Partner accepts (Partner only)    delivery ASSIGNED, scan_status RELEASED
-THE STORE CHECKS THE SCAN           scan_status REDEEMED
-store presses Ready for pickup      order_status READY, handoff code minted
-store reads the code out            whoever is collecting types it in
-  collection: customer               order COMPLETED
-  Partner:    partner_confirm_pickup delivery PICKED_UP
-              customer's code        delivery DELIVERED, order COMPLETED
+                                     order_status PREPARING
+                                     delivery NONE — nobody is sent for yet
+THE STORE CHECKS THE MEAL SCAN
+  Scan is good                       scan_status REDEEMED
+                                     delivery SEARCHING, for a Partner order
+  Scan is invalid                    scan_status REFUSED
+                                     order_status CANCELLED_BY_VENDOR. STOP.
+a Partner accepts                    delivery ASSIGNED
+store presses Ready for pickup       order_status READY, handoff code minted
+store reads the code out             whoever is collecting types it in
+  collection: customer                order COMPLETED
+  Partner:    partner_confirm_pickup  delivery PICKED_UP
+              customer's code         delivery DELIVERED, order COMPLETED
 ```
+
+The customer watches this on their own tracking page, which now has words for
+the scan: `customer_order_stage()` reads the order type and the scan status as
+well, so a paid order awaiting verification reads **Checking your Meal Scan**
+rather than "Being prepared", and a refused one reads **Meal Scan not accepted**
+with a way to order again rather than a bare "Cancelled".
 
 Two things are worth spelling out.
 
-**Payment reaches the store, exactly as it does for a food order.**
-`confirm_payment()` has no scan branch at all any more — that is the smallest
-correct change, and one fewer path that can drift.
+**Payment reaches the store, exactly as it does for a food order.** The only
+branch `confirm_payment()` carries is the dispatch one above: a scan order's
+search is not opened at payment because the store has not looked at the scan
+yet.
 
 **Ready is refused until the scan is settled.** `vendor_mark_ready()` will not
-move a scan order whose `scan_status` is still UPLOADED or RELEASED. Pressing
-Ready is what mints the four digits somebody will be asked for, and minting them
-before anybody has looked at the scan would put food on a counter for an
-entitlement that might not exist.
+move a scan order whose `scan_status` is still UPLOADED. Pressing Ready is what
+mints the four digits somebody will be asked for, and minting them before
+anybody has looked at the scan would put food on a counter for an entitlement
+that might not exist.
 
 ## Redemption is the store's act
 
@@ -179,9 +257,42 @@ verify somebody else's system, and a second road to REDEEMED from the other side
 of the counter is exactly the asymmetry hard rule 11 exists to prevent. Both
 Partner functions are **dropped**, not merely revoked.
 
-Double redemption is refused by a conditional update guarded on
-`scan_status in ('UPLOADED', 'RELEASED')`. The second attempt matches zero rows,
-returns `{ success: false }` and is logged as a rejection.
+Double redemption is refused by a conditional update guarded on the current
+scan status. The second attempt matches zero rows, returns `{ success: false }`
+and is logged as a rejection.
+
+The store gets exactly two buttons: **Scan is good** and **Scan is invalid**.
+
+### Scan is invalid ends the order
+
+`vendor_refuse_scan()` sets `scan_status = REFUSED` **and cancels the order in
+the same statement** — `CANCELLED_BY_VENDOR`, with the store's reason on
+`orders.cancellation_reason`. It used to stop at REFUSED and leave the order
+PREPARING, which is a state where a store that had just said it would not
+honour the entitlement could still press Ready on the food.
+
+Afterwards nothing can be done with the order: Ready is refused, redeeming is
+refused, no Partner can be assigned, and **there is no path that attaches a
+second scan to it**. That would be a second entitlement against one payment, so
+there is no "replace scan" and no "retry" function, by design. The customer
+places a completely new order.
+
+It is **irreversible**, so the vendor screen asks first. The confirmation names
+every consequence — the order ends, the customer must order again, they cannot
+attach another scan, the payment is not refunded, it cannot be undone — and asks
+for a reason before the button will do anything.
+
+**The customer is texted**, because this ends their order while they are not
+looking at it: `SCAN_REFUSED` to the CUSTOMER and nobody else. The message says
+the scan was not accepted, that the order is cancelled, that it cannot be
+refunded, and to order again. It does **not** carry the store's reason:
+forwarding "already used today" to a phone accuses somebody of something in a
+message they cannot reply to. The reason is on the tracking page and in the
+audit trail, where there is room for it and somebody to answer.
+
+**No money moves**, still. A refused scan appears in `admin_exceptions()`
+flagged as requiring a decision, and it is matched before the order status is
+read, so cancelling the order does not hide it.
 
 ### What Campus Dash does and does not guarantee
 
@@ -209,29 +320,42 @@ the service role can touch a file. Nobody ever receives a storage URL — only a
 short-lived signed URL minted server-side after the caller's right has been
 re-checked in SQL.
 
-**Four readers, and two doors.**
+**Three readers, and two doors.**
 
-| Reader                             | Door                       | Window                       |
-| ---------------------------------- | -------------------------- | ---------------------------- |
-| the customer who uploaded it       | `scan_image_path()`        | always                       |
-| the **currently** assigned Partner | `scan_image_path()`        | assignment → end of delivery |
-| the **store honouring it**         | `vendor_scan_image_path()` | paid → leaves their board    |
-| an administrator                   | `scan_image_path()`        | always                       |
+| Reader                       | Door                       | Window                    |
+| ---------------------------- | -------------------------- | ------------------------- |
+| the customer who uploaded it | `scan_image_path()`        | always                    |
+| the **store honouring it**   | `vendor_scan_image_path()` | paid → leaves their board |
+| an administrator             | `scan_image_path()`        | always                    |
+
+**A PARTNER IS NOT ON THAT LIST, AT ANY POINT.** They used to be: released on
+assignment, shut at the end of the delivery, because the Partner carried the
+entitlement to a counter that had never seen the order. The store has the order
+on its own board now and approves the scan **before dispatch even opens**, so by
+the time anybody is carrying anything the entitlement has already been judged by
+the only party that could judge it. A Partner holding a link to somebody's meal
+entitlement is exposure with nothing on the other side of it, so the right was
+removed rather than narrowed: `partner_may_read_scan()` and
+`partner_scan_brief()` are **dropped**, the release trigger with them, and the
+`order_scans` policy no longer names a Partner. An offer carries no scan — a
+Partner sees store, zone, payout and timing, and decides on that.
 
 The store's window opens when the order is paid for and closes when it leaves
-the board, for the same reason the Partner's does: an authorisation that
-outlives the thing it was granted for is not an authorisation, it is a copy.
-`vendor_may_read_scan()` is the single predicate behind both that function and
-the `order_scans` RLS policy, so the row and the image can never disagree about
-who may look. It is a SECURITY DEFINER function rather than a subquery because
-vendors read orders only through RPCs and hold no SELECT grant on
-`public.orders` — an `exists (select 1 from public.orders …)` inside a policy
-would evaluate against a table the vendor cannot see and be permanently false.
+the board: an authorisation that outlives the thing it was granted for is not an
+authorisation, it is a copy. `vendor_may_read_scan()` is the single predicate
+behind both that function and the `order_scans` RLS policy, so the row and the
+image can never disagree about who may look. It is a SECURITY DEFINER function
+rather than a subquery because vendors read orders only through RPCs and hold no
+SELECT grant on `public.orders` — an `exists (select 1 from public.orders …)`
+inside a policy would evaluate against a table the vendor cannot see and be
+permanently false.
 
-`order_scans.released_to` is rewritten in the same statement that moves the
-assignment, so a Partner who loses the job loses the scan on their very next
-request. An offer carries no scan — a Partner sees store, zone, payout and
-timing, and decides on that.
+**One image per order, and it is fixed at submission.** `order_scans` is keyed
+on `order_id`, no client role holds INSERT or UPDATE on it, and no function
+replaces an image. The customer previews and re-chooses as often as they like
+before the order exists; afterwards there is no path, which is what makes "the
+scan cannot be replaced on a paid order" a property of the schema rather than a
+rule a screen remembers.
 
 Upload paths are `<user_id>/scans/<random>`, built from the session and never
 from the request. `submit_scan_order()` re-checks the prefix before attaching a

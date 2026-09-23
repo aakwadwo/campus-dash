@@ -253,6 +253,53 @@ export async function resetTransactionalState() {
          '20000000-0000-4000-8000-000000000006'
        )
     `);
+    // Locations FIRST: the vendors below point at fixture places. Drop anything
+    // a test created, then restore the FIXTURE rows in full. UPSERT, not
+    // UPDATE — a fixture row can genuinely be DELETED by an
+    // admin test, because an order no longer names a destination at submission
+    // and therefore no longer pins one. An update-only restore left Room 204
+    // missing for every file that ran afterwards, and the failure it produced
+    // ("destination is not a valid delivery location") pointed nowhere near it.
+    //
+    // THE REAL CAMPUS IS LEFT ALONE. It is reference data written by a
+    // migration under the "Academic City" root; everything else that is not a
+    // fixture row — a room a test added, a second campus a test created — is
+    // ours to remove.
+    await c.query(`
+      with recursive real_campus as (
+        select id from public.locations
+         where parent_id is null and lower(name) = 'academic city'
+        union all
+        select l.id from public.locations l join real_campus r on l.parent_id = r.id
+      )
+      delete from public.locations
+       where id::text not like '10000000-0000-4000-8000-%'
+         and id not in (select id from real_campus)
+    `);
+    await c.query(`
+      insert into public.locations (id, parent_id, kind, name, is_deliverable, walk_minutes, sort_order, is_active)
+      values
+        ('10000000-0000-4000-8000-000000000001', null, 'CAMPUS', 'Test Campus', false, 0, 0, true),
+        ('10000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block A', false, 5, 10, true),
+        ('10000000-0000-4000-8000-000000000020', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block B', false, 7, 20, true),
+        ('10000000-0000-4000-8000-000000000030', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Academic Block', false, 3, 30, true),
+        ('10000000-0000-4000-8000-000000000040', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Sports Complex', false, 9, 40, true),
+        ('10000000-0000-4000-8000-000000000011', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 1', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000012', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 2', false, null, 2, true),
+        ('10000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000020', 'FLOOR', 'Floor 1', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000031', '10000000-0000-4000-8000-000000000030', 'FLOOR', 'Ground Floor', false, null, 1, true),
+        ('10000000-0000-4000-8000-000000000111', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 101', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000112', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 102', true, null, 2, true),
+        ('10000000-0000-4000-8000-000000000121', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 204', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000122', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 205', true, null, 2, true),
+        ('10000000-0000-4000-8000-000000000211', '10000000-0000-4000-8000-000000000021', 'ROOM', 'Room 110', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000311', '10000000-0000-4000-8000-000000000031', 'COMMON_AREA', 'Library Entrance', true, null, 1, true),
+        ('10000000-0000-4000-8000-000000000411', '10000000-0000-4000-8000-000000000040', 'FIELD', 'Main Field', true, null, 1, true)
+      on conflict (id) do update
+         set parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name,
+             is_deliverable = excluded.is_deliverable, walk_minutes = excluded.walk_minutes,
+             sort_order = excluded.sort_order, is_active = true
+    `);
     // can_accept_scans is restored here too. Scan tests flip it to prove a
     // non-scan store is refused, and without a restore that flag leaks into the
     // next file exactly as a renamed vendor once did.
@@ -309,25 +356,33 @@ export async function resetTransactionalState() {
     `);
     await c.query(`delete from public.vendor_images`);
     await c.query(`
-      insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, sort_order, scan_eligible)
+      insert into public.menu_items (id, vendor_id, name, description, price_pesewas, is_available, is_active, sort_order, scan_eligible)
       values
-        ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, 1, false),
-        ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special', 'Waakye, egg, gari, stew', 3000, true, 2, false),
-        ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef', 'Fried rice and beef', 4000, true, 3, false),
-        ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water', '500ml', 300, true, 4, false),
-        ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele', 'Spiced fried plantain', 1500, false, 5, false),
-        ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, 1, false),
-        ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, 2, false),
-        ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, 3, false),
-        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, 4, false),
-        ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle', 'Waffle, fried chicken, syrup', 3800, true, 1, true),
-        ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream', 'Two scoops', 2200, true, 2, false),
-        ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce', 4200, true, 1, true),
-        ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice', 'Freshly pressed', 1200, true, 2, false)
+        ('30000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'Jollof Rice with Chicken', 'Jollof rice, grilled chicken, shito', 3500, true, true, 1, false),
+        ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'Waakye Special', 'Waakye, egg, gari, stew', 3000, true, true, 2, false),
+        ('30000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', 'Fried Rice with Beef', 'Fried rice and beef', 4000, true, true, 3, false),
+        ('30000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000001', 'Bottled Water', '500ml', 300, true, true, 4, false),
+        ('30000000-0000-4000-8000-000000000005', '20000000-0000-4000-8000-000000000001', 'Kelewele', 'Spiced fried plantain', 1500, false, true, 5, false),
+        ('30000000-0000-4000-8000-000000000011', '20000000-0000-4000-8000-000000000002', 'Chicken Shawarma', 'Chicken, salad, garlic sauce', 2500, true, true, 1, false),
+        ('30000000-0000-4000-8000-000000000012', '20000000-0000-4000-8000-000000000002', 'Beef Burger', 'Beef patty, cheese, fries', 4500, true, true, 2, false),
+        ('30000000-0000-4000-8000-000000000013', '20000000-0000-4000-8000-000000000002', 'Meat Pie', 'Baked daily', 1000, true, true, 3, false),
+        ('30000000-0000-4000-8000-000000000014', '20000000-0000-4000-8000-000000000002', 'Soft Drink', 'Assorted 350ml', 800, true, true, 4, false),
+        ('30000000-0000-4000-8000-000000000021', '20000000-0000-4000-8000-000000000003', 'Chicken Waffle', 'Waffle, fried chicken, syrup', 3800, true, true, 1, true),
+        ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000003', 'Waffle and Ice Cream', 'Two scoops', 2200, true, true, 2, false),
+        ('30000000-0000-4000-8000-000000000031', '20000000-0000-4000-8000-000000000004', 'Rice and Grilled Tilapia', 'With pepper sauce', 4200, true, true, 1, true),
+        ('30000000-0000-4000-8000-000000000032', '20000000-0000-4000-8000-000000000004', 'Fruit Juice', 'Freshly pressed', 1200, true, true, 2, false)
       on conflict (id) do update
          set vendor_id = excluded.vendor_id, name = excluded.name,
              description = excluded.description, price_pesewas = excluded.price_pesewas,
              is_available = excluded.is_available, sort_order = excluded.sort_order,
+             -- WHY it was unavailable, restored with the fact itself. A file
+             -- that marks the jollof sold out and commits used to leave
+             -- SOLD_OUT behind on a row the next file reads as available.
+             unavailable_reason = null,
+             -- THE ACTIVE MENU. Toggling an item off closes a store when it is
+             -- the last one on, so a file that leaves one off would start the
+             -- next file with a shut shop.
+             is_active = excluded.is_active,
              -- WHAT A MEAL SCAN MAY BE SPENT ON. Scan tests flip this to prove
              -- the per-item rule, so it is restored with everything else.
              scan_eligible = excluded.scan_eligible
@@ -347,40 +402,6 @@ export async function resetTransactionalState() {
            '30000000-0000-4000-8000-000000000021','30000000-0000-4000-8000-000000000022',
            '30000000-0000-4000-8000-000000000031','30000000-0000-4000-8000-000000000032'
          )
-    `);
-    // Locations: drop anything a test created, then restore the seeded rows in
-    // full. UPSERT, not UPDATE — a seeded row can now genuinely be DELETED by an
-    // admin test, because an order no longer names a destination at submission
-    // and therefore no longer pins one. An update-only restore left Room 204
-    // missing for every file that ran afterwards, and the failure it produced
-    // ("destination is not a valid delivery location") pointed nowhere near it.
-    await c.query(`
-      delete from public.locations
-       where id::text not like '10000000-0000-4000-8000-%'
-    `);
-    await c.query(`
-      insert into public.locations (id, parent_id, kind, name, is_deliverable, walk_minutes, sort_order, is_active)
-      values
-        ('10000000-0000-4000-8000-000000000001', null, 'CAMPUS', 'Academic City', false, 0, 0, true),
-        ('10000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block A', false, 5, 10, true),
-        ('10000000-0000-4000-8000-000000000020', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Hostel Block B', false, 7, 20, true),
-        ('10000000-0000-4000-8000-000000000030', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Academic Block', false, 3, 30, true),
-        ('10000000-0000-4000-8000-000000000040', '10000000-0000-4000-8000-000000000001', 'BLOCK', 'Sports Complex', false, 9, 40, true),
-        ('10000000-0000-4000-8000-000000000011', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 1', false, null, 1, true),
-        ('10000000-0000-4000-8000-000000000012', '10000000-0000-4000-8000-000000000010', 'FLOOR', 'Floor 2', false, null, 2, true),
-        ('10000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000020', 'FLOOR', 'Floor 1', false, null, 1, true),
-        ('10000000-0000-4000-8000-000000000031', '10000000-0000-4000-8000-000000000030', 'FLOOR', 'Ground Floor', false, null, 1, true),
-        ('10000000-0000-4000-8000-000000000111', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 101', true, null, 1, true),
-        ('10000000-0000-4000-8000-000000000112', '10000000-0000-4000-8000-000000000011', 'ROOM', 'Room 102', true, null, 2, true),
-        ('10000000-0000-4000-8000-000000000121', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 204', true, null, 1, true),
-        ('10000000-0000-4000-8000-000000000122', '10000000-0000-4000-8000-000000000012', 'ROOM', 'Room 205', true, null, 2, true),
-        ('10000000-0000-4000-8000-000000000211', '10000000-0000-4000-8000-000000000021', 'ROOM', 'Room 110', true, null, 1, true),
-        ('10000000-0000-4000-8000-000000000311', '10000000-0000-4000-8000-000000000031', 'COMMON_AREA', 'Library Entrance', true, null, 1, true),
-        ('10000000-0000-4000-8000-000000000411', '10000000-0000-4000-8000-000000000040', 'FIELD', 'Main Field', true, null, 1, true)
-      on conflict (id) do update
-         set parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name,
-             is_deliverable = excluded.is_deliverable, walk_minutes = excluded.walk_minutes,
-             sort_order = excluded.sort_order, is_active = true
     `);
     await c.query(`update public.users set is_suspended = false`);
     // Restore seeded names AND addresses: tests rename accounts and commit.

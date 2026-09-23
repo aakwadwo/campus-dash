@@ -176,8 +176,12 @@ functions return: `vendor_order_board`, `vendor_order_detail`,
 allocations and its payouts. Customers, assigned Partners and administrators keep
 their policies unchanged.
 
-The destination zone (`Hostel Block A`) is enough for a store to picture the
-job. The room is the Partner's business, not theirs. A collecting customer's
+The destination is not the store's business at all, not even the block. What a
+store DOES see is the customer's **Order information** on the order detail
+(`vendor_order_detail().order_information`) — "no pepper", "extra napkins". It
+is written with the order, so it is there the moment the paid order reaches the
+board. The customer's **Additional information** is for their Partner and is
+never returned to a store. A collecting customer's
 FIRST name is shown, because the store has to call it out; a delivery is met by
 a Partner, so the customer's name is not the store's business at all.
 
@@ -193,6 +197,20 @@ The store's home is `/vendor/<id>`. It answers three questions, in order:
 1. **How is today going?** Today's orders and Today's sales, from
    `vendor_daily_sales()` — the sum of this store's live VENDOR allocations,
    grouped by `orders.order_day`, the same day the queue number restarts on.
+   Under them, when anything is on its way, **Pending payout** and **Next
+   payout** ("Monday morning"). Paystack, not Campus Dash, settles a store with
+   a subaccount: its share is split off each charge and paid to its mobile
+   money on the next Ghana working day. `vendor_payout_days()` reads the split
+   money by the Ghana day it was paid, and `lib/settlement/schedule.js` turns
+   each day into the working day it lands (weekends and Ghana public holidays
+   skipped — `lib/settlement/ghana-holidays.js`, whose DECLARED list needs the
+   Eid dates, Shaqq Day and any moved holiday added each year; until they are,
+   the screen can name a morning one day early). The schedule is Paystack's
+   published one for GHS (support.paystack.com/en/articles/2123586, checked
+   September 2026), and relies on the subaccount's `settlement_schedule` being
+   left at its default, `auto`, which `ensureSubaccount()` does. Money owed through the ledger instead (no subaccount at the time)
+   is not shown on this screen: it is not on Paystack's schedule, and no date is
+   promised for it. Nothing here writes a settlement record.
 2. **What needs me?** The NEW and READY groups below.
 3. **What just happened?** The last five finished orders, then **History**.
 
@@ -280,26 +298,87 @@ The collection handoff used to run the other way — customer holds, vendor type
 That put the confirming keystroke on the person who was not carrying anything
 away, and a mistyped digit blocked a queue at a counter.
 
-## Today's menu
+## The catalogue, and today's menu
 
-A store does not create or price items — an administrator does, so a catalogue
-cannot be rewritten mid-service and a price cannot move under an order somebody
-is halfway through placing. What a store owns is **whether something is
-available right now**, which is the thing that changes forty times a day and
-which nobody should have to email about.
+**Build your catalogue once. Turn things on when you are serving them.**
 
-A sold-out item stays on the storefront, marked sold out. A dish that vanishes
-reads as a store that stopped selling it; a dish marked sold out reads as a
-store that is busy. `submit_order_for()` refuses it either way.
+A store owns two different lists, and keeping them apart is what stopped menu
+management being a chore:
 
-**Reopening the store clears every sold-out mark.** Running out of jollof is a
-fact about today's service, not a standing property of the dish, and a vendor
-who has to untick fourteen items before they can sell anything will stop
-bothering. The reset is on the CLOSED → OPEN transition, so pressing Open again
-out of habit while already open leaves a mark somebody set a minute ago alone.
+|                     |                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| **The catalogue**   | everything this store sells, ever. Added once, priced once, never removed by a switch. |
+| **The active menu** | which of those it is serving right now — `menu_items.is_active`.                       |
 
-A vendor **can** open and close their own store. Closing stops new orders and
-leaves orders already in flight completely alone — the customer still gets fed.
+A stall sells eggs in the morning, plantain at eleven and jollof at one. Before
+`is_active` the only way to stop offering something was to take it off the menu
+and the only way to offer it again was to put it back, item by item, several
+times a day. Vendors who found that tedious solved it by deleting and re-adding
+dishes, which is how a store ends up unable to delete anything: every name has
+an order behind it.
+
+A new item joins the **catalogue**, switched off. Adding a dish is not the same
+decision as starting to sell it, and a default of ON would open a closed store
+from the menu screen.
+
+### OFF is not SOLD OUT
+
+Three states, and a customer experiences each of them differently:
+
+| State          | The customer                         |
+| -------------- | ------------------------------------ |
+| OFF            | does not see it at all               |
+| ON + SOLD OUT  | sees it, marked, and cannot order it |
+| ON + AVAILABLE | sees it and can order it             |
+
+A dish that vanishes reads as a store that stopped selling it; a dish marked
+sold out reads as a store that is busy. `price_order()`, `price_scan_order()`
+and `submit_order_for()` refuse all three of the unorderable cases — the item
+being off, the item being sold out, and the store being closed — at the server
+boundary, so a browser holding a page from twenty minutes ago cannot order from
+it. `menu_items_read_public` is what makes OFF invisible, so no screen has to
+remember the filter.
+
+`unavailable_reason` therefore means exactly one thing now: `SOLD_OUT`. The old
+`WITHDRAWN` reason was "off the menu until I put it back", which is `is_active`
+and is no longer a kind of unavailability.
+
+### Open and closed follow the menu
+
+One invariant, maintained by the database rather than hoped for:
+
+> a store is OPEN if and only if at least one of its items is ON
+
+which reads, in the five transitions a vendor can perform:
+
+| They do this             | And                                              |
+| ------------------------ | ------------------------------------------------ |
+| close the store          | every active item goes OFF. The catalogue stays. |
+| turn one of several OFF  | the rest stay ON and the store stays open.       |
+| turn the LAST one OFF    | the store closes itself.                         |
+| turn one ON while closed | the store opens itself.                          |
+| open with nothing ON     | **refused**, and told to turn an item on.        |
+
+An open store showing an empty menu is a customer walking across campus to a
+counter that has nothing for them, so it is not a state the database will hold.
+Nor is the mirror of it: a closed store cannot expose an orderable menu, because
+closing is what emptied it.
+
+Every one of those transitions takes the vendor row with `SELECT … FOR UPDATE`
+before it reads the count — `vendor_apply_menu_state()` is the shared tail — so
+a phone and a tablet on one counter serialise instead of racing to leave the
+store open with nothing on it. Reading a number from a table is not an atomicity
+primitive.
+
+**A CLOSED → OPEN transition clears every sold-out mark**, wherever it comes
+from: pressing Open, or turning on the first item of the day. Running out of
+jollof is a fact about today's service, not a standing property of the dish, and
+a vendor who has to untick fourteen items before they can sell anything will
+stop bothering. The reset is on the transition, so turning a fourth item on
+while already open leaves a mark somebody set a minute ago alone.
+
+Closing stops new orders and leaves orders already in flight completely alone —
+the customer still gets fed.
 
 ## One account, two devices
 
@@ -316,8 +395,8 @@ board off immediately, mid-shift.
 
 ## Deliberately not built
 
-- **Order history beyond today**, search, printing, and per-item availability
-  from the vendor screen. None of these are needed to get food out.
+- **Order history beyond today**, printing, and per-item photographs from the
+  vendor screen. None of these are needed to get food out.
 - **Multiple stores per account.** See above: a picker for a case nobody has.
 
 `submit_order_for()` places an order as a given customer and is never granted to

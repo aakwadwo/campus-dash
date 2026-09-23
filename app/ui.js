@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 import { formatPesewas } from '@/lib/util/money';
 
@@ -772,13 +773,17 @@ export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
     <>
       <div className="relative">
         {imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={imageUrl}
-            alt=""
-            loading="lazy"
-            className="rounded-card bg-surface-2 aspect-[16/10] w-full object-cover"
-          />
+          // Sized for the card, not for the photo: two across on a phone,
+          // four on a wide screen.
+          <div className="rounded-card bg-surface-2 relative aspect-[16/10] w-full overflow-hidden">
+            <Image
+              src={imageUrl}
+              alt=""
+              fill
+              sizes="(min-width: 1024px) 25vw, 50vw"
+              className="object-cover"
+            />
+          </div>
         ) : (
           <ImagePlaceholder name={vendor.name} />
         )}
@@ -961,12 +966,6 @@ export const AlertIcon = icon(
   <>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 7.5v5M12 16h.01" />
-  </>
-);
-export const ScanIcon = icon(
-  <>
-    <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
-    <path d="M7 12h10" />
   </>
 );
 export const BikeIcon = icon(

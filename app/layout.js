@@ -22,23 +22,24 @@ export const metadata = {
     // Used by any page that sets no title of its own. app/page.js sets the same
     // string explicitly, because the template below does not reach the root
     // segment and the two must not be able to drift apart.
-    default: 'Campus Dash | Food & More at Academic City',
+    default: 'Campus Dash',
     template: '%s · Campus Dash',
   },
   description: DESCRIPTION,
   applicationName: 'Campus Dash',
-  alternates: { canonical: '/' },
+  // NO CANONICAL HERE. Metadata is inherited, so a canonical on the root layout
+  // would tell a crawler every page without its own was a copy of the home
+  // page. Each public page names its own; private pages are noindex instead.
   openGraph: {
     type: 'website',
     siteName: 'Campus Dash',
     locale: 'en_GH',
-    url: '/',
-    title: 'Campus Dash | Food & More at Academic City',
+    title: 'Campus Dash',
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Campus Dash | Food & More at Academic City',
+    title: 'Campus Dash',
     description: DESCRIPTION,
   },
   /**

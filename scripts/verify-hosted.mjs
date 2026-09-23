@@ -117,6 +117,7 @@ const EXPECTED_TABLES = [
   'notification_events',
   'order_events',
   'order_items',
+  'order_notes',
   'order_secrets',
   'orders',
   'partner_profiles',

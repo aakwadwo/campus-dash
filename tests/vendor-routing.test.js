@@ -95,7 +95,12 @@ describe('where the rule is applied', () => {
   const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
   test('the homepage and the marketplace segment apply it', () => {
-    assert.match(read('app/page.js'), /await redirectVendorOnlyAccount\(/);
+    // Awaited directly or alongside the store list; either way the redirect is
+    // thrown before anything renders.
+    assert.match(
+      read('app/page.js'),
+      /await (redirectVendorOnlyAccount\(|Promise\.all\(\[\s*redirectVendorOnlyAccount\(\))/
+    );
     // In the LAYOUT, which covers /order and /order/[vendorId] and renders
     // outside loading.js, so the redirect is a real 307 rather than a stream.
     assert.match(read('app/order/layout.js'), /await redirectVendorOnlyAccount\(/);

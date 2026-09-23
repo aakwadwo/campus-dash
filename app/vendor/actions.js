@@ -13,12 +13,16 @@ import {
   setPrimaryImage,
   setPayoutDestination,
   setMenuItemAvailable,
+  setMenuItemActive,
   createMenuItem,
   updateMenuItem,
   deleteMenuItem,
   clearMenuItemImage,
 } from '@/lib/vendor';
 import { vendorRedeemScan, vendorRefuseScan } from '@/lib/scan';
+import { deferNotification } from '@/lib/notifications/defer';
+import { notifyOrderEvent } from '@/lib/orders/notify';
+import { NOTIFICATION_EVENT } from '@/lib/notifications';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
 
@@ -93,80 +97,139 @@ export async function markReadyAction(_prev, formData) {
 }
 
 /**
- * The store says the meal scan is good.
+ * The store says the Meal Scan is good.
  *
  * THIS IS THE STORE'S ACT, and it used to be the Partner's. A Partner standing
  * at a counter reporting that an entitlement had been honoured was recording an
  * account of something nobody had checked; the restaurant is the only party
  * that can actually judge it, and the only one holding the food.
  *
- * It is separate from pressing Ready on purpose. Verifying a scan and handing
- * food over are different claims, and collapsing them would lose the one that
- * matters on the day a scan turns out to be dead.
+ * IT IS THE GATE. On a Partner order the same statement that records the
+ * approval opens the search, so nobody is sent for an order whose entitlement
+ * has not been looked at. That is why it is separate from pressing Ready:
+ * verifying a scan and handing food over are different claims.
  */
 export async function redeemScanAction(_prev, formData) {
   const orderId = str(formData, 'order_id');
   const vendorId = str(formData, 'vendor_id');
-  return run(() => vendorRedeemScan(orderId), 'Scan verified. Mark it ready when the food is.', [
-    `/vendor/${vendorId}`,
-    `/vendor/${vendorId}/orders/${orderId}`,
-  ]);
+  return run(
+    () => vendorRedeemScan(orderId),
+    'Meal Scan approved. Mark it ready when the food is.',
+    [`/vendor/${vendorId}`, `/vendor/${vendorId}/orders/${orderId}`]
+  );
 }
 
 /**
- * The store says the scan cannot be honoured.
+ * The store says the Meal Scan is not valid.
+ *
+ * IRREVERSIBLE, AND IT ENDS THE ORDER. vendor_refuse_scan() cancels it in the
+ * same statement, so nothing can be prepared, marked ready or dispatched
+ * against it afterwards, and there is no path that attaches a second scan to a
+ * paid order. The screen asks the store to confirm before this is ever called.
  *
  * NO MONEY MOVES. What the customer paid is a Campus Dash fee, and whether it
- * is refunded is a decision nobody has made — so the order stops here and an
- * administrator picks it up, rather than a database function inventing a refund
- * policy.
+ * is refunded is a decision nobody has made — so an administrator picks it up
+ * from the exceptions list rather than a database function inventing a refund
+ * policy. The customer is TEXTED, because this ends their order while they are
+ * not looking at it.
  */
 export async function refuseScanAction(_prev, formData) {
   const orderId = str(formData, 'order_id');
   const vendorId = str(formData, 'vendor_id');
   const reason = str(formData, 'reason');
 
-  if (!reason) return { ok: false, message: 'Say why the scan could not be honoured.' };
+  if (!reason) return { ok: false, message: 'Say why the Meal Scan is not valid.' };
 
-  return run(
-    () => vendorRefuseScan(orderId, reason),
-    'Recorded. Campus Dash will follow it up with the customer.',
-    [`/vendor/${vendorId}`, `/vendor/${vendorId}/orders/${orderId}`]
-  );
-}
-
-/**
- * Sold out, withdrawn, or back on.
- *
- * THREE ACTS, ONE CALL, and the reason is what keeps them apart. A sold-out
- * mark is cleared when the store next reopens, because running out of jollof is
- * a fact about a service; a withdrawn item stays off until somebody puts it
- * back, because that was a decision.
- *
- * Either way the customer keeps SEEING the item, marked, because a dish that
- * vanishes reads as a store that stopped selling it.
- */
-export async function setMenuItemAvailableAction(_prev, formData) {
-  const available = formData.get('available') === 'true';
-  const reason = formData.get('reason') === 'WITHDRAWN' ? 'WITHDRAWN' : 'SOLD_OUT';
-  const name = str(formData, 'name') ?? 'That item';
-
+  let result;
   try {
-    await setMenuItemAvailable(str(formData, 'menu_item_id'), available, reason);
+    result = await vendorRefuseScan(orderId, reason);
   } catch (error) {
     return fail(error);
   }
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${str(formData, 'vendor_id')}`);
+
+  // AFTER THE TRANSITION, AND ONLY IF IT HAPPENED. A refusal that lost a race
+  // changed nothing, and texting somebody that their order is over would be
+  // the loudest possible way to be wrong.
+  if (result.success) {
+    await deferNotification(NOTIFICATION_EVENT.SCAN_REFUSED, () =>
+      notifyOrderEvent(NOTIFICATION_EVENT.SCAN_REFUSED, orderId)
+    );
+  }
+
+  revalidatePath(`/vendor/${vendorId}`);
+  revalidatePath(`/vendor/${vendorId}/orders/${orderId}`);
+  return outcome(result, 'Recorded. The customer has been told they need to order again.');
+}
+
+/**
+ * ON or OFF — whether the store is serving this item right now.
+ *
+ * THE CATALOGUE IS PERSISTENT. Off removes nothing: the item keeps its price,
+ * its description and its history, and customers simply stop seeing it. What
+ * moves with it is the store, because a store with nothing on is a store that
+ * is shut — so the message reports the state the DATABASE ended in rather than
+ * the one this button was aiming at.
+ */
+export async function setMenuItemActiveAction(_prev, formData) {
+  const active = formData.get('active') === 'true';
+  const name = str(formData, 'name') ?? 'That item';
+  const vendorId = str(formData, 'vendor_id');
+
+  let result;
+  try {
+    result = await setMenuItemActive(str(formData, 'menu_item_id'), active);
+  } catch (error) {
+    return fail(error);
+  }
+  revalidateMenu(vendorId);
+
+  return {
+    ok: true,
+    message: active
+      ? `${name} is on the menu.`
+      : result?.store_open
+        ? `${name} is off the menu. It stays in your items.`
+        : `${name} was the last one on, so your store is now closed.`,
+  };
+}
+
+/**
+ * Sold out, or back on.
+ *
+ * A DIFFERENT THING FROM OFF, and deliberately a different button. The customer
+ * keeps SEEING a sold-out item, marked, because a dish that vanishes reads as a
+ * store that stopped selling it; a dish marked sold out reads as a store that
+ * is busy. The mark clears itself when the store next opens.
+ */
+export async function setMenuItemAvailableAction(_prev, formData) {
+  const available = formData.get('available') === 'true';
+  const name = str(formData, 'name') ?? 'That item';
+
+  try {
+    await setMenuItemAvailable(str(formData, 'menu_item_id'), available);
+  } catch (error) {
+    return fail(error);
+  }
+  revalidateMenu(str(formData, 'vendor_id'));
 
   return {
     ok: true,
     message: available
-      ? `${name} is back on the menu.`
-      : reason === 'WITHDRAWN'
-        ? `${name} is off the menu until you put it back.`
-        : `${name} is marked sold out. It comes back when you reopen.`,
+      ? `${name} is available again.`
+      : `${name} is marked sold out. It comes back when you next open.`,
   };
+}
+
+/**
+ * Every screen a menu change reaches. The store's own board is on the list
+ * because turning the last item off closes the shop, and the board is where a
+ * vendor reads whether they are open.
+ */
+function revalidateMenu(vendorId) {
+  revalidatePath('/vendor/menu');
+  revalidatePath(`/vendor/${vendorId}`);
+  revalidatePath(`/order/${vendorId}`);
+  revalidatePath('/order');
 }
 
 export async function createMenuItemAction(_prev, formData) {
@@ -189,9 +252,8 @@ export async function createMenuItemAction(_prev, formData) {
     return fail(error);
   }
 
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: `${name} added to your menu.` };
+  revalidateMenu(vendorId);
+  return { ok: true, message: `${name} added to your items. Turn it on when you are serving it.` };
 }
 
 /**
@@ -225,8 +287,7 @@ export async function updateMenuItemAction(_prev, formData) {
     return fail(error);
   }
 
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
+  revalidateMenu(vendorId);
   return { ok: true, message: 'Saved.' };
 }
 
@@ -252,9 +313,8 @@ export async function deleteMenuItemAction(_prev, formData) {
     return fail(error);
   }
 
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
-  return { ok: true, message: `${name} removed from your menu.` };
+  revalidateMenu(vendorId);
+  return { ok: true, message: `${name} removed from your items.` };
 }
 
 /**
@@ -380,19 +440,18 @@ export async function setAcceptingOrdersAction(_prev, formData) {
   } catch (error) {
     return fail(error);
   }
-  // Open or closed shows on the board, and reopening clears sold-out marks on
-  // the menu and the storefront. No order screen under the board depends on it.
-  revalidatePath(`/vendor/${vendorId}`);
-  revalidatePath('/vendor/menu');
-  revalidatePath(`/order/${vendorId}`);
+  // Open or closed shows on the board, and both directions move the menu:
+  // opening clears sold-out marks, closing takes every item off.
+  revalidateMenu(vendorId);
   return {
     ok: true,
-    // REOPENING CLEARS THE SOLD-OUT MARKS, and the message says so rather than
-    // leaving a vendor to discover it. Running out of jollof is a fact about a
-    // service, not a property of the dish.
+    // BOTH CONSEQUENCES ARE SAID OUT LOUD rather than left to be discovered.
+    // Closing empties the active menu — the items are all still there — and
+    // opening clears the sold-out marks, because running out of jollof is a
+    // fact about a service and not a property of the dish.
     message: accepting
       ? 'Open for orders. Everything on your menu is available again.'
-      : 'Closed. No new orders will arrive. Orders already in your kitchen are unaffected.',
+      : 'Closed, and your menu is cleared. Your items are all still here — turn them on when you next open. Orders already in your kitchen are unaffected.',
   };
 }
 
@@ -434,7 +493,7 @@ export async function savePayoutDestinationAction(_prev, formData) {
   return {
     ok: true,
     message: registered.ok
-      ? 'Payout details saved. Your share of each order will be sent to this account.'
+      ? 'Payout details saved. Paystack will pay your share of each order into this account the next working day.'
       : 'Payout details saved. We will finish setting them up with our payment provider shortly.',
   };
 }

@@ -250,15 +250,36 @@ only when, the customer asks for a Partner.
   **customer** types it into their own order page.
 - **Letting an order go unpaid** — place one and walk away. The sweep cancels it
   once the payment timeout passes, and nothing is charged.
-- **Sold out** — vendor `/vendor/menu` → mark the Jollof sold out. It stays on
-  the customer menu, marked **Sold out**, and cannot be added. Close the store
-  and open it again: everything is available once more.
+- **Sold out** — vendor `/vendor/menu` → open the Jollof's details and mark it
+  sold out. It stays on the customer menu, marked **Sold out**, and cannot be
+  added. Close the store and turn an item back on: every sold-out mark clears.
+- **Off the menu** — on the same screen, flick the Jollof's switch off. It
+  disappears from the customer menu entirely, and is still in the vendor's list
+  with its price. Turn it back on and it reappears.
+- **The store follows the menu** — turn every item off. The store closes itself
+  and `/order/<store>` says so. Turn one back on: the store reopens with that
+  one item. Now press **Close store**: everything goes off and the list is
+  intact. Pressing Open with nothing on is refused and says what to do.
+- **Meal Scan, approved** — as a customer, open a store marked **Meal Scan
+  accepted**, add something scan-eligible, tick **Redeem by Meal Scan**, take or
+  choose a photo, and pay. The food line reads GH₵0.00 and the total is the flat
+  GH₵2.00 fee plus anything you chose. Your tracking page says **Checking your
+  Meal Scan**. As the vendor, open the order, look at the image and press **Scan
+  is good** — a Partner order only starts looking for one at that moment.
+- **Meal Scan, invalid** — the same up to the vendor screen, then **Scan is
+  invalid**. The confirmation lists every consequence and asks why. Confirm: the
+  order is cancelled, the customer's page reads **Meal Scan not accepted** with
+  an **Order again** button, and `/dev/inbox` holds the SMS telling them so.
+  Nothing further can be done with that order from either side.
+- **A Meal Scan is a photo** — try to attach a PDF. It is refused before it is
+  stored, and a photo you had already attached is kept.
 - **Partner delivery switched off** — Admin `/admin/pilot` → untick **Partner
   delivery is available**. New checkouts offer collection only; an order already
   paid for is untouched and still completes.
 - **Scan pricing** — a meal scan is priced by its OWN rules, and the 6.95% food
   percentage is never part of it. Every scan order pays a flat **GH₵2.00**
-  service fee whatever the meal is worth. Place three at `/scan` and watch the
+  service fee whatever the meal is worth. Place three from an eligible store's
+  checkout — **Redeem by Meal Scan** — and watch the
   total:
 
   | What you choose                | Fees                        | Total    |

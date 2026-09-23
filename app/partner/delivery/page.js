@@ -2,11 +2,9 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCapabilities } from '@/lib/auth/session';
 import { getActiveDeliveries } from '@/lib/partner';
-import { scanImageUrl, getPartnerScanBrief } from '@/lib/scan';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
 import DeliveryActions from './delivery-actions';
-import ScanCollection from './scan-collection';
 import { BackLink } from '@/app/ui';
 
 export const dynamic = 'force-dynamic';
@@ -52,16 +50,14 @@ export default async function PartnerDeliveryPage({ searchParams }) {
   const collecting = delivery.delivery_status === 'ASSIGNED';
   const isScan = delivery.order_type === 'SCAN';
 
-  // The scan the Partner presents at the counter. The store checks it and then
-  // reads out the ordinary four digits, so this is what a Partner SHOWS rather
-  // than what they report on. The URL is short-lived and re-derived on every
-  // load, which is what makes losing the assignment revoke access rather than
-  // merely hide a link.
-  const scanUrl = collecting && isScan ? await scanImageUrl(delivery.order_id) : null;
-
-  // What the customer asked for. Gated on the same release as the image, so it
-  // opens on assignment and closes when the delivery does.
-  const brief = isScan ? await getPartnerScanBrief(delivery.order_id) : null;
+  // A PARTNER NEVER SEES THE MEAL SCAN, and no longer needs to. This screen
+  // used to show the image so the Partner could present it at a counter that
+  // had never seen the order — the old errand model. The store verifies the
+  // scan on its own board now, BEFORE a Partner is even looked for, so by the
+  // time this page exists the entitlement has already been judged by the only
+  // party that could judge it. What is left for the Partner is the job every
+  // other order gives them: collect with the store's code, deliver with the
+  // customer's.
 
   // WHERE IT IS GOING, and who to ring. Shown from assignment for both legs,
   // but in the order the legs happen: while collecting it sits UNDER the
@@ -135,7 +131,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
             customer's. */}
         {isScan ? (
           <p className="bg-brand-50 text-brand-800 mb-1.5 w-fit rounded px-1.5 py-0.5 text-xs font-semibold">
-            Meal scan
+            Meal Scan
           </p>
         ) : null}
         <h1 className="text-display text-2xl font-semibold sm:text-3xl">
@@ -154,29 +150,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
 
       {collecting ? null : destinationCard}
 
-      {collecting && isScan ? (
-        <>
-          <section className="rounded-card bg-surface border-line mt-3 border p-4">
-            <h2 className="text-muted text-sm font-medium">Go to</h2>
-            <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
-            <p className="text-muted text-sm">{delivery.vendor_location}</p>
-          </section>
-
-          {/* The customer's optional note. The ITEMS say what the order is —
-              they are on the order like any other — so this is context rather
-              than the whole instruction it used to have to be. */}
-          {brief?.details ? (
-            <section className="rounded-card bg-brand-50 mt-3 p-4">
-              <h2 className="text-muted text-sm font-medium">What they asked for</h2>
-              <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line">{brief.details}</p>
-            </section>
-          ) : null}
-
-          <div className="mt-3">
-            <ScanCollection scanUrl={scanUrl} restaurantName={delivery.vendor_name} />
-          </div>
-        </>
-      ) : collecting ? (
+      {collecting ? (
         <section className="rounded-card bg-surface border-line mt-3 border p-4">
           <h2 className="text-muted text-sm font-medium">Collect from</h2>
           <p className="mt-1 text-lg font-semibold">{delivery.vendor_name}</p>
@@ -216,7 +190,7 @@ export default async function PartnerDeliveryPage({ searchParams }) {
       {/* The code box follows the instruction that asks for it. While
           collecting, where the food goes next comes after the step in hand. */}
       <div className="mt-4">
-        <DeliveryActions delivery={delivery} isScan={isScan} />
+        <DeliveryActions delivery={delivery} />
       </div>
 
       {collecting ? <div className="mt-4">{destinationCard}</div> : null}

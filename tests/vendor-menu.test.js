@@ -46,6 +46,44 @@ describe('vendor menu management', () => {
       async (c) => (await c.query('select * from public.vendor_menu($1)', [vendorId])).rows
     );
 
+  const setActive = (id, active, staff = ACTORS.vendor1Staff) =>
+    asUser(
+      staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_set_menu_item_active($1, $2)', [id, active]))
+          .rows[0],
+      { commit: true }
+    );
+
+  const setOpen = (open, vendorId = VENDORS.one) =>
+    asStaff('select * from public.vendor_set_accepting_orders($1, $2)', [vendorId, open]);
+
+  const storeOpen = (vendorId = VENDORS.one) =>
+    asService(
+      async (c) =>
+        (await c.query('select is_accepting_orders from public.vendors where id = $1', [vendorId]))
+          .rows[0].is_accepting_orders
+    );
+
+  const activeIds = (vendorId = VENDORS.one) =>
+    asService(async (c) =>
+      (
+        await c.query(
+          'select id from public.menu_items where vendor_id = $1 and is_active order by sort_order',
+          [vendorId]
+        )
+      ).rows.map((r) => r.id)
+    );
+
+  const customerSees = (vendorId = VENDORS.one) =>
+    asAnon(async (c) =>
+      (
+        await c.query('select id from public.menu_items where vendor_id = $1 order by sort_order', [
+          vendorId,
+        ])
+      ).rows.map((r) => r.id)
+    );
+
   const itemRow = (id) =>
     asService(
       async (c) => (await c.query('select * from public.menu_items where id = $1', [id])).rows[0]
@@ -139,14 +177,24 @@ describe('vendor menu management', () => {
   // ADDING, EDITING, DELETING
   // =========================================================================
   describe('a store runs its own menu', () => {
-    test('adds an item, and it appears to customers straight away', async () => {
+    /**
+     * A NEW ITEM JOINS THE CATALOGUE, NOT THE SERVICE. Adding a dish is not the
+     * same decision as starting to sell it — and a default of ON would open a
+     * closed store from the menu screen, which is the one thing a vendor
+     * building a catalogue at eleven at night must not do by accident.
+     */
+    test('adds an item, off the menu until the store turns it on', async () => {
       const item = await create({ name: 'Banku and Tilapia', price: 4200 });
       assert.ok(item.id);
       assert.equal(item.name, 'Banku and Tilapia');
       assert.equal(Number(item.price_pesewas), 4200);
-      assert.equal(item.is_available, true, 'a new item is on the menu');
+      assert.equal(item.is_active, false, 'in the catalogue, not on the menu');
+      assert.equal(item.is_available, true, 'and NOT sold out — those are different things');
 
       // Through the customer's own read of the table, not the vendor's.
+      assert.equal((await customerSees()).includes(item.id), false, 'so no customer sees it yet');
+
+      await setActive(item.id, true);
       const visible = await asAnon(
         async (c) =>
           (
@@ -156,7 +204,7 @@ describe('vendor menu management', () => {
             )
           ).rows
       );
-      assert.equal(visible.length, 1);
+      assert.equal(visible.length, 1, 'and sees it the moment it is turned on');
       assert.equal(Number(visible[0].price_pesewas), 4200);
     });
 
@@ -234,10 +282,18 @@ describe('vendor menu management', () => {
   });
 
   // =========================================================================
-  // SOLD OUT vs OFF THE MENU vs DELETED
+  // OFF vs SOLD OUT vs DELETED
   // =========================================================================
-  describe('three different acts', () => {
-    test('sold out keeps the item visible and records why', async () => {
+  // Three states a customer experiences completely differently, and conflating
+  // any two of them is what makes menu management confusing everywhere it is
+  // confusing:
+  //
+  //   OFF              the customer does not see it at all
+  //   ON + SOLD OUT    the customer sees it, marked, and cannot order it
+  //   ON + AVAILABLE   the customer sees it and can order it
+  //
+  describe('three different states', () => {
+    test('sold out keeps the item ON the menu and records why', async () => {
       await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
         MENU.jollof,
         'SOLD_OUT',
@@ -246,6 +302,7 @@ describe('vendor menu management', () => {
       const row = await itemRow(MENU.jollof);
       assert.equal(row.is_available, false);
       assert.equal(row.unavailable_reason, 'SOLD_OUT');
+      assert.equal(row.is_active, true, 'sold out is NOT off the menu');
 
       // STILL ON THE CUSTOMER'S MENU. A dish that vanishes when it runs out
       // reads as a store that stopped selling it.
@@ -258,77 +315,245 @@ describe('vendor menu management', () => {
       assert.equal(visible[0].is_available, false);
     });
 
-    test('off the menu is a different reason on the same column', async () => {
-      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
-        MENU.jollof,
-        'WITHDRAWN',
-      ]);
-      assert.equal((await itemRow(MENU.jollof)).unavailable_reason, 'WITHDRAWN');
-    });
-
-    /**
-     * THE ONE BEHAVIOUR THE DISTINCTION IS FOR. Running out of jollof is a fact
-     * about a service and clears itself; taking a dish off the menu is a
-     * decision and does not.
-     */
-    test('reopening the store clears sold out and leaves withdrawn alone', async () => {
-      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
-        MENU.jollof,
-        'SOLD_OUT',
-      ]);
-      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
-        MENU.waakye,
-        'WITHDRAWN',
-      ]);
-
-      await asStaff('select * from public.vendor_set_accepting_orders($1, false)', [VENDORS.one]);
-      await asStaff('select * from public.vendor_set_accepting_orders($1, true)', [VENDORS.one]);
-
-      assert.equal((await itemRow(MENU.jollof)).is_available, true, 'sold out clears');
-      assert.equal((await itemRow(MENU.waakye)).is_available, false, 'withdrawn stays');
-      assert.equal((await itemRow(MENU.waakye)).unavailable_reason, 'WITHDRAWN');
-    });
-
-    test('putting an item back clears the reason', async () => {
-      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
-        MENU.jollof,
-        'WITHDRAWN',
-      ]);
-      await asStaff('select * from public.vendor_set_menu_item_available($1, true, $2)', [
-        MENU.jollof,
-        'SOLD_OUT',
-      ]);
+    test('off the menu hides the item and does NOT mark it sold out', async () => {
+      await setActive(MENU.jollof, false);
 
       const row = await itemRow(MENU.jollof);
-      assert.equal(row.is_available, true);
-      assert.equal(row.unavailable_reason, null, 'an available item has no reason to be otherwise');
+      assert.equal(row.is_active, false);
+      assert.equal(row.is_available, true, 'off is not a kind of unavailable');
+      assert.equal(row.unavailable_reason, null);
+
+      assert.equal((await customerSees()).includes(MENU.jollof), false);
     });
 
-    test('an unavailable item cannot be ordered, whatever the reason', async () => {
-      for (const reason of ['SOLD_OUT', 'WITHDRAWN']) {
-        await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
-          MENU.jollof,
-          reason,
-        ]);
+    test('off deletes nothing', async () => {
+      const before = await itemRow(MENU.jollof);
+      await setActive(MENU.jollof, false);
 
-        const error = await expectRejection(
-          submitOrder({
-            vendorId: VENDORS.one,
-            items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
-            fulfilment: 'PICKUP',
-            destination: null,
-          })
-        );
-        assert.match(error.message, /unavailable/i, `${reason} is refused at submission`);
+      const after = await itemRow(MENU.jollof);
+      assert.ok(after, 'the row is still there');
+      assert.equal(after.name, before.name);
+      assert.equal(after.price_pesewas, before.price_pesewas);
+      assert.equal(after.description, before.description);
+      assert.equal(after.scan_eligible, before.scan_eligible);
 
-        await asStaff('select * from public.vendor_set_menu_item_available($1, true, $2)', [
-          MENU.jollof,
-          'SOLD_OUT',
-        ]);
-      }
+      // And the store still sees it, because the catalogue is what the store
+      // owns. Only the customer's view narrows.
+      const menu = await menuFor();
+      assert.ok(menu.some((m) => m.id === MENU.jollof));
+    });
+
+    test('an item that is off cannot be ordered even from a stale basket', async () => {
+      await setActive(MENU.jollof, false);
+
+      const error = await expectRejection(
+        submitOrder({
+          vendorId: VENDORS.one,
+          items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+          fulfilment: 'PICKUP',
+          destination: null,
+        })
+      );
+      assert.match(error.message, /unavailable/i);
+    });
+
+    test('an item that is sold out cannot be ordered either', async () => {
+      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
+        MENU.jollof,
+        'SOLD_OUT',
+      ]);
+
+      const error = await expectRejection(
+        submitOrder({
+          vendorId: VENDORS.one,
+          items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+          fulfilment: 'PICKUP',
+          destination: null,
+        })
+      );
+      assert.match(error.message, /unavailable/i);
+    });
+
+    test('a quote is refused for an item that is off, exactly as submission is', async () => {
+      await setActive(MENU.jollof, false);
+      const error = await expectRejection(
+        asUser(ACTORS.customerAma, (c) =>
+          c.query('select * from public.quote_order($1, $2::jsonb, $3)', [
+            VENDORS.one,
+            JSON.stringify([{ menu_item_id: MENU.jollof, quantity: 1 }]),
+            'PICKUP',
+          ])
+        )
+      );
+      assert.match(error.message, /unavailable/i);
+    });
+
+    test('sold out is the only unavailability reason there is', async () => {
+      const error = await expectRejection(
+        asUser(ACTORS.vendor1Staff, (c) =>
+          c.query('select * from public.vendor_set_menu_item_available($1, false, $2)', [
+            MENU.jollof,
+            'WITHDRAWN',
+          ])
+        )
+      );
+      assert.match(error.message, /sold out is the only reason/i);
+      assert.match(error.message, /turn it off/i, 'and it names the control that does mean that');
+    });
+
+    test('turning an item back on does not clear a sold-out mark on a store already open', async () => {
+      // The reset belongs to the CLOSED → OPEN transition, not to every switch.
+      await asStaff('select * from public.vendor_set_menu_item_available($1, false, $2)', [
+        MENU.waakye,
+        'SOLD_OUT',
+      ]);
+      await setActive(MENU.jollof, false);
+      await setActive(MENU.jollof, true);
+
+      assert.equal(await storeOpen(), true, 'it never closed');
+      assert.equal((await itemRow(MENU.waakye)).is_available, false, 'the mark is left alone');
     });
   });
 
+  // =========================================================================
+  // THE STORE IS OPEN IF AND ONLY IF SOMETHING IS ON
+  // =========================================================================
+  describe('open and closed follow the active menu', () => {
+    test('turning one of several off leaves the rest on, and the store open', async () => {
+      const before = await activeIds();
+      assert.ok(before.length > 2, 'the fixture has several');
+
+      const result = await setActive(MENU.jollof, false);
+      assert.equal(result.is_active, false);
+      assert.equal(result.store_open, true);
+
+      const after = await activeIds();
+      assert.equal(after.includes(MENU.jollof), false);
+      assert.equal(after.length, before.length - 1, 'nothing else moved');
+      assert.equal(await storeOpen(), true);
+    });
+
+    test('turning the LAST one off closes the store', async () => {
+      const ids = await activeIds();
+      for (const id of ids.slice(0, -1)) await setActive(id, false);
+      assert.equal(await storeOpen(), true, 'still one to go');
+
+      const last = await setActive(ids[ids.length - 1], false);
+      assert.equal(last.store_open, false);
+      assert.equal(await storeOpen(), false);
+
+      // AND THE CATALOGUE IS WHOLE. Closing is not deleting.
+      const menu = await menuFor();
+      assert.equal(menu.length, ids.length, 'every item is still there');
+    });
+
+    test('turning an item on while closed opens the store', async () => {
+      await setOpen(false);
+      assert.equal(await storeOpen(), false);
+
+      const result = await setActive(MENU.jollof, true);
+      assert.equal(result.store_open, true);
+      assert.equal(await storeOpen(), true);
+      assert.deepEqual(await customerSees(), [MENU.jollof], 'and only that item is on offer');
+    });
+
+    test('closing the store turns every active item off and keeps the catalogue', async () => {
+      const before = await menuFor();
+      await setOpen(false);
+
+      assert.deepEqual(await activeIds(), []);
+      assert.equal(await storeOpen(), false);
+      assert.equal((await menuFor()).length, before.length, 'nothing was deleted');
+      assert.deepEqual(await customerSees(), [], 'and a closed store offers nothing');
+    });
+
+    test('closing preserves everything about each item except whether it is on', async () => {
+      const before = await itemRow(MENU.jollof);
+      await setOpen(false);
+      const after = await itemRow(MENU.jollof);
+
+      assert.equal(after.is_active, false);
+      assert.equal(after.name, before.name);
+      assert.equal(after.price_pesewas, before.price_pesewas);
+      assert.equal(after.scan_eligible, before.scan_eligible);
+      assert.equal(after.sort_order, before.sort_order);
+    });
+
+    test('opening with nothing on is refused, and says what to do', async () => {
+      await setOpen(false);
+
+      const error = await expectRejection(
+        asUser(ACTORS.vendor1Staff, (c) =>
+          c.query('select * from public.vendor_set_accepting_orders($1, true)', [VENDORS.one])
+        )
+      );
+      assert.match(error.message, /turn at least one item on/i);
+      assert.equal(await storeOpen(), false, 'and the store really is still closed');
+      assert.deepEqual(await activeIds(), [], 'nothing was turned on on the vendor’s behalf');
+    });
+
+    test('a closed store cannot be ordered from, whatever a stale page shows', async () => {
+      await setOpen(false);
+      const error = await expectRejection(
+        submitOrder({
+          vendorId: VENDORS.one,
+          items: [{ menu_item_id: MENU.jollof, quantity: 1 }],
+          fulfilment: 'PICKUP',
+          destination: null,
+        })
+      );
+      assert.match(error.message, /not accepting orders/i);
+    });
+
+    test('deleting the last active item closes the store too', async () => {
+      const item = await create({ name: 'The Only Thing', price: 1200 });
+      await setOpen(false);
+      await setActive(item.id, true);
+      assert.equal(await storeOpen(), true);
+
+      await asUser(
+        ACTORS.vendor1Staff,
+        (c) => c.query('select public.vendor_delete_menu_item($1) as ok', [item.id]),
+        { commit: true }
+      );
+      assert.equal(await storeOpen(), false, 'there is nothing left to sell');
+    });
+
+    test('one store’s switches never reach another’s', async () => {
+      await setOpen(false);
+      assert.equal(await storeOpen(VENDORS.one), false);
+      assert.equal(await storeOpen(VENDORS.two), true, 'the grill is still trading');
+      assert.ok((await activeIds(VENDORS.two)).length > 0);
+    });
+
+    /**
+     * TWO TAPS IN THE SAME SECOND. A phone and a tablet on one counter is the
+     * realistic race, and the invariant has to survive it: the store must not
+     * end up open with nothing on, or closed with something on.
+     *
+     * Every transition takes the vendor row with SELECT … FOR UPDATE before it
+     * reads the count, so these serialise rather than both seeing "one other
+     * item is still on".
+     */
+    test('concurrent switches cannot leave an impossible state', async () => {
+      const ids = await activeIds();
+      for (const id of ids.slice(2)) await setActive(id, false);
+      const [a, b] = await activeIds();
+
+      await Promise.all([setActive(a, false), setActive(b, false)]);
+
+      assert.deepEqual(await activeIds(), [], 'both went off');
+      assert.equal(await storeOpen(), false, 'and the store followed them');
+    });
+
+    test('a close racing a switch-on still agrees with the menu', async () => {
+      await Promise.all([setOpen(false), setActive(MENU.waakye, true)]);
+
+      const open = await storeOpen();
+      const active = await activeIds();
+      assert.equal(open, active.length > 0, 'open if and only if something is on');
+    });
+  });
   // =========================================================================
   // THE PHOTOGRAPH
   // =========================================================================
@@ -531,7 +756,19 @@ describe('vendor menu management', () => {
           ])
         )
       );
-      assert.match(error.message, /unknown reason/i);
+      assert.match(error.message, /sold out is the only reason/i);
+    });
+
+    test('the column itself refuses any reason but sold out', async () => {
+      const error = await expectRejection(
+        asService((c) =>
+          c.query(
+            'update public.menu_items set is_available = false, unavailable_reason = $2 where id = $1',
+            [MENU.jollof, 'WITHDRAWN']
+          )
+        )
+      );
+      assert.match(error.message, /menu_items_unavailable_reason_shape/);
     });
   });
 });

@@ -147,8 +147,8 @@ describe('route health', { skip: running ? false : `dev server not running at ${
     }
   });
 
+  // /scan is gone: a Meal Scan is a way of paying at the ordinary checkout.
   for (const path of [
-    '/scan',
     '/terms',
     '/suspended',
     '/login/admin',

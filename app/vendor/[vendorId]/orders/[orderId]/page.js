@@ -7,6 +7,7 @@ import { BackLink, Card, Facts, Fact, Badge } from '@/app/ui';
 import OrderActions from './order-actions';
 
 export const dynamic = 'force-dynamic';
+export const metadata = { title: 'Order' };
 
 const STATUS_COPY = {
   ACCEPTED: 'Paid. Start preparing',
@@ -53,7 +54,7 @@ export default async function VendorOrderPage({ params }) {
       <header className="mt-3 mb-6">
         <p className="text-muted flex items-center gap-2 text-sm font-medium">
           Order
-          {order.order_type === 'SCAN' ? <Badge tone="brand">Meal scan</Badge> : null}
+          {order.order_type === 'SCAN' ? <Badge tone="brand">Meal Scan</Badge> : null}
         </p>
         <h1 className="text-6xl leading-none font-bold tabular-nums">{orderLabel(order)}</h1>
         <p className="mt-3 text-lg font-semibold">
@@ -92,13 +93,13 @@ export default async function VendorOrderPage({ params }) {
 
         {/* THE STORE'S AMOUNT, and only that. The fees on this order belong to
             Campus Dash and the Partner and are not returned to this screen. On
-            a meal scan the food is settled through the campus meal system, so
+            a Meal Scan the food is settled through the campus meal system, so
             its value is named for what it is; the pack, when there is one, is
             the store's money through Campus Dash. */}
         <dl className="border-line mt-3 space-y-1.5 border-t pt-3 text-sm">
           {order.order_type === 'SCAN' ? (
             <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-muted">Food, on the meal scan</dt>
+              <dt className="text-muted">Food, on the Meal Scan</dt>
               <dd className="tabular-nums">{formatPesewas(order.scan_value_pesewas)}</dd>
             </div>
           ) : null}
@@ -110,7 +111,7 @@ export default async function VendorOrderPage({ params }) {
           ) : null}
           {order.order_type !== 'SCAN' || Number(order.vendor_amount_pesewas) > 0 ? (
             <div className="flex items-baseline justify-between gap-3 pt-1">
-              <dt className="font-semibold">Paid to you by Campus Dash</dt>
+              <dt className="font-semibold">Your amount</dt>
               <dd className="text-base font-semibold tabular-nums">
                 {formatPesewas(order.vendor_amount_pesewas)}
               </dd>
@@ -119,10 +120,13 @@ export default async function VendorOrderPage({ params }) {
         </dl>
       </Card>
 
-      {order.scan_details ? (
+      {/* ORDER INFORMATION, in the customer's words, and only when they wrote
+          some. It is the note about the food. What they wrote for their
+          Partner is never returned to a store. */}
+      {order.order_information ? (
         <Card className="mt-4 p-5">
-          <h2 className="mb-1.5 font-semibold">Note from the customer</h2>
-          <p className="text-muted text-sm leading-relaxed">{order.scan_details}</p>
+          <h2 className="mb-1.5 font-semibold">Order information</h2>
+          <p className="text-ink leading-relaxed whitespace-pre-line">{order.order_information}</p>
         </Card>
       ) : null}
 
@@ -134,7 +138,7 @@ export default async function VendorOrderPage({ params }) {
         <Facts>
           <Fact label="Payment" value={paymentCopy(order.payment_status)} />
           {order.order_type === 'SCAN' ? (
-            <Fact label="Meal scan" value={scanCopy(order.scan_status)} />
+            <Fact label="Meal Scan" value={scanCopy(order.scan_status)} />
           ) : null}
           <Fact label="Placed" value={formatAge(order.age_seconds)} />
         </Facts>
@@ -157,9 +161,11 @@ function paymentCopy(status) {
 function scanCopy(status) {
   return {
     UPLOADED: 'Waiting for you to check it',
+    // Nothing writes RELEASED any more — a Partner never sees a Meal Scan —
+    // but an order from before that changed can still be carrying it.
     RELEASED: 'Waiting for you to check it',
-    REDEEMED: 'Verified and redeemed',
-    REFUSED: 'Refused',
+    REDEEMED: 'Approved by you',
+    REFUSED: 'Marked invalid — this order is cancelled',
   }[status];
 }
 

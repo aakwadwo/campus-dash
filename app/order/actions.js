@@ -12,7 +12,9 @@ import {
   customerCompletePickup,
 } from '@/lib/orders/transitions';
 import { quoteOrder } from '@/lib/customer';
+import { quoteScanOrder, submitScanOrder } from '@/lib/scan';
 import { startPayment, refreshPaymentState } from '@/lib/orders/payments';
+import { startTiming } from '@/lib/observability/server-timing';
 import { setMyEmail } from '@/lib/customer';
 
 /**
@@ -39,9 +41,29 @@ function fail(error) {
  * quote_order(), which is the same arithmetic that will charge the customer —
  * so the number above the Pay button cannot disagree with the order.
  */
-export async function quoteAction({ vendorId, items, fulfilmentType = null }) {
+export async function quoteAction({
+  vendorId,
+  items,
+  fulfilmentType = null,
+  mealScan = false,
+  wantsPack = false,
+  destinationLocationId = null,
+}) {
   try {
-    const quote = await quoteOrder({ vendorId, items, fulfilmentType });
+    // TWO PRICING SYSTEMS THAT NEVER MEET, and the switch is which one is
+    // asked. A food order pays a percentage of a real subtotal; a Meal Scan
+    // order pays a flat fee, because the "value" it covers is the store's price
+    // for food Campus Dash did not sell. Neither function reads the other's
+    // figures, and nothing is added up here.
+    const quote = mealScan
+      ? await quoteScanOrder({
+          vendorId,
+          items,
+          fulfilmentType: fulfilmentType ?? 'PICKUP',
+          destinationLocationId,
+          wantsPack,
+        })
+      : await quoteOrder({ vendorId, items, fulfilmentType });
     return { ok: true, quote };
   } catch (error) {
     return fail(error);
@@ -73,7 +95,13 @@ export async function submitOrderAction(_prev, formData) {
   }
   const fulfilmentType = chosen;
   const destinationLocationId = String(formData.get('destination_location_id') ?? '') || null;
-  const destinationNote = String(formData.get('destination_note') ?? '').trim() || null;
+  // TWO NOTES, TWO READERS. Order information is about the food and goes to the
+  // store; Additional information is for the Partner and only exists with one.
+  const orderNote = String(formData.get('order_note') ?? '').trim() || null;
+  const destinationNote =
+    fulfilmentType === 'DELIVERY'
+      ? String(formData.get('destination_note') ?? '').trim() || null
+      : null;
 
   let items;
   try {
@@ -88,20 +116,57 @@ export async function submitOrderAction(_prev, formData) {
     return { ok: false, message: 'Choose where the Partner should bring it.' };
   }
 
+  // REDEEM BY MEAL SCAN, decided at this checkout and nowhere else. It is a way
+  // of PAYING rather than a different product, so it shares the basket, the
+  // fulfilment choice, the destination and the single payment that follows.
+  // What changes is which pricing function runs and that an image is attached.
+  const mealScan = formData.get('meal_scan') === 'on';
+  const scanImagePath = String(formData.get('scan_image_path') ?? '');
+  // A REQUEST the database may overrule: the pack is compulsory with a Partner.
+  const wantsPack = formData.get('wants_pack') === 'on';
+
+  if (mealScan && !scanImagePath) {
+    return { ok: false, message: 'Add a photo of your Meal Scan.' };
+  }
+
+  // Only these two fields survive. Anything else the basket carried is never
+  // read.
+  const lines = items.map((item) => ({
+    menuItemId: String(item.menuItemId),
+    quantity: Number(item.quantity),
+  }));
+
+  // THE CHECKOUT'S CRITICAL PATH, measured: one log line per Pay tap, split
+  // into creating the order and opening the provider's checkout, so a slow
+  // lunch rush can be pinned on the database or on Paystack. Fixed tokens only;
+  // no id or amount is logged.
+  const timing = startTiming();
+
   let order;
   try {
-    order = await submitOrder({
-      vendorId,
-      // Only these two fields survive. Anything else the basket carried is
-      // never read.
-      items: items.map((item) => ({
-        menuItemId: String(item.menuItemId),
-        quantity: Number(item.quantity),
-      })),
-      fulfilmentType,
-      destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
-      destinationNote,
-    });
+    order = await timing.measure('submit', () =>
+      mealScan
+        ? submitScanOrder({
+            vendorId,
+            items: lines,
+            fulfilmentType,
+            destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
+            scanImagePath,
+            contentType: String(formData.get('content_type') ?? ''),
+            byteSize: Number(formData.get('byte_size') ?? 0),
+            orderNote,
+            destinationNote,
+            wantsPack,
+          })
+        : submitOrder({
+            vendorId,
+            items: lines,
+            fulfilmentType,
+            destinationLocationId: fulfilmentType === 'DELIVERY' ? destinationLocationId : null,
+            destinationNote,
+            orderNote,
+          })
+    );
   } catch (error) {
     return fail(error);
   }
@@ -111,11 +176,13 @@ export async function submitOrderAction(_prev, formData) {
 
   let payment;
   try {
-    payment = await startPayment(orderId);
+    payment = await timing.measure('payment', () => startPayment(orderId));
   } catch (error) {
     // The order is real and payable. Send them to it rather than losing it.
     console.error('[order] checkout could not be opened:', error.message);
     return { ok: true, orderId, orderHref: `/orders/${orderId}` };
+  } finally {
+    console.log(`[timing] checkout ${timing.summary()}`);
   }
 
   if (!payment.ok) {

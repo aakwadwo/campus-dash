@@ -230,6 +230,10 @@ describe('schema invariants', () => {
       'current_terms',
       'current_user_id',
       'deliverable_locations',
+      // The campus tree for the destination picker. Place names and whether
+      // each can be chosen: the same public facts deliverable_locations()
+      // already gave, in the shape a drill-down needs.
+      'destination_places',
       // A pure text helper: given a first name and a legacy full name, it
       // returns the one to show. It reads nothing and can leak nothing.
       'given_name',
@@ -240,20 +244,21 @@ describe('schema invariants', () => {
       'location_path',
       'location_zone',
       'my_vendor_ids',
-      // Asked BEFORE a vendor sign-in code is sent, which is by definition
-      // before anybody is signed in. Returns a bare boolean about a number the
-      // caller already typed — strictly less than the screen's own error
-      // message tells them either way — and stops /login/vendor being used to
-      // send an SMS to an arbitrary number.
-      'phone_can_sign_in_as_vendor',
       'platform_config',
-      // The scan catalogue. What a store will honour a meal scan for is not a
-      // secret, and hiding it only means somebody finding out at the counter.
-      'scan_menu',
-      'scan_restaurants',
+      // THE SCAN CATALOGUE IS GONE. scan_menu() and scan_restaurants() served a
+      // separate way to browse; a Meal Scan is a switch on an eligible store's
+      // ordinary checkout now, and the storefront read carries scan_eligible
+      // like any other column.
       'storefront_vendor',
       'storefront_vendors',
       'active_vendor_categories',
+      // Asked BEFORE a vendor sign-in code is sent, which is by definition
+      // before anybody is signed in. Returns ONE WORD about a number the caller
+      // already typed — strictly less than the screen's own error message tells
+      // them either way — and stops /login/vendor being used to send an SMS to
+      // an arbitrary number, or to sign somebody into an identity that holds
+      // the number but owns nothing.
+      'vendor_phone_sign_in_status',
     ];
 
     // Everything a signed-in account may call. Reachability, NOT authorisation:
@@ -381,6 +386,8 @@ describe('schema invariants', () => {
       'customer_keep_waiting',
       'customer_order_detail',
       'customer_order_list',
+      // The order screen's poll: an opaque signature of the caller's own order.
+      'customer_order_signal',
       'customer_order_stage',
       'customer_rate_partner',
       'customer_reward_milestones',
@@ -409,14 +416,11 @@ describe('schema invariants', () => {
       'partner_confirm_pickup',
       'partner_delivery_history',
       'partner_earnings_summary',
-      // Whether the caller is the Partner CURRENTLY carrying a scan order.
-      // Reachable because the order_scans policy evaluates as the caller, and
-      // it is the same predicate scan_image_path() uses — so the row and the
-      // image cannot disagree about who may look. It answers only about the
-      // caller's own assignment and returns a bare boolean.
-      'partner_may_read_scan',
+      // partner_may_read_scan and partner_scan_brief are NOT here, and not
+      // because they lost a grant: they do not exist. A Partner is told
+      // nothing about a Meal Scan and never sees the image — the store
+      // verifies it before dispatch is even opened.
       'partner_report_customer_absent',
-      'partner_scan_brief',
       // A pure read of one configured number. It leaks nothing: the threshold
       // is a published product policy, shown on the Partner dashboard.
       'payout_threshold_for',
@@ -464,9 +468,16 @@ describe('schema invariants', () => {
       'vendor_order_detail',
       'vendor_daily_sales',
       'vendor_orders_on_day',
+      // A store's own money by the day it was paid, for "Next payout". Staff or
+      // admin, enforced in the body; a read that writes no settlement record.
+      'vendor_payout_days',
       'vendor_pending_count',
       'vendor_active_count',
       'vendor_set_accepting_orders',
+      // THE ACTIVE MENU. A catalogue item is turned on when the store is
+      // serving it and off when it is not, and the store's open state follows:
+      // the last item off closes the shop, any item on opens it.
+      'vendor_set_menu_item_active',
       'vendor_set_menu_item_available',
       'vendor_set_payout_destination',
       'vendor_signup',

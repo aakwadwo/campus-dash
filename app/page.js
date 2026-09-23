@@ -22,9 +22,21 @@ export const metadata = {
   // app/page.js shares the root segment with app/layout.js. So this string is
   // rendered verbatim, with no ` · Campus Dash` suffix — which is why it and
   // the layout's `title.default` have to say the same thing.
-  title: 'Campus Dash | Food & More at Academic City',
+  title: 'Campus Dash',
   description:
-    'Order from vendors around Academic City. Collect it yourself, or have a student Partner bring it to you.',
+    'Order from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.',
+  alternates: { canonical: '/' },
+  // Whole, because a page's openGraph replaces the layout's rather than
+  // merging with it.
+  openGraph: {
+    type: 'website',
+    siteName: 'Campus Dash',
+    locale: 'en_GH',
+    url: '/',
+    title: 'Campus Dash',
+    description:
+      'Order from stores around Academic City. Collect it yourself, or have a Campus Dash Partner bring it to you.',
+  },
 };
 
 export const dynamic = 'force-dynamic';
@@ -84,10 +96,13 @@ const SIGNPOSTS = [
 export default async function Home() {
   // A vendor who is not a customer is sent to their store. Everyone else,
   // signed in or out, gets the homepage. See vendorOnlyHome() in landing.js.
-  await redirectVendorOnlyAccount();
-
-  // Never let a slow or failing marketplace query take the landing page down.
-  const vendors = await listVendors().catch(() => []);
+  // Asked together: the store list does not depend on who is looking, and a
+  // redirect simply discards it. Never let a slow or failing marketplace query
+  // take the landing page down.
+  const [, vendors] = await Promise.all([
+    redirectVendorOnlyAccount(),
+    listVendors().catch(() => []),
+  ]);
   // THE REAL PHOTOGRAPH, not a placeholder. storefront_vendors() has returned
   // image_path all along and /order has rendered it all along; the landing page
   // — the one screen a person sees before deciding whether this is worth an
@@ -127,16 +142,11 @@ export default async function Home() {
               Browse food
             </ButtonLink>
 
-            {/* The scan route is secondary and reads as a link, not a rival
-                button. It matters to the few people who arrive with a scan
-                already in hand, and to nobody else. */}
-            <Link
-              href="/scan"
-              className="text-muted hover:text-ink press-sm -ml-1 inline-flex min-h-11 items-center gap-1 rounded-full px-1 text-sm font-medium transition-colors"
-            >
-              Have a meal scan? Redeem it
-              <ChevronRightIcon className="size-4" />
-            </Link>
+            {/* NO SECOND DOOR FOR A MEAL SCAN. It used to be a link here, and
+                the link was the problem: redeeming an entitlement is a way of
+                paying at a checkout, not a different thing to go and do. A
+                student browses, picks a store that takes one, and turns the
+                switch on when they order. */}
           </div>
         </Container>
 

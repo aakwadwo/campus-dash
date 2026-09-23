@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import { isDevInboxEnabled, recent } from '@/lib/sms/dev-inbox';
 import { recentFromDatabase } from '@/lib/sms/dev-inbox-db';
 
+export const metadata = { title: 'SMS inbox', robots: { index: false, follow: false } };
+
 /**
  * Development SMS inbox — every message the fake provider "sent", newest first.
  *

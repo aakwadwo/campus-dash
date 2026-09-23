@@ -1,7 +1,8 @@
 'use client';
 
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useMemo, useState } from 'react';
 import {
+  setMenuItemActiveAction,
   setMenuItemAvailableAction,
   createMenuItemAction,
   updateMenuItemAction,
@@ -21,30 +22,51 @@ import {
 } from '@/app/ui';
 
 /**
- * The store's menu, as a thing a cook can actually operate.
+ * One list. Everything the store sells, and a switch on each.
  *
- * THREE ACTS, KEPT VISIBLY APART, because conflating them is what makes menu
- * management confusing everywhere it is confusing:
+ * THE CATALOGUE IS THE THING YOU KEEP; the menu is the thing you turn on. A
+ * stall sells eggs in the morning and jollof at one, and the old screen made
+ * that a chore of adding and deleting the same four dishes every day. So an
+ * item is added once and stays, and the only daily act is a switch.
  *
- *   SOLD OUT    today's problem. One tap, reversible, and it clears itself when
- *               the store reopens. It is the control a busy counter reaches for
- *               forty times a day, so it is the one that is always visible.
- *   OFF THE MENU  deliberate, and stays until somebody puts it back.
- *   DELETE      it is not a thing this store sells. Behind the edit panel, and
- *               absent entirely once anybody has ordered it — the server
- *               refuses that anyway, and offering a button that always fails is
- *               worse than not offering it.
+ * TWO CONTROLS, AND THEY MEAN DIFFERENT THINGS.
  *
- * EVERY ROW IS ITS OWN FORM with its own pending state, so marking the jollof
- * sold out does not grey out the waakye.
+ *   ON / OFF   am I serving this at all today. OFF is invisible to customers.
+ *   SOLD OUT   I am serving it and it has run out. The customer still sees it,
+ *              marked, because a dish that vanishes reads as a store that
+ *              stopped selling it. It clears itself when the store next opens.
+ *
+ * Sold out sits INSIDE the row rather than beside the switch, because it only
+ * exists for an item that is on — and because two similar-looking buttons on
+ * one line is how a cook marks the wrong thing at a counter.
+ *
+ * EVERY ROW IS ITS OWN FORM with its own pending state, so turning the jollof
+ * off does not grey out the waakye.
  */
-export default function MenuManager({ vendorId, items }) {
+export default function MenuManager({ vendorId, items, storeOpen }) {
   const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState('');
+  const [openRow, setOpenRow] = useState(null);
+
+  const on = items.filter((i) => i.is_active);
+
+  // A CATALOGUE IS SEARCHED, NOT SCROLLED — but only once it is long enough to
+  // need it. Six items fit on a phone.
+  const searchable = items.length > 6;
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (i) => i.name.toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q)
+    );
+  }, [items, query]);
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <h2 className="font-semibold">Your items</h2>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-semibold">
+          {items.length === 0 ? 'Your items' : `${on.length} of ${items.length} on the menu`}
+        </h2>
         <Button
           type="button"
           variant={items.length === 0 ? 'primary' : 'secondary'}
@@ -56,13 +78,24 @@ export default function MenuManager({ vendorId, items }) {
 
       {adding ? <AddItem vendorId={vendorId} onDone={() => setAdding(false)} /> : null}
 
+      {searchable ? (
+        <Input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search your items"
+          aria-label="Search your items"
+          className="mb-3"
+        />
+      ) : null}
+
       {items.length === 0 ? (
         adding ? null : (
           <Card>
             <EmptyState
               icon={<BagIcon className="size-6" />}
-              title="Nothing on your menu yet"
-              description="Add what you sell. Items appear to customers as soon as you add them, and you can mark anything sold out in one tap."
+              title="Nothing in your items yet"
+              description="Add everything you sell, once. Then turn things on when you are serving them and off when you are not — nothing is ever deleted by a switch."
               action={
                 <Button type="button" onClick={() => setAdding(true)}>
                   Add your first item
@@ -71,11 +104,21 @@ export default function MenuManager({ vendorId, items }) {
             />
           </Card>
         )
+      ) : matches.length === 0 ? (
+        <Card className="p-5">
+          <p className="text-muted text-sm">Nothing matches “{query.trim()}”.</p>
+        </Card>
       ) : (
         <ul className="space-y-2.5">
-          {items.map((item) => (
+          {matches.map((item) => (
             <li key={item.id}>
-              <MenuRow item={item} vendorId={vendorId} />
+              <MenuRow
+                item={item}
+                vendorId={vendorId}
+                storeOpen={storeOpen}
+                expanded={openRow === item.id}
+                onToggleDetails={() => setOpenRow((id) => (id === item.id ? null : item.id))}
+              />
             </li>
           ))}
         </ul>
@@ -88,84 +131,215 @@ export default function MenuManager({ vendorId, items }) {
  * One item
  * ------------------------------------------------------------------------ */
 
-function MenuRow({ item, vendorId }) {
-  const [editing, setEditing] = useState(false);
-  const [availability, toggle, toggling] = useActionState(setMenuItemAvailableAction, {});
+function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
+  const [activity, toggleActive, switching] = useActionState(setMenuItemActiveAction, {});
 
-  const soldOut = !item.is_available && item.unavailable_reason === 'SOLD_OUT';
-  const withdrawn = item.unavailable_reason === 'WITHDRAWN';
+  const on = item.is_active;
+  const soldOut = on && !item.is_available;
 
   return (
-    <Card className={`p-3.5 sm:p-4 ${item.is_available ? '' : 'bg-surface-2/50'}`}>
-      <div className="flex items-start gap-3.5">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline justify-between gap-3">
-            <p className={`font-semibold break-words ${item.is_available ? '' : 'text-muted'}`}>
+    <Card className={`p-3.5 sm:p-4 ${on ? '' : 'bg-surface-2/40'}`}>
+      <div className="flex items-start gap-3">
+        <button
+          type="button"
+          onClick={onToggleDetails}
+          aria-expanded={expanded}
+          className="press-sm min-w-0 flex-1 text-left"
+        >
+          <span className="flex items-baseline justify-between gap-3">
+            <span className={`font-semibold break-words ${on ? '' : 'text-muted'}`}>
               {item.name}
-            </p>
-            <p
-              className={`shrink-0 font-semibold tabular-nums ${item.is_available ? '' : 'text-muted'}`}
-            >
+            </span>
+            <span className={`shrink-0 font-semibold tabular-nums ${on ? '' : 'text-muted'}`}>
               {formatPesewas(item.price_pesewas)}
-            </p>
-          </div>
+            </span>
+          </span>
 
-          {item.description ? (
-            <p className="text-muted mt-1 text-sm leading-relaxed">{item.description}</p>
-          ) : null}
-
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-            {soldOut ? <span className="text-warn font-semibold">Sold out today</span> : null}
-            {withdrawn ? <span className="text-muted font-semibold">Off the menu</span> : null}
+          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            {soldOut ? <span className="text-warn font-semibold">Sold out</span> : null}
+            {!on ? <span className="text-muted">Off the menu</span> : null}
             {item.scan_eligible ? (
               <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 font-semibold">
                 Takes meal scans
               </span>
             ) : null}
-          </p>
+            <span className="text-faint">{expanded ? 'Hide' : 'Details'}</span>
+          </span>
+        </button>
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {/* THE ONE A COUNTER REACHES FOR. Always visible, one tap, and it
-                says what happens next rather than only what it does. */}
-            <form action={toggle}>
-              <input type="hidden" name="menu_item_id" value={item.id} />
-              <input type="hidden" name="vendor_id" value={vendorId} />
-              <input type="hidden" name="name" value={item.name} />
-              <input type="hidden" name="available" value={item.is_available ? 'false' : 'true'} />
-              <input type="hidden" name="reason" value="SOLD_OUT" />
-              <Button
-                type="submit"
-                size="sm"
-                variant={item.is_available ? 'secondary' : 'primary'}
-                pending={toggling}
-              >
-                {item.is_available ? 'Mark sold out' : 'Put back on'}
-              </Button>
-            </form>
-
-            <button
-              type="button"
-              onClick={() => setEditing((open) => !open)}
-              className="text-muted hover:text-ink press-sm min-h-9 rounded-full px-2 text-sm font-medium transition-colors"
-            >
-              {editing ? 'Close' : 'Edit'}
-            </button>
-          </div>
-
-          {availability.message ? (
-            availability.ok ? (
-              <SuccessNote className="mt-2.5">{availability.message}</SuccessNote>
-            ) : (
-              <ErrorNote className="mt-2.5">{availability.message}</ErrorNote>
-            )
-          ) : null}
-        </div>
+        {/* THE SWITCH. One tap, and it is the only control on the row a busy
+            counter has to find. Turning the last one off closes the store, and
+            the page says so on the next render. */}
+        <form action={toggleActive} className="shrink-0">
+          <input type="hidden" name="menu_item_id" value={item.id} />
+          <input type="hidden" name="vendor_id" value={vendorId} />
+          <input type="hidden" name="name" value={item.name} />
+          <input type="hidden" name="active" value={on ? 'false' : 'true'} />
+          <Switch on={on} pending={switching} label={item.name} />
+        </form>
       </div>
+
+      {activity.message && !activity.ok ? (
+        <ErrorNote className="mt-2.5">{activity.message}</ErrorNote>
+      ) : null}
+
+      {expanded ? (
+        <ItemDetails
+          item={item}
+          vendorId={vendorId}
+          storeOpen={storeOpen}
+          onDone={onToggleDetails}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * A real switch, as a submit button.
+ *
+ * `role="switch"` and `aria-checked` rather than a styled checkbox: the control
+ * submits a form, so it is a button, and a button that lies about its state to
+ * a screen reader is worse than a plain one.
+ */
+function Switch({ on, pending, label }) {
+  return (
+    <button
+      type="submit"
+      role="switch"
+      aria-checked={on}
+      aria-label={`${label}: ${on ? 'on the menu' : 'off the menu'}`}
+      disabled={pending}
+      className={`press-sm relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors disabled:opacity-55 ${
+        on ? 'bg-brand-600 border-brand-700' : 'bg-surface-3 border-line-strong'
+      }`}
+    >
+      <span
+        className={`bg-surface size-5 rounded-full shadow-sm transition-transform ${
+          on ? 'translate-x-6' : 'translate-x-1'
+        }`}
+      />
+    </button>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Details: sold out, edit, delete — revealed on tap
+ * ------------------------------------------------------------------------ */
+
+function ItemDetails({ item, vendorId, storeOpen, onDone }) {
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <div className="border-line animate-fade-up mt-3.5 border-t pt-3.5">
+      {item.description ? (
+        <p className="text-muted mb-3 text-sm leading-relaxed">{item.description}</p>
+      ) : null}
 
       {editing ? (
         <EditItem item={item} vendorId={vendorId} onDone={() => setEditing(false)} />
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* SOLD OUT ONLY MEANS ANYTHING FOR AN ITEM THAT IS ON. For one that
+              is off, the customer is not looking at it either way. */}
+          {item.is_active ? (
+            <SoldOutButton item={item} vendorId={vendorId} storeOpen={storeOpen} />
+          ) : null}
+
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="text-muted hover:text-ink press-sm min-h-9 text-sm font-medium transition-colors"
+          >
+            Edit
+          </button>
+
+          <DeleteControl item={item} vendorId={vendorId} onDone={onDone} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SoldOutButton({ item, vendorId, storeOpen }) {
+  const [state, submit, pending] = useActionState(setMenuItemAvailableAction, {});
+  const soldOut = !item.is_available;
+
+  return (
+    <div>
+      <form action={submit}>
+        <input type="hidden" name="menu_item_id" value={item.id} />
+        <input type="hidden" name="vendor_id" value={vendorId} />
+        <input type="hidden" name="name" value={item.name} />
+        <input type="hidden" name="available" value={soldOut ? 'true' : 'false'} />
+        <button
+          type="submit"
+          disabled={pending}
+          className={`press-sm min-h-9 text-sm font-medium transition-colors disabled:opacity-55 ${
+            soldOut ? 'text-brand-800' : 'text-muted hover:text-warn'
+          }`}
+        >
+          {pending ? 'Saving…' : soldOut ? 'Available again' : 'Mark sold out'}
+        </button>
+      </form>
+      {soldOut && storeOpen ? (
+        <p className="text-faint mt-1 text-xs">Clears when you next open.</p>
       ) : null}
-    </Card>
+      {state.message && !state.ok ? <ErrorNote className="mt-2">{state.message}</ErrorNote> : null}
+    </div>
+  );
+}
+
+/**
+ * DELETE IS ABSENT once anybody has ordered it. The server refuses it, and a
+ * button that always fails is worse than no button — the row already carries
+ * the count that decides this.
+ */
+function DeleteControl({ item, vendorId, onDone }) {
+  const [state, remove, deleting] = useActionState(deleteMenuItemAction, {});
+  const [confirming, setConfirming] = useState(false);
+  const ordered = Number(item.order_count ?? 0) > 0;
+
+  useEffect(() => {
+    if (state.ok) onDone();
+  }, [state.ok, onDone]);
+
+  if (ordered) {
+    return (
+      <p className="text-faint text-xs">
+        Ordered before, so it cannot be deleted. Turning it off does the same thing.
+      </p>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className="text-muted hover:text-bad press-sm min-h-9 text-sm font-medium transition-colors"
+      >
+        Delete
+      </button>
+    );
+  }
+
+  return (
+    <form action={remove} className="flex flex-wrap items-center gap-2">
+      <input type="hidden" name="menu_item_id" value={item.id} />
+      <input type="hidden" name="vendor_id" value={vendorId} />
+      <input type="hidden" name="name" value={item.name} />
+      <span className="text-sm font-medium">Delete {item.name}?</span>
+      <Button type="submit" size="sm" variant="danger" pending={deleting}>
+        {deleting ? 'Deleting…' : 'Yes, delete'}
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+        No
+      </Button>
+      {state.message && !state.ok ? (
+        <ErrorNote className="w-full">{state.message}</ErrorNote>
+      ) : null}
+    </form>
   );
 }
 
@@ -184,13 +358,16 @@ function AddItem({ vendorId, onDone }) {
 
   return (
     <Card className="border-brand-600 ring-brand-600/20 animate-fade-up mb-4 p-5 ring-1">
-      <h3 className="mb-4 font-semibold">Add an item</h3>
+      <h3 className="font-semibold">Add an item</h3>
+      <p className="text-muted mt-1 mb-4 text-sm">
+        It joins your items switched off. Turn it on when you are serving it.
+      </p>
       <form action={submit} className="space-y-4">
         <input type="hidden" name="vendor_id" value={vendorId} />
         <ItemFields />
         <div className="flex gap-2">
           <Button type="submit" pending={pending}>
-            {pending ? 'Adding…' : 'Add to menu'}
+            {pending ? 'Adding…' : 'Add item'}
           </Button>
           <Button type="button" variant="ghost" onClick={onDone}>
             Cancel
@@ -204,96 +381,28 @@ function AddItem({ vendorId, onDone }) {
 
 function EditItem({ item, vendorId, onDone }) {
   const [state, submit, pending] = useActionState(updateMenuItemAction, {});
-  const [removing, remove, deleting] = useActionState(deleteMenuItemAction, {});
-  const [confirming, setConfirming] = useState(false);
-  const [withdrawState, withdraw, withdrawing] = useActionState(setMenuItemAvailableAction, {});
-
-  const ordered = Number(item.order_count ?? 0) > 0;
-  const withdrawn = item.unavailable_reason === 'WITHDRAWN';
 
   return (
-    <div className="border-line animate-fade-up mt-4 border-t pt-4">
-      <form action={submit} className="space-y-4">
-        <input type="hidden" name="vendor_id" value={vendorId} />
-        <input type="hidden" name="menu_item_id" value={item.id} />
-        <ItemFields item={item} />
-        <div className="flex gap-2">
-          <Button type="submit" size="sm" pending={pending}>
-            {pending ? 'Saving…' : 'Save changes'}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={onDone}>
-            Done
-          </Button>
-        </div>
-        {state.message ? (
-          state.ok ? (
-            <SuccessNote>{state.message}</SuccessNote>
-          ) : (
-            <ErrorNote>{state.message}</ErrorNote>
-          )
-        ) : null}
-      </form>
-
-      <div className="border-line mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4">
-        {/* OFF THE MENU, not sold out. Deliberate, and it stays until somebody
-            puts it back — reopening the store will not clear it. */}
-        <form action={withdraw}>
-          <input type="hidden" name="menu_item_id" value={item.id} />
-          <input type="hidden" name="vendor_id" value={vendorId} />
-          <input type="hidden" name="name" value={item.name} />
-          <input type="hidden" name="available" value={withdrawn ? 'true' : 'false'} />
-          <input type="hidden" name="reason" value="WITHDRAWN" />
-          <button
-            type="submit"
-            disabled={withdrawing}
-            className="text-muted hover:text-ink press-sm min-h-9 text-sm font-medium transition-colors disabled:opacity-55"
-          >
-            {withdrawing
-              ? 'Saving…'
-              : withdrawn
-                ? 'Put back on the menu'
-                : 'Take off the menu until I put it back'}
-          </button>
-        </form>
-
-        {/* DELETE IS ABSENT once anybody has ordered it. The server refuses it,
-            and a button that always fails is worse than no button — the row
-            already carries the count that decides this. */}
-        {ordered ? (
-          <p className="text-faint text-xs">
-            Ordered before, so it cannot be deleted. Taking it off the menu does the same thing.
-          </p>
-        ) : confirming ? (
-          <form action={remove} className="flex items-center gap-2">
-            <input type="hidden" name="menu_item_id" value={item.id} />
-            <input type="hidden" name="vendor_id" value={vendorId} />
-            <input type="hidden" name="name" value={item.name} />
-            <span className="text-sm font-medium">Delete {item.name}?</span>
-            <Button type="submit" size="sm" variant="danger" pending={deleting}>
-              {deleting ? 'Deleting…' : 'Yes, delete'}
-            </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-              No
-            </Button>
-          </form>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            className="text-muted hover:text-bad press-sm min-h-9 text-sm font-medium transition-colors"
-          >
-            Delete
-          </button>
-        )}
+    <form action={submit} className="space-y-4">
+      <input type="hidden" name="vendor_id" value={vendorId} />
+      <input type="hidden" name="menu_item_id" value={item.id} />
+      <ItemFields item={item} />
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" pending={pending}>
+          {pending ? 'Saving…' : 'Save changes'}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+          Done
+        </Button>
       </div>
-
-      {withdrawState.message && !withdrawState.ok ? (
-        <ErrorNote className="mt-2">{withdrawState.message}</ErrorNote>
+      {state.message ? (
+        state.ok ? (
+          <SuccessNote>{state.message}</SuccessNote>
+        ) : (
+          <ErrorNote>{state.message}</ErrorNote>
+        )
       ) : null}
-      {removing.message && !removing.ok ? (
-        <ErrorNote className="mt-2">{removing.message}</ErrorNote>
-      ) : null}
-    </div>
+    </form>
   );
 }
 

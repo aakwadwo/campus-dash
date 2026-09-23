@@ -1,10 +1,12 @@
 'use client';
 
-import { useActionState, useEffect, useState, useTransition } from 'react';
+import { useActionState, useEffect, useRef, useState, useTransition } from 'react';
 import { quoteAction, submitOrderAction } from '../actions';
 import FulfilmentChoice from '../../fulfilment-choice';
 import ContactLine from '../../contact-line';
-import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon } from '../../ui';
+import CameraCapture from '../../camera-capture';
+import DestinationPicker from '../../destination-picker';
+import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon, Callout } from '../../ui';
 
 /**
  * Menu, basket and checkout.
@@ -23,6 +25,10 @@ import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon } from '../../
  * unavailable rather than absent: "no Partners right now" is information, and
  * an option that silently vanishes reads as a bug.
  */
+// Matches order_notes_body_check and orders_destination_note_length. The
+// database is the bound; this only stops somebody typing past it.
+const NOTE_LIMIT = 280;
+
 export default function MenuAndBasket({
   header = null,
   vendor,
@@ -31,6 +37,7 @@ export default function MenuAndBasket({
   locations = [],
   deliveryAvailable = true,
   deliveryFeePesewas = null,
+  packFeePesewas = 0,
   gate = null,
 }) {
   const [quantities, setQuantities] = useBasket(vendor.vendor_id, menu);
@@ -38,12 +45,26 @@ export default function MenuAndBasket({
   // NOTHING IS PRESELECTED. Collecting and a Partner are different decisions
   // with different prices, and a default is a decision made for somebody.
   const [fulfilment, setFulfilment] = useState(null);
-  const [destination, setDestination] = useState('');
+  const [destination, setDestination] = useState(null);
+  // TWO NOTES FOR TWO PEOPLE, never one field. Order information is about the
+  // food and goes to the store; Additional information is for the Partner.
+  const [orderNote, setOrderNote] = useState('');
   const [note, setNote] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteError, setQuoteError] = useState(null);
   const [quoting, startQuoting] = useTransition();
   const [submitState, submit, submitting] = useActionState(submitOrderAction, {});
+
+  // REDEEM BY MEAL SCAN. Off by default, offered only where the store takes
+  // one, and it changes which pricing function the quote comes from — so it is
+  // a dependency of the re-quote below, exactly like the fulfilment choice.
+  const [mealScan, setMealScan] = useState(false);
+  const [scan, setScan] = useState(null);
+  const [wantsPack, setWantsPack] = useState(false);
+  const scanOffered = Boolean(vendor.can_accept_scans);
+  // A store can be switched off mid-basket. The switch goes with it rather than
+  // leaving somebody paying scan prices at a store that no longer takes one.
+  const redeeming = scanOffered && mealScan;
 
   // THE FEE FOR A PARTNER ORDER, remembered across re-quotes. Only a quote that
   // was actually priced for a Partner may set it, which is what stops a
@@ -68,9 +89,15 @@ export default function MenuAndBasket({
   // that lied.
   const fulfilmentChoice = !deliveryAvailable && fulfilment === 'DELIVERY' ? null : fulfilment;
 
-  // Re-price whenever the basket or the fulfilment changes. The delivery fee is
-  // part of the answer, so changing the choice re-asks the server rather than
-  // adding GH₵5 in the browser.
+  // WHAT THE BASKET IS, as one comparable value. Extracted rather than inlined
+  // into the dependency array below, because an expression there cannot be
+  // statically checked — and the array is long enough now that the blanket
+  // disable it used to sit under was hiding more than the one line it was for.
+  const basketKey = JSON.stringify(items);
+
+  // Re-price whenever the basket, the fulfilment or the Meal Scan switch
+  // changes. Every figure is part of the answer, so changing any of them
+  // re-asks the server rather than adding anything up in the browser.
   useEffect(() => {
     if (step !== 'review' || items.length === 0) return;
 
@@ -80,6 +107,9 @@ export default function MenuAndBasket({
         vendorId: vendor.vendor_id,
         items,
         fulfilmentType: fulfilmentChoice,
+        mealScan: redeeming,
+        wantsPack,
+        destinationLocationId: fulfilmentChoice === 'DELIVERY' ? destination || null : null,
       });
       if (cancelled) return;
       if (result.ok) {
@@ -97,7 +127,7 @@ export default function MenuAndBasket({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, JSON.stringify(items), fulfilmentChoice, vendor.vendor_id]);
+  }, [step, basketKey, fulfilmentChoice, vendor.vendor_id, redeeming, wantsPack, destination]);
 
   /**
    * The provider's checkout is on another origin, so getting there is a full
@@ -146,11 +176,21 @@ export default function MenuAndBasket({
           locations={locations}
           deliveryAvailable={deliveryAvailable}
           deliveryFeePesewas={deliveryFeePesewas}
+          packFeePesewas={packFeePesewas}
           quotedPartnerFee={quotedPartnerFee}
+          scanOffered={scanOffered}
+          mealScan={redeeming}
+          onMealScan={setMealScan}
+          scan={scan}
+          onScan={setScan}
+          wantsPack={wantsPack}
+          onWantsPack={setWantsPack}
           fulfilment={fulfilmentChoice}
           onFulfilment={setFulfilment}
           destination={destination}
           onDestination={setDestination}
+          orderNote={orderNote}
+          onOrderNote={setOrderNote}
           note={note}
           onNote={setNote}
           quote={quote}
@@ -169,7 +209,15 @@ export default function MenuAndBasket({
     return (
       <>
         {header}
-        <p className="text-muted py-12 text-center">Nothing here yet.</p>
+        {/* A CLOSED STORE HAS NO MENU, and that is a fact about the store
+            rather than an empty catalogue. Saying "nothing here yet" about a
+            stall that sells nine things and is shut until four would be a
+            different, wrong answer. */}
+        <p className="text-muted py-12 text-center">
+          {vendor.is_accepting_orders
+            ? 'Nothing here yet.'
+            : 'Closed right now. Their menu comes back when they open.'}
+        </p>
       </>
     );
   }
@@ -356,11 +404,21 @@ function Checkout({
   locations,
   deliveryAvailable,
   deliveryFeePesewas,
+  packFeePesewas,
   quotedPartnerFee,
+  scanOffered,
+  mealScan,
+  onMealScan,
+  scan,
+  onScan,
+  wantsPack,
+  onWantsPack,
   fulfilment,
   onFulfilment,
   destination,
   onDestination,
+  orderNote,
+  onOrderNote,
   note,
   onNote,
   quote,
@@ -382,6 +440,17 @@ function Checkout({
   const canDeliver = quote ? quote.delivery_available !== false : deliveryAvailable;
   const needsChoice = !fulfilment;
   const needsDestination = fulfilment === 'DELIVERY' && !destination;
+
+  // WHAT THE STORE WILL NOT TAKE A MEAL SCAN FOR. Named, so the customer can
+  // fix it here rather than at a refused Pay button. price_scan_order() is the
+  // enforcement; this is the courtesy.
+  const ineligible = mealScan
+    ? named
+        .filter((item) => menu.find((m) => m.id === item.menuItemId)?.scan_eligible !== true)
+        .map((item) => item.name)
+    : [];
+  const needsScan = mealScan && !scan;
+  const scanBlocked = mealScan && ineligible.length > 0;
   // `leaving` keeps the button spent after the action resolves: the browser is
   // on its way to the payment page and a button that springs back to "Pay"
   // invites a second tap at the worst possible moment.
@@ -391,7 +460,9 @@ function Checkout({
     ? 'Choose how you want it.'
     : needsDestination
       ? 'Choose where the Partner should bring it.'
-      : null;
+      : needsScan
+        ? 'Add a photo of your Meal Scan.'
+        : null;
 
   return (
     <form action={submit} className="mx-auto max-w-xl">
@@ -403,8 +474,15 @@ function Checkout({
         value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
       />
       <input type="hidden" name="fulfilment_type" value={fulfilment ?? ''} />
-      <input type="hidden" name="destination_location_id" value={destination} />
-      <input type="hidden" name="destination_note" value={note} />
+      <input type="hidden" name="destination_location_id" value={destination ?? ''} />
+      <input type="hidden" name="order_note" value={orderNote} />
+      <input type="hidden" name="destination_note" value={fulfilment === 'DELIVERY' ? note : ''} />
+      {/* The path came from our own upload route, built from the session.
+          submit_scan_order() re-checks it belongs to this account before
+          attaching it, so a tampered field fails in the database. */}
+      <input type="hidden" name="scan_image_path" value={mealScan ? (scan?.path ?? '') : ''} />
+      <input type="hidden" name="content_type" value={mealScan ? (scan?.contentType ?? '') : ''} />
+      <input type="hidden" name="byte_size" value={mealScan ? (scan?.byteSize ?? 0) : 0} />
 
       <button
         type="button"
@@ -433,6 +511,17 @@ function Checkout({
         ))}
       </ul>
 
+      {/* --- Order information -------------------------------------------
+          About the food, for the store. It is saved with the order, before
+          payment, so the store never opens an order without it. */}
+      <NoteField
+        label="Order information"
+        value={orderNote}
+        onChange={onOrderNote}
+        placeholder="No pepper, please."
+        className="mt-6"
+      />
+
       {/* --- How you want it ---------------------------------------------- */}
       <section className="mt-7">
         <h3 className="mb-3 font-semibold">How you want it</h3>
@@ -447,39 +536,36 @@ function Checkout({
         />
 
         {fulfilment === 'DELIVERY' && canDeliver ? (
-          <div className="mt-4 space-y-3">
-            <label className="block">
-              <span className="text-sm font-medium">Where should the Partner bring it?</span>
-              <select
-                required
-                value={destination}
-                onChange={(event) => onDestination(event.target.value)}
-                className="rounded-input bg-surface border-line-strong focus:border-brand-600 mt-1.5 h-12 w-full border px-3 text-base outline-none"
-              >
-                <option value="">Choose a place</option>
-                {locations.map((place) => (
-                  <option key={place.location_id ?? place.id} value={place.location_id ?? place.id}>
-                    {place.path ?? place.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-sm font-medium">
-                Anything that helps them find you{' '}
-                <span className="text-muted font-normal">(optional)</span>
-              </span>
-              <input
-                value={note}
-                onChange={(event) => onNote(event.target.value)}
-                maxLength={140}
-                placeholder="Green door at the end of the corridor"
-                className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-1.5 h-12 w-full border px-3 text-base outline-none"
-              />
-            </label>
+          <div className="mt-5">
+            <h4 className="mb-2.5 text-sm font-medium">Where should your Partner bring it?</h4>
+            <DestinationPicker places={locations} value={destination} onChange={onDestination} />
+            {/* For the Partner only. The store never sees it. */}
+            <NoteField
+              label="Additional information"
+              value={note}
+              onChange={onNote}
+              placeholder="I'm near the stairs. Call when you arrive."
+              className="mt-5"
+            />
           </div>
         ) : null}
       </section>
+
+      {/* --- Redeem by Meal Scan ------------------------------------------ */}
+      {scanOffered ? (
+        <MealScanSection
+          on={mealScan}
+          onToggle={onMealScan}
+          scan={scan}
+          onScan={onScan}
+          ineligible={ineligible}
+          packFeePesewas={packFeePesewas}
+          packIsCompulsory={Boolean(quote?.pack_is_compulsory)}
+          wantsPack={wantsPack}
+          onWantsPack={onWantsPack}
+          disabled={busy}
+        />
+      ) : null}
 
       {/* --- Money -------------------------------------------------------- */}
       <Card className="mt-7 p-5">
@@ -487,8 +573,27 @@ function Checkout({
           <ErrorNote>{quoteError}</ErrorNote>
         ) : quote ? (
           <dl className={`transition-opacity ${quoting ? 'opacity-45' : ''}`}>
-            <Line label="Food" value={quote.subtotal_pesewas} />
+            {/* ON A MEAL SCAN THE FOOD IS GH₵0, and the line says why rather
+                than disappearing: nobody should leave this page thinking they
+                have bought their lunch twice. The service fee is the ordinary
+                Campus Dash fee — a Meal Scan adds nothing to it. */}
+            <Line
+              label="Food"
+              hint={mealScan ? 'Covered by your Meal Scan' : null}
+              value={mealScan ? 0 : quote.subtotal_pesewas}
+            />
             <Line label="Service fee" value={quote.service_fee_pesewas} />
+            {quote.pack_fee_pesewas > 0 ? (
+              <Line
+                label="Pack"
+                hint={
+                  quote.pack_is_compulsory
+                    ? 'Included with a Partner'
+                    : 'What your food is carried in'
+                }
+                value={quote.pack_fee_pesewas}
+              />
+            ) : null}
             {quote.delivery_fee_pesewas > 0 ? (
               <Line label="Campus Dash Partner" value={quote.delivery_fee_pesewas} />
             ) : null}
@@ -514,7 +619,9 @@ function Checkout({
       <div className="mt-6">
         <button
           type="submit"
-          disabled={busy || !quote || quoting || needsChoice || needsDestination}
+          disabled={
+            busy || !quote || quoting || needsChoice || needsDestination || needsScan || scanBlocked
+          }
           aria-busy={busy || undefined}
           className="press bg-brand-700 hover:bg-brand-800 h-14 w-full rounded-full text-base font-semibold text-white transition-colors disabled:opacity-55"
         >
@@ -539,10 +646,31 @@ function Checkout({
   );
 }
 
-function Line({ label, value }) {
+function NoteField({ label, value, onChange, placeholder, className = '' }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className="text-sm font-medium">
+        {label} <span className="text-muted font-normal">(optional)</span>
+      </span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        maxLength={NOTE_LIMIT}
+        rows={2}
+        placeholder={placeholder}
+        className="rounded-input bg-surface border-line-strong focus:border-brand-600 placeholder:text-faint mt-2 block w-full resize-none border px-3 py-2.5 text-base outline-none"
+      />
+    </label>
+  );
+}
+
+function Line({ label, hint, value }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <dt className="text-muted text-sm">{label}</dt>
+      <dt className="text-muted text-sm">
+        {label}
+        {hint ? <span className="text-faint block text-xs">{hint}</span> : null}
+      </dt>
       <dd className="text-sm">
         <Money pesewas={value} />
       </dd>
@@ -597,4 +725,234 @@ function useBasket(vendorId, menu) {
   }, [key, quantities, restored]);
 
   return [quantities, setQuantities];
+}
+
+/* ---------------------------------------------------------------------------
+ * Redeem by Meal Scan
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A Meal Scan is a WAY OF PAYING, offered where the store takes one.
+ *
+ * OFF BY DEFAULT, and it has to be: most orders are not scan orders, and a
+ * switch that starts on would put an upload in front of everybody. Turning it
+ * on changes three things and nothing else — the food line goes to zero because
+ * the university's entitlement settles it, a photograph of the scan becomes
+ * required, and the order arrives on the store's board to be verified before
+ * anything is cooked.
+ *
+ * IT IS NOT A SEPARATE PRODUCT AND MUST NOT LOOK LIKE ONE. No panel, no
+ * gradient, no second checkout: one switch in the same column as everything
+ * else, and the rest appears underneath it only once it is on.
+ */
+function MealScanSection({
+  on,
+  onToggle,
+  scan,
+  onScan,
+  ineligible,
+  packFeePesewas,
+  packIsCompulsory,
+  wantsPack,
+  onWantsPack,
+  disabled,
+}) {
+  return (
+    <section className="border-line mt-7 border-t pt-6">
+      <label className="flex cursor-pointer items-start justify-between gap-4">
+        <span className="min-w-0">
+          <span className="font-semibold">Redeem by Meal Scan</span>
+          <span className="text-muted mt-1 block text-sm leading-relaxed">
+            Your campus meal entitlement pays for the food. You pay only the Campus Dash fee.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          name="meal_scan"
+          checked={on}
+          disabled={disabled}
+          onChange={(event) => onToggle(event.target.checked)}
+          className="accent-brand-700 mt-0.5 size-5 shrink-0"
+        />
+      </label>
+
+      {on ? (
+        <div className="animate-fade-up mt-5 space-y-4">
+          {/* WHAT THE STORE WILL NOT HONOUR ONE FOR. Said here rather than at
+              the Pay button, because the basket is one tap behind them and
+              price_scan_order() would refuse the whole order. */}
+          {ineligible.length > 0 ? (
+            <ErrorNote>
+              {ineligible.length === 1
+                ? `${ineligible[0]} cannot be paid for with a Meal Scan.`
+                : `${ineligible.join(', ')} cannot be paid for with a Meal Scan.`}{' '}
+              Take it out of your basket, or turn the Meal Scan off.
+            </ErrorNote>
+          ) : null}
+
+          <ScanPhoto scan={scan} onUploaded={onScan} />
+
+          {/* THE PACK. A collection may decline it and bring a container from
+              home; a Partner order may not, because there has to be something
+              to carry. Whether the choice appears comes from the server's
+              pack_is_compulsory, not from reading the fulfilment here. */}
+          {packFeePesewas > 0 ? (
+            packIsCompulsory ? (
+              <p className="text-muted text-sm leading-relaxed">
+                A pack is included with a Partner, at <Money pesewas={packFeePesewas} />.
+              </p>
+            ) : (
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  name="wants_pack"
+                  checked={wantsPack}
+                  onChange={(event) => onWantsPack(event.target.checked)}
+                  className="accent-brand-700 mt-0.5 size-5 shrink-0"
+                />
+                <span className="text-sm">
+                  <span className="font-medium">
+                    Add a pack <Money pesewas={packFeePesewas} />
+                  </span>
+                  <span className="text-muted mt-0.5 block text-xs leading-relaxed">
+                    Leave off if you are bringing your own container.
+                  </span>
+                </span>
+              </label>
+            )
+          ) : null}
+
+          {/* THE WARNING, AND IT IS THE LAST THING BEFORE THE TOTAL. The store
+              checks the scan after the money has moved, and a scan it will not
+              accept ends the order without a refund. Somebody about to pay is
+              entitled to know that in the sentence before they do. */}
+          <Callout tone="warn">
+            Make sure your Meal Scan is clear and fully visible. Once your order is paid for,
+            payments related to an invalid Meal Scan are non-refundable.
+          </Callout>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The photograph, and the two ways to get one.
+ *
+ * PHOTOS ONLY. "Choose a photo" carries `accept="image/*"`, which is what makes
+ * a phone open the camera roll rather than a document browser; "Take a photo"
+ * goes to the camera. There is no third route, and PDF is gone — see
+ * lib/verification/documents.js for why.
+ *
+ * THE PREVIEW IS THE POINT. The customer sees the actual image, full width,
+ * before they pay, and can replace it as many times as they like — but only
+ * until the order exists. After submission the scan is fixed: there is no
+ * function that attaches a second one to a paid order, because that would be a
+ * second entitlement against one payment.
+ */
+function ScanPhoto({ scan, onUploaded }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [preview, setPreview] = usePreview();
+
+  async function accept(file) {
+    setBusy(true);
+    setError(null);
+    try {
+      const uploaded = await uploadMealScan(file);
+      setPreview(URL.createObjectURL(file));
+      onUploaded(uploaded);
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-sm font-medium">
+        Your Meal Scan <span className="text-bad">*</span>
+      </p>
+      <p className="text-muted mt-1 text-xs leading-relaxed">
+        A photo. Only you and the store see it, while the order is live.
+      </p>
+
+      {preview ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={preview}
+          alt="The Meal Scan you are about to send"
+          className="border-line rounded-card mt-3 w-full border"
+        />
+      ) : null}
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label
+          className={`press border-line-strong hover:bg-surface-2 inline-flex h-11 cursor-pointer items-center justify-center rounded-full border text-sm font-semibold transition-colors ${
+            busy ? 'pointer-events-none opacity-55' : ''
+          }`}
+        >
+          {scan ? 'Choose another photo' : 'Choose a photo'}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={busy}
+            className="sr-only"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) await accept(file);
+            }}
+          />
+        </label>
+
+        <CameraCapture
+          onCaptured={accept}
+          disabled={busy}
+          label={scan ? 'Retake photo' : 'Take a photo'}
+        />
+      </div>
+
+      {busy ? (
+        <p className="text-muted mt-2 inline-flex items-center gap-2 text-sm">
+          <Spinner className="size-3.5" />
+          Uploading…
+        </p>
+      ) : null}
+      {error ? <p className="text-bad mt-2 text-sm">{error}</p> : null}
+    </div>
+  );
+}
+
+async function uploadMealScan(file) {
+  const form = new FormData();
+  form.set('kind', 'scan');
+  form.set('file', file, file.name);
+
+  const response = await fetch('/api/verification/documents', { method: 'POST', body: form });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? 'Upload failed.');
+  return { path: body.path, contentType: body.contentType, byteSize: body.byteSize };
+}
+
+/** Revokes the previous object URL, so retaking does not pin every attempt. */
+function usePreview() {
+  const [url, setUrl] = useState(null);
+  const current = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (current.current) URL.revokeObjectURL(current.current);
+    },
+    []
+  );
+
+  const set = (next) => {
+    if (current.current) URL.revokeObjectURL(current.current);
+    current.current = next;
+    setUrl(next);
+  };
+
+  return [url, set];
 }

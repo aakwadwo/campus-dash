@@ -1,6 +1,11 @@
 import { notFound } from 'next/navigation';
 import { requireCustomer } from '@/lib/auth/session';
-import { getMyOrder, fulfilmentOptions, listDeliverableLocations } from '@/lib/customer';
+import {
+  getMyOrder,
+  getMyOrderSignal,
+  fulfilmentOptions,
+  listDestinationPlaces,
+} from '@/lib/customer';
 import { getPollIntervals } from '@/lib/platform-config';
 import { orderLabel } from '@/lib/orders/state';
 import SiteHeader from '../../site-header';
@@ -140,7 +145,15 @@ export default async function CustomerOrderPage({ params }) {
   // Returns nothing unless the order belongs to the signed-in customer, so
   // another customer's id lands on a 404 rather than a message confirming it
   // exists.
-  const [order, intervals] = await Promise.all([getMyOrder(orderId), getPollIntervals()]);
+  // THE SIGNAL FIRST, THEN THE ORDER. The screen compares its polls against
+  // this signal, so it must never be NEWER than what is drawn: read in this
+  // order, a change landing in between makes the first poll differ and the
+  // screen refresh, where the other order would leave it stale for good.
+  const [signal, intervals] = await Promise.all([
+    getMyOrderSignal(orderId).catch(() => null),
+    getPollIntervals(),
+  ]);
+  const order = await getMyOrder(orderId);
   if (!order) notFound();
 
   // Only fetched while the order can still be changed — which is only while it
@@ -149,7 +162,7 @@ export default async function CustomerOrderPage({ params }) {
   const changeable =
     order.order_type !== 'SCAN' && ['PAYMENT_REQUIRED', 'PAYMENT_FAILED'].includes(order.stage);
   const [options, locations] = changeable
-    ? await Promise.all([fulfilmentOptions(orderId), listDeliverableLocations()])
+    ? await Promise.all([fulfilmentOptions(orderId), listDestinationPlaces()])
     : [null, null];
 
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
@@ -233,6 +246,7 @@ export default async function CustomerOrderPage({ params }) {
           <div className="mt-8">
             <OrderStatus
               order={order}
+              signal={signal}
               email={me.email ?? null}
               pollMs={intervals.customerMs}
               fulfilmentOptions={options}
@@ -298,11 +312,19 @@ export default async function CustomerOrderPage({ params }) {
                   </Badge>
                 }
               />
-              {order.destination ? <Fact label="Destination" value={order.destination} /> : null}
-              {order.destination_note ? <Fact label="Note" value={order.destination_note} /> : null}
+              {/* The customer's two notes, each shown only when written. Order
+                  information went to the store; Additional information goes to
+                  the Partner, so it only means anything on a Partner order. */}
+              {order.order_information ? (
+                <Fact label="Order information" value={order.order_information} />
+              ) : null}
+              {order.destination ? <Fact label="Location" value={order.destination} /> : null}
+              {order.fulfilment_type === 'DELIVERY' && order.destination_note ? (
+                <Fact label="Additional information" value={order.destination_note} />
+              ) : null}
               {order.partner_name ? <Fact label="Partner" value={order.partner_name} /> : null}
               {order.vendor_location ? (
-                <Fact label="Vendor is at" value={order.vendor_location} />
+                <Fact label="Store is at" value={order.vendor_location} />
               ) : null}
             </Facts>
 

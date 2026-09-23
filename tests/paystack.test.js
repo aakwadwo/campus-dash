@@ -245,6 +245,30 @@ describe('paystack — reading a transaction', () => {
     assert.equal(status.amountPesewas, null);
   });
 
+  test('a rate limit or an outage is unknown, never FAILED', async () => {
+    // The verify poll runs while the customer waits. If Paystack throttling it
+    // were read as a failed charge, the success webhook that follows would be
+    // refused and a paid order would show as failed.
+    for (const status of [429, 500, 502, 503]) {
+      const fetchImpl = stubFetch({ ok: false, status, body: { status: false, message: 'busy' } });
+      const result = await providerWith(fetchImpl).getStatus(PAYMENT_ID);
+      assert.equal(result.status, 'PENDING', `HTTP ${status}`);
+    }
+  });
+
+  test('a hung Paystack is abandoned, as a network failure', async () => {
+    const fetchImpl = (_url, { signal }) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason));
+      });
+    const provider = new PaystackPaymentProvider({
+      secretKey: 'sk_test_x',
+      fetchImpl,
+      timeoutMs: 20,
+    });
+    await assert.rejects(provider.getStatus(PAYMENT_ID), /could not reach Paystack/);
+  });
+
   test('an unknown provider status is PENDING, never SUCCEEDED', async () => {
     const fetchImpl = stubFetch({
       body: { status: true, data: { status: 'something_new', amount: 100, currency: 'GHS' } },

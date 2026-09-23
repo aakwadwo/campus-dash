@@ -33,7 +33,6 @@ export default function robots() {
           '/orders',
           '/partner',
           '/vendor',
-          '/scan',
           '/login',
           '/signup',
           '/terms/accept',
