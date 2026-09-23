@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useOptimistic, useState } from 'react';
 import {
   setMenuItemActiveAction,
   setMenuItemAvailableAction,
@@ -132,9 +132,24 @@ export default function MenuManager({ vendorId, items, storeOpen }) {
  * ------------------------------------------------------------------------ */
 
 function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
-  const [activity, toggleActive, switching] = useActionState(setMenuItemActiveAction, {});
+  // THE SWITCH MOVES ON THE TAP, NOT ON THE ANSWER. The answer is a round trip
+  // to the server and a fresh render of this page, and on a phone that is long
+  // enough to read as a switch that did not work. So the row shows where it is
+  // going at once, and the database still decides where it ends up: the
+  // optimistic value lasts only while the action runs, then gives way to
+  // item.is_active from the page that came back. A refusal changed nothing, so
+  // the switch falls back to where it was and the error says why.
+  const [on, showOn] = useOptimistic(item.is_active);
+  const [activity, toggleActive, switching] = useActionState(async (previous, formData) => {
+    showOn(formData.get('active') === 'true');
+    try {
+      return await setMenuItemActiveAction(previous, formData);
+    } catch {
+      // The request never came back. Nothing is known to have saved.
+      return { ok: false, message: 'That did not save. Please try again.' };
+    }
+  }, {});
 
-  const on = item.is_active;
   const soldOut = on && !item.is_available;
 
   return (
@@ -174,7 +189,10 @@ function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
           <input type="hidden" name="menu_item_id" value={item.id} />
           <input type="hidden" name="vendor_id" value={vendorId} />
           <input type="hidden" name="name" value={item.name} />
-          <input type="hidden" name="active" value={on ? 'false' : 'true'} />
+          {/* The SAVED state decides what a tap asks for, never the optimistic
+              one; and the switch is disabled until the last tap is answered,
+              so two taps cannot race each other to the database. */}
+          <input type="hidden" name="active" value={item.is_active ? 'false' : 'true'} />
           <Switch on={on} pending={switching} label={item.name} />
         </form>
       </div>
