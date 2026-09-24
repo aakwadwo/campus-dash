@@ -271,6 +271,29 @@ export async function setVendorScansAction(_prev, formData) {
   );
 }
 
+/**
+ * Whether this store may sell at a price the customer chooses. Turning it off
+ * hides the store's variable items and deletes nothing.
+ */
+export async function setVendorVariablePricingAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  return run(
+    () =>
+      admin.setVendorVariablePricing({
+        vendorId: str(formData, 'vendor_id'),
+        enabled: str(formData, 'enabled') === 'true',
+        reason: str(formData, 'reason'),
+      }),
+    (v) =>
+      v.can_use_variable_pricing
+        ? 'This store can now let customers choose a price.'
+        : 'Customer-chosen prices are off. Those items are hidden, and kept.',
+    ['/admin/vendors']
+  );
+}
+
 // --- Vendor categories --------------------------------------------------------
 
 export async function createVendorCategoryAction(_prev, formData) {

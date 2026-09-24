@@ -21,9 +21,10 @@ import { setMyEmail } from '@/lib/customer';
  * Customer actions.
  *
  * The client sends menu item ids, quantities, a fulfilment choice and a
- * destination. It sends no prices, no totals and no fees — and if it did they
- * would be ignored, because quote_order() reads only ids and quantities and
- * submit_order() recomputes every figure from the menu and pricing_config.
+ * destination. It sends no totals and no fees, and the only price it sends is
+ * the amount a customer chose for an item priced that way — which the database
+ * checks against the item's own rule and refuses if it is not on it. Every
+ * other figure is recomputed from the menu and pricing_config.
  */
 /**
  * Never lets a raw error reach a screen. toUserError() logs the detail
@@ -129,11 +130,14 @@ export async function submitOrderAction(_prev, formData) {
     return { ok: false, message: 'Add a photo of your Meal Scan.' };
   }
 
-  // Only these two fields survive. Anything else the basket carried is never
-  // read.
+  // Only these fields survive. Anything else the basket carried is never read.
+  // A chosen unit price is passed through AS SENT, never coerced or rounded:
+  // menu_item_unit_price() decides whether it is one of the item's prices, and
+  // ignores it for an item that has a set price.
   const lines = items.map((item) => ({
     menuItemId: String(item.menuItemId),
     quantity: Number(item.quantity),
+    unitPricePesewas: item.unitPricePesewas ?? null,
   }));
 
   // THE CHECKOUT'S CRITICAL PATH, measured: one log line per Pay tap, split

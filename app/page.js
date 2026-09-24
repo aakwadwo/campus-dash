@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import SiteHeader from './site-header';
 import SiteFooter from './site-footer';
-import LandingBanner, { BANNER } from './landing-banner';
+import LandingBanner from './landing-banner';
 import ContactLine from './contact-line';
 import { listVendors } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
@@ -76,9 +76,8 @@ const HOW_IT_WORKS = [
 ];
 
 /**
- * The two secondary audiences, as quiet rows. Signposts, not pitches. A row the
- * banner is already pointing at is left out, so the same invitation never
- * appears twice on one screen; replace the banner and the row comes back.
+ * The two secondary audiences, as quiet rows. Signposts, not pitches. The
+ * banner above is about the food and points at neither, so both rows show.
  */
 const SIGNPOSTS = [
   {
@@ -151,7 +150,7 @@ export default async function Home() {
         </Container>
 
         {/* ----------------------------------------------------------------
-            The banner slot. What it says lives in app/landing-banner.js. */}
+            The food banner. See app/landing-banner.js. */}
         <Container size="wide" className="pb-8 sm:pb-11">
           <LandingBanner />
         </Container>
@@ -222,7 +221,7 @@ export default async function Home() {
             pitches. */}
         <Container size="wide" className="border-line mt-8 border-t pt-2 sm:mt-11 sm:pt-3">
           <ul className="divide-line divide-y">
-            {SIGNPOSTS.filter((row) => row.href !== BANNER?.cta?.href).map((row) => (
+            {SIGNPOSTS.map((row) => (
               <li key={row.href}>
                 <Link href={row.href} className="press-sm flex min-h-16 items-center gap-4 py-5">
                   <span className="min-w-0 flex-1">

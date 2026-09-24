@@ -2,11 +2,13 @@ import Link from 'next/link';
 import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { formatPesewas, cedisInputFromPesewas } from '@/lib/util/money';
+import { cedisInputFromPesewas } from '@/lib/util/money';
+import { priceSummary } from '@/lib/util/item-price';
 import { Panel, Badge, Empty, Unavailable } from '../../ui';
 import VendorSettingsForm from './vendor-settings-form';
 import VendorStatusForm from './vendor-status-form';
 import VendorScansForm from './vendor-scans-form';
+import VendorVariablePricingForm from './vendor-variable-pricing-form';
 import VendorReviewForm from './vendor-review-form';
 import VendorImageForms from './vendor-image-forms';
 import MenuForms from './menu-forms';
@@ -183,6 +185,13 @@ export default async function VendorDetailPage({ params }) {
         <VendorScansForm vendor={vendor} />
       </Panel>
 
+      <Panel
+        title="Customer-chosen prices"
+        description="Lets this store sell items at an amount the customer picks, within prices the store sets. Turning it off hides those items and keeps their prices."
+      >
+        <VendorVariablePricingForm vendor={vendor} />
+      </Panel>
+
       <Panel title="Menu" description="Changing a price never alters an order already placed.">
         {menu === null ? (
           <Unavailable>
@@ -193,7 +202,7 @@ export default async function VendorDetailPage({ params }) {
             {menu.map((item) => (
               <li key={item.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
                 <span className="font-medium">{item.name}</span>
-                <span className="tabular-nums">{formatPesewas(item.price_pesewas)}</span>
+                <span className="tabular-nums">{priceSummary(item)}</span>
                 {item.is_available ? <Badge tone="good">available</Badge> : <Badge>disabled</Badge>}
                 {item.description ? (
                   <span className="text-muted w-full text-xs">{item.description}</span>

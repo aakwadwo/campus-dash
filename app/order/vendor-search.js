@@ -4,6 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { matchesQuery } from '@/lib/util/catalogue';
+import { isVariablePrice, priceSummary } from '@/lib/util/item-price';
 import { SearchIcon, VendorCard, Money, ChevronRightIcon, ImagePlaceholder } from '../ui';
 
 /**
@@ -179,7 +180,11 @@ function ItemResult({ item, vendor }) {
         <span className="block truncate font-medium">{item.name}</span>
         <span className="text-muted block truncate text-sm">{vendor?.name}</span>
       </span>
-      <Money pesewas={item.price_pesewas} className="shrink-0 text-sm font-semibold" />
+      {isVariablePrice(item) ? (
+        <span className="shrink-0 text-sm font-semibold tabular-nums">{priceSummary(item)}</span>
+      ) : (
+        <Money pesewas={item.price_pesewas} className="shrink-0 text-sm font-semibold" />
+      )}
       <ChevronRightIcon className="text-faint size-4 shrink-0" />
     </Link>
   );

@@ -352,7 +352,10 @@ export async function resetTransactionalState() {
              reviewed_at = excluded.reviewed_at,
              rejection_reason = excluded.rejection_reason,
              location_id = excluded.location_id,
-             walk_minutes_to_campus = excluded.walk_minutes_to_campus
+             walk_minutes_to_campus = excluded.walk_minutes_to_campus,
+             -- Customer-chosen prices are granted per store and off in the
+             -- seed. A file that grants them must not leave them granted.
+             can_use_variable_pricing = false
     `);
     await c.query(`delete from public.vendor_images`);
     await c.query(`
@@ -385,7 +388,13 @@ export async function resetTransactionalState() {
              is_active = excluded.is_active,
              -- WHAT A MEAL SCAN MAY BE SPENT ON. Scan tests flip this to prove
              -- the per-item rule, so it is restored with everything else.
-             scan_eligible = excluded.scan_eligible
+             scan_eligible = excluded.scan_eligible,
+             -- Every seeded item is sold at its fixed price.
+             pricing_mode = 'FIXED',
+             variable_min_pesewas = null,
+             variable_step_pesewas = null,
+             variable_max_pesewas = null,
+             variable_choices_pesewas = null
     `);
     await c.query(`
       delete from public.menu_items

@@ -380,6 +380,56 @@ while already open leaves a mark somebody set a minute ago alone.
 Closing stops new orders and leaves orders already in flight completely alone —
 the customer still gets fed.
 
+## A price the customer chooses
+
+Some things are sold by the amount somebody wants to spend. An item is priced
+one of three ways, held in `menu_items.pricing_mode`:
+
+| Mode      | What the store sets                                                                    | Valid prices                                                      |
+| --------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `FIXED`   | `price_pesewas`                                                                        | that one                                                          |
+| `STEPPED` | `variable_min_pesewas`, `variable_step_pesewas`, and optionally `variable_max_pesewas` | from the minimum in exact steps, up to the maximum or without end |
+| `CHOICES` | `variable_choices_pesewas` (up to 20, each once)                                       | exactly those                                                     |
+
+`STEPPED` and `CHOICES` are the two variable modes, and they are separate rules:
+a list with no pattern is never squeezed into a step.
+
+**It is a capability Campus Dash grants.** `vendors.can_use_variable_pricing`
+is written only by `admin_set_vendor_variable_pricing()` (administrator,
+audited, `/admin/vendors/<id>`). Without it a store cannot choose a variable
+mode or change a variable rule, however the request is built. Going back to
+`FIXED` is always allowed.
+
+**Turning it off deletes nothing.** The items keep their mode and rule, hidden
+from the storefront by `menu_items_read_public`, unsellable at any price, and
+cannot be switched on. Turning it back on restores them exactly.
+
+**The server prices every line.** The basket sends a chosen unit price for a
+variable item. `menu_item_unit_price()`, called by both `price_order()` and
+`submit_order_for()`, accepts it only if the store still holds the capability
+and the amount is exactly on the item's rule or list. It never rounds. A price
+sent for a fixed item is ignored, as it always was. The chosen price is
+snapshotted onto `order_items`, so fees, the Paystack amount, the vendor split
+and settlement all follow from the order as before.
+
+**No store maximum is not "any number".** Every unit price on Campus Dash has
+one technical ceiling, `max_item_price_pesewas()`: GH₵1,000, the same limit
+the fixed-price writers have always enforced. An unlimited stepped item goes up
+in steps to it, a store-set maximum or list price must sit under it, and a
+larger amount is refused by `menu_item_unit_price()` with a sentence, before an
+order or a Paystack charge exists. It is not a price any store chose.
+
+**Open means something can be ordered.** `vendor_apply_menu_state()` and
+`vendor_set_accepting_orders()` count an active item only if a customer can
+order it, so a store whose only active items are dormant variable ones is
+closed. `admin_set_vendor_variable_pricing()` re-applies the store's state:
+turning the capability off closes such a store, turning it back on reopens it.
+No item is changed either way.
+
+**Never with a Meal Scan.** `menu_items_variable_is_not_scan` makes a variable
+mode and `scan_eligible` mutually exclusive, and `price_scan_order()` already
+requires `scan_eligible`.
+
 ## One account, two devices
 
 There is one owner per store, so the realistic race is a phone and a tablet on

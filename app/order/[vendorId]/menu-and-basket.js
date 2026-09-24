@@ -7,13 +7,25 @@ import ContactLine from '../../contact-line';
 import CameraCapture from '../../camera-capture';
 import DestinationPicker from '../../destination-picker';
 import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon, Callout } from '../../ui';
+import { pesewasFromCedisInput } from '@/lib/util/money';
+import {
+  PRICING_MODE,
+  isVariablePrice,
+  lowestPrice,
+  checkChosenPrice,
+  priceChoices,
+  cedisText,
+  priceSummary,
+} from '@/lib/util/item-price';
 
 /**
  * Menu, basket and checkout.
  *
- * The basket holds ids and quantities. It never holds a total: every figure
+ * The basket holds ids and quantities, and for an item whose price the
+ * customer chooses, the amount they chose. It never holds a total: every figure
  * shown comes back from the server, priced by the same arithmetic that will
- * charge the customer.
+ * charge the customer — and that arithmetic refuses an amount that is not one
+ * of the item's prices rather than rounding it to one.
  *
  * PICKUP OR DELIVERY IS ASKED HERE, and that is the whole shape of the new
  * order flow. There is no vendor to wait on any more, so there is nothing to
@@ -40,7 +52,7 @@ export default function MenuAndBasket({
   packFeePesewas = 0,
   gate = null,
 }) {
-  const [quantities, setQuantities] = useBasket(vendor.vendor_id, menu);
+  const [quantities, setQuantities, prices, setPrices] = useBasket(vendor.vendor_id, menu);
   const [step, setStep] = useState('menu');
   // NOTHING IS PRESELECTED. Collecting and a Partner are different decisions
   // with different prices, and a default is a decision made for somebody.
@@ -72,15 +84,33 @@ export default function MenuAndBasket({
   // FulfilmentChoice for the full account of that bug.
   const [quotedPartnerFee, setQuotedPartnerFee] = useState(null);
 
+  // THE AMOUNT IS NOT THE QUANTITY. A variable item's chosen price travels on
+  // its line beside how many of it; the stepper never touches it.
+  const chosenPrice = (item) => prices[item.id] ?? lowestPrice(item);
   const items = Object.entries(quantities)
     .filter(([, quantity]) => quantity > 0)
-    .map(([menuItemId, quantity]) => ({ menuItemId, quantity }));
+    .map(([menuItemId, quantity]) => {
+      const item = menu.find((m) => m.id === menuItemId);
+      return item && isVariablePrice(item)
+        ? { menuItemId, quantity, unitPricePesewas: chosenPrice(item) }
+        : { menuItemId, quantity };
+    });
 
   const itemCount = items.reduce((total, item) => total + item.quantity, 0);
+  // An amount the customer is still typing is not sent anywhere. Checkout waits
+  // until every chosen amount is one of its item's prices.
+  const pricesValid = items.every(
+    (line) =>
+      line.unitPricePesewas === undefined ||
+      checkChosenPrice(
+        menu.find((m) => m.id === line.menuItemId),
+        line.unitPricePesewas
+      ).ok
+  );
   // `gate` is set when the viewer lacks the CUSTOMER capability — signed out,
   // or signed in without student onboarding. They can still browse and build a
   // basket; the checkout step becomes a link to whatever they are missing.
-  const canOrder = vendor.is_accepting_orders && itemCount > 0 && !gate;
+  const canOrder = vendor.is_accepting_orders && itemCount > 0 && pricesValid && !gate;
 
   // WHAT IS ACTUALLY BEING BOUGHT. Delivery can be switched off centrally, and
   // when it is the choice collapses to collection here rather than being
@@ -141,6 +171,7 @@ export default function MenuAndBasket({
     // to this store should not offer to buy the same lunch twice.
     try {
       window.sessionStorage.removeItem(`campus-dash:basket:${vendor.vendor_id}`);
+      window.sessionStorage.removeItem(`campus-dash:basket-prices:${vendor.vendor_id}`);
     } catch {
       // Storage unavailable: nothing was saved to clear.
     }
@@ -257,7 +288,17 @@ export default function MenuAndBasket({
                     <span
                       className={`shrink-0 font-semibold ${item.is_available ? '' : 'text-muted'}`}
                     >
-                      <Money pesewas={item.price_pesewas} />
+                      {/* THE AMOUNT IN THE HEADLINE, where a fixed item's price
+                          is: what this item will cost, as chosen right now. An
+                          amount that is not one of its prices is never shown
+                          as the price; the item's range is, until it is. */}
+                      {!isVariablePrice(item) ? (
+                        <Money pesewas={item.price_pesewas} />
+                      ) : checkChosenPrice(item, chosenPrice(item)).ok ? (
+                        <Money pesewas={chosenPrice(item)} />
+                      ) : (
+                        <span className="tabular-nums">{priceSummary(item)}</span>
+                      )}
                     </span>
                   </div>
 
@@ -266,11 +307,25 @@ export default function MenuAndBasket({
                   ) : null}
 
                   {item.is_available ? (
-                    <Stepper
-                      value={chosen}
-                      onChange={(next) => setQuantity(item.id, next)}
-                      label={item.name}
-                    />
+                    <>
+                      {isVariablePrice(item) ? (
+                        <PriceChoice
+                          item={item}
+                          value={chosenPrice(item)}
+                          onChange={(pesewas) =>
+                            setPrices((current) => ({ ...current, [item.id]: pesewas }))
+                          }
+                        />
+                      ) : null}
+                      <Stepper
+                        value={chosen}
+                        onChange={(next) => setQuantity(item.id, next)}
+                        label={item.name}
+                        disabled={
+                          isVariablePrice(item) && !checkChosenPrice(item, chosenPrice(item)).ok
+                        }
+                      />
+                    </>
                   ) : (
                     /* SOLD OUT, SHOWN. A dish that vanishes when it runs out
                      reads as a store that has stopped selling it; a dish marked
@@ -347,13 +402,14 @@ function CheckoutAtTop({ children }) {
  * at zero on every row is a lot of controls saying nothing. Once there is a
  * quantity it becomes the stepper. Both are 44px targets.
  */
-function Stepper({ value, onChange, label }) {
+function Stepper({ value, onChange, label, disabled = false }) {
   if (value === 0) {
     return (
       <button
         type="button"
         onClick={() => onChange(1)}
-        className="press border-line-strong hover:border-brand-600 hover:bg-brand-50 mt-3 inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition-colors"
+        disabled={disabled}
+        className="press border-line-strong hover:border-brand-600 hover:bg-brand-50 mt-3 inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition-colors disabled:opacity-55"
       >
         Add
         <span aria-hidden className="text-base leading-none">
@@ -381,7 +437,8 @@ function Stepper({ value, onChange, label }) {
         type="button"
         aria-label={`Add one ${label}`}
         onClick={() => onChange(value + 1)}
-        className="press bg-brand-700 hover:bg-brand-800 grid size-10 place-items-center rounded-full text-lg font-semibold text-white transition-colors"
+        disabled={disabled}
+        className="press bg-brand-700 hover:bg-brand-800 grid size-10 place-items-center rounded-full text-lg font-semibold text-white transition-colors disabled:opacity-55"
       >
         +
       </button>
@@ -429,10 +486,17 @@ function Checkout({
   submitting,
   submitState,
 }) {
+  // THE SERVER'S UNIT PRICE once there is a quote, so every line agrees with
+  // the total beside it even if the store changed the item mid-basket.
+  const quoted = new Map((quote?.lines ?? []).map((l) => [l.menu_item_id, l.unit_price_pesewas]));
   const named = items.map((item) => ({
     ...item,
     name: menu.find((m) => m.id === item.menuItemId)?.name ?? 'Item',
-    price: menu.find((m) => m.id === item.menuItemId)?.price_pesewas ?? 0,
+    price:
+      quoted.get(item.menuItemId) ??
+      item.unitPricePesewas ??
+      menu.find((m) => m.id === item.menuItemId)?.price_pesewas ??
+      0,
   }));
 
   // The server's live answer wins over what the page was rendered with: the
@@ -467,11 +531,19 @@ function Checkout({
   return (
     <form action={submit} className="mx-auto max-w-xl">
       <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
-      {/* Ids and quantities only. No prices leave the browser. */}
+      {/* Ids and quantities, and a chosen amount only where the customer
+          chose one. submit_order() checks that amount against the item's own
+          prices and refuses anything else; no other figure leaves the browser. */}
       <input
         type="hidden"
         name="items"
-        value={JSON.stringify(items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })))}
+        value={JSON.stringify(
+          items.map(({ menuItemId, quantity, unitPricePesewas }) =>
+            unitPricePesewas === undefined
+              ? { menuItemId, quantity }
+              : { menuItemId, quantity, unitPricePesewas }
+          )
+        )}
       />
       <input type="hidden" name="fulfilment_type" value={fulfilment ?? ''} />
       <input type="hidden" name="destination_location_id" value={destination ?? ''} />
@@ -503,6 +575,11 @@ function Checkout({
             <span className="min-w-0">
               <span className="text-muted mr-2 tabular-nums">{item.quantity}×</span>
               {item.name}
+              {item.unitPricePesewas !== undefined ? (
+                <span className="text-muted ml-1.5 text-sm">
+                  at <Money pesewas={item.price} />
+                </span>
+              ) : null}
             </span>
             <span className="text-muted shrink-0 text-sm">
               <Money pesewas={item.price * item.quantity} />
@@ -684,13 +761,18 @@ function Line({ label, hint, value }) {
  * WHY. It used to live only in component state, so a refresh, a tap on the
  * header, or — worst — the trip to sign up and back emptied it, even though
  * the page promised the order would be waiting. It is kept per store in
- * sessionStorage: ids and quantities only, the same shape the server is sent,
- * and never a price. Items no longer on the menu are dropped on the way back
- * in, and anything unreadable is simply ignored.
+ * sessionStorage: ids and quantities, the same shape the server is sent, and
+ * beside them the amount chosen for an item priced that way. Never a total.
+ * Items no longer on the menu are dropped on the way back in, and anything
+ * unreadable is simply ignored. A kept amount the store has since stopped
+ * offering is not corrected here: the screen marks it, and the server would
+ * refuse it.
  */
 function useBasket(vendorId, menu) {
   const key = `campus-dash:basket:${vendorId}`;
+  const pricesKey = `campus-dash:basket-prices:${vendorId}`;
   const [quantities, setQuantities] = useState({});
+  const [prices, setPrices] = useState({});
   const [restored, setRestored] = useState(false);
 
   useEffect(() => {
@@ -707,8 +789,22 @@ function useBasket(vendorId, menu) {
     } catch {
       // Private mode or blocked storage: start empty, the basket still works.
     }
+    let savedPrices = {};
+    try {
+      const raw = window.sessionStorage.getItem(pricesKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const variable = new Set(menu.filter(isVariablePrice).map((m) => m.id));
+      savedPrices = Object.fromEntries(
+        Object.entries(parsed).filter(
+          ([id, pesewas]) => variable.has(id) && Number.isSafeInteger(pesewas) && pesewas > 0
+        )
+      );
+    } catch {
+      // As above.
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring browser-only state after hydration
     setQuantities(saved);
+    setPrices(savedPrices);
     setRestored(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
@@ -724,7 +820,146 @@ function useBasket(vendorId, menu) {
     }
   }, [key, quantities, restored]);
 
-  return [quantities, setQuantities];
+  useEffect(() => {
+    if (!restored) return;
+    try {
+      const kept = Object.fromEntries(
+        Object.entries(prices).filter(([, pesewas]) => Number.isSafeInteger(pesewas))
+      );
+      if (Object.keys(kept).length) window.sessionStorage.setItem(pricesKey, JSON.stringify(kept));
+      else window.sessionStorage.removeItem(pricesKey);
+    } catch {
+      // As above.
+    }
+  }, [pricesKey, prices, restored]);
+
+  return [quantities, setQuantities, prices, setPrices];
+}
+
+/* ---------------------------------------------------------------------------
+ * A price the customer chooses
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The amount, as its own control, above the quantity.
+ *
+ * CHOICES is a row of the store's exact prices, one tap each. STEPPED is one
+ * number box: the valid amounts may have no end, so they are typed rather than
+ * listed. A typed amount that is not one of the item's prices is NOT corrected
+ * — the box keeps what was typed, the nearest prices are named, and nothing
+ * can be added until it is one of them.
+ */
+function PriceChoice({ item, value, onChange }) {
+  if (item.pricing_mode === PRICING_MODE.CHOICES) {
+    return (
+      <div
+        role="radiogroup"
+        aria-label={`Price of ${item.name}`}
+        className="mt-3 flex flex-wrap gap-2"
+      >
+        {priceChoices(item).map((pesewas) => {
+          const on = pesewas === value;
+          return (
+            <button
+              key={pesewas}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => onChange(pesewas)}
+              className={`press-sm h-10 rounded-full border px-4 text-sm font-semibold tabular-nums transition-colors ${
+                on
+                  ? 'bg-ink border-ink text-white'
+                  : 'border-line-strong hover:border-brand-600 hover:bg-brand-50'
+              }`}
+            >
+              <Money pesewas={pesewas} />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return <SteppedAmount item={item} value={value} onChange={onChange} />;
+}
+
+function SteppedAmount({ item, value, onChange }) {
+  // WHAT WAS TYPED, kept as typed. The parent holds pesewas; this holds the
+  // text, so "1" on the way to "15" is not rewritten under the thumb.
+  const [text, setText] = useState(() => cedisText(value));
+  const parsed = parse(text);
+  const check = parsed === null ? { ok: false } : checkChosenPrice(item, parsed);
+  // Whole cedis on a whole-cedi item: the phone offers digits only.
+  const whole =
+    Number(item.variable_min_pesewas) % 100 === 0 && Number(item.variable_step_pesewas) % 100 === 0;
+
+  function parse(raw) {
+    try {
+      return pesewasFromCedisInput(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  const suggestions = [check.lower, check.higher].filter((p) => Number.isSafeInteger(p));
+
+  return (
+    <div className="mt-3">
+      <label className="inline-flex items-center gap-2">
+        <span className="text-muted text-sm">Amount</span>
+        <span
+          className={`rounded-input bg-surface focus-within:border-brand-600 inline-flex h-10 items-center border px-3 ${
+            check.ok ? 'border-line-strong' : 'border-bad'
+          }`}
+        >
+          <span className="text-muted mr-1 text-sm">GH₵</span>
+          <input
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              // An unreadable amount is sent up as NaN, never as the last good
+              // one: the basket must not hold a price the box no longer shows.
+              onChange(parse(event.target.value) ?? Number.NaN);
+            }}
+            inputMode={whole ? 'numeric' : 'decimal'}
+            enterKeyHint="done"
+            autoComplete="off"
+            aria-invalid={!check.ok}
+            aria-label={`Amount for ${item.name}, in cedis`}
+            className="w-20 bg-transparent text-base font-semibold tabular-nums outline-none"
+          />
+        </span>
+      </label>
+      {check.ok ? null : (
+        <p className="text-bad mt-1.5 text-sm" role="status">
+          {suggestions.length ? (
+            <>
+              {check.tooHigh ? 'The most an item can cost is GH₵1,000. ' : null}
+              Choose{' '}
+              {suggestions.map((p, i) => (
+                <span key={p}>
+                  {i ? ' or ' : ''}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setText(cedisText(p));
+                      onChange(p);
+                    }}
+                    className="font-semibold underline underline-offset-2"
+                  >
+                    <Money pesewas={p} />
+                  </button>
+                </span>
+              ))}
+              .
+            </>
+          ) : (
+            'Enter an amount.'
+          )}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /* ---------------------------------------------------------------------------

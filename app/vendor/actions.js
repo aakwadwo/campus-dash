@@ -235,10 +235,15 @@ function revalidateMenu(vendorId) {
 export async function createMenuItemAction(_prev, formData) {
   const vendorId = str(formData, 'vendor_id');
   const name = str(formData, 'name');
-  const price = parsePrice(formData.get('price'));
+  const pricing = readPricing(formData);
 
   if (!name) return { ok: false, message: 'Give the item a name.' };
-  if (price === null) return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
+  if (pricing.message) return { ok: false, message: pricing.message };
+
+  const price = pricing.value ? null : parsePrice(formData.get('price'));
+  if (!pricing.value && price === null) {
+    return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
+  }
 
   try {
     await createMenuItem({
@@ -246,7 +251,8 @@ export async function createMenuItemAction(_prev, formData) {
       name,
       pricePesewas: price,
       description: str(formData, 'description'),
-      scanEligible: formData.get('scan_eligible') === 'on',
+      scanEligible: !pricing.value && formData.get('scan_eligible') === 'on',
+      pricing: pricing.value,
     });
   } catch (error) {
     return fail(error);
@@ -266,9 +272,13 @@ export async function createMenuItemAction(_prev, formData) {
  */
 export async function updateMenuItemAction(_prev, formData) {
   const vendorId = str(formData, 'vendor_id');
-  const price = parsePrice(formData.get('price'));
+  const pricing = readPricing(formData);
+  if (pricing.message) return { ok: false, message: pricing.message };
 
-  if (formData.get('price') && price === null) {
+  // A variable item keeps its fixed price untouched; the form does not show it.
+  const price = pricing.value ? null : parsePrice(formData.get('price'));
+
+  if (!pricing.value && formData.get('price') && price === null) {
     return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
   }
 
@@ -281,7 +291,11 @@ export async function updateMenuItemAction(_prev, formData) {
       // "leave it alone" — so the empty string is passed through rather than
       // collapsed to null by str().
       description: String(formData.get('description') ?? '').trim(),
-      scanEligible: formData.get('scan_eligible') === 'on',
+      scanEligible: !pricing.value && formData.get('scan_eligible') === 'on',
+      // FIXED is sent too, so choosing "One price" returns a variable item to
+      // its fixed price. No field at all means the store cannot see the
+      // choice, and the item's mode is left exactly as it is.
+      pricing: pricing.value ?? (pricing.mode ? { mode: pricing.mode } : undefined),
     });
   } catch (error) {
     return fail(error);
@@ -324,6 +338,47 @@ export async function deleteMenuItemAction(_prev, formData) {
  * `35.35 * 100` is 3534.9999999999995 in IEEE 754, and rounding that is a habit
  * that eventually rounds the wrong way on somebody's money.
  */
+/**
+ * The item's pricing, as the form sent it.
+ *
+ * NO FIELD, NO CHANGE: `pricing_mode` is only on the form for a store that holds
+ * the capability. Returns { mode } for a fixed item, { value } — the arguments
+ * for the database — for a variable one, or { message } when a figure cannot be
+ * read. Whether the figures make a valid rule is the database's to decide.
+ */
+function readPricing(formData) {
+  const mode = str(formData, 'pricing_mode');
+  if (!mode) return {};
+  if (mode === 'FIXED') return { mode };
+
+  if (mode === 'STEPPED') {
+    const min = parsePrice(formData.get('variable_min'));
+    const step = parsePrice(formData.get('variable_step'));
+    const maxText = String(formData.get('variable_max') ?? '').trim();
+    const max = maxText ? parsePrice(maxText) : null;
+    if (min === null) return { message: 'Give a starting price, like 10.' };
+    if (step === null) return { message: 'Give a step, like 5.' };
+    if (maxText && max === null) return { message: 'Give a maximum like 25, or leave it empty.' };
+    return {
+      mode,
+      value: { mode, minPesewas: min, stepPesewas: step, maxPesewas: max, clearMax: !maxText },
+    };
+  }
+
+  if (mode === 'CHOICES') {
+    const parts = String(formData.get('variable_choices') ?? '')
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    const choices = parts.map(parsePrice);
+    if (!parts.length || choices.includes(null)) {
+      return { message: 'List the prices separated by commas, like 10, 15, 30, 50.' };
+    }
+    return { mode, value: { mode, choicesPesewas: choices } };
+  }
+
+  return { message: 'Choose how this item is priced.' };
+}
+
 function parsePrice(raw) {
   const text = String(raw ?? '')
     .trim()

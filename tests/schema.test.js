@@ -209,6 +209,10 @@ describe('schema invariants', () => {
          where table_schema = 'public'
            and column_name like '%_pesewas'
            and data_type not in ('bigint', 'integer')
+           -- A LIST OF PRICES is still integer pesewas: menu_items'
+           -- variable_choices_pesewas is bigint[], and an array of anything
+           -- else would still fail here.
+           and not (data_type = 'ARRAY' and udt_name in ('_int8', '_int4'))
       `)
         ).rows
     );
@@ -358,6 +362,9 @@ describe('schema invariants', () => {
       'admin_set_user_suspended',
       'admin_set_vendor_scans',
       'admin_set_vendor_status',
+      // Whether a store may sell at a price the customer chooses. Audited, and
+      // the only writer of vendors.can_use_variable_pricing.
+      'admin_set_vendor_variable_pricing',
       'admin_settle_customer_reward',
       'admin_settlement_overview',
       'admin_settlement_payouts',

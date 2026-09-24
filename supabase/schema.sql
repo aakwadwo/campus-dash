@@ -726,9 +726,19 @@ CREATE TABLE IF NOT EXISTS "public"."menu_items" (
     "image_byte_size" bigint,
     "unavailable_reason" "text",
     "is_active" boolean DEFAULT false NOT NULL,
+    "pricing_mode" "text" DEFAULT 'FIXED'::"text" NOT NULL,
+    "variable_min_pesewas" bigint,
+    "variable_step_pesewas" bigint,
+    "variable_max_pesewas" bigint,
+    "variable_choices_pesewas" bigint[],
     CONSTRAINT "menu_items_image_complete" CHECK (((("image_path" IS NULL) AND ("image_content_type" IS NULL) AND ("image_byte_size" IS NULL)) OR (("image_path" IS NOT NULL) AND ("image_content_type" IS NOT NULL) AND ("image_byte_size" > 0)))),
+    CONSTRAINT "menu_items_price_choices_shape" CHECK ((("variable_choices_pesewas" IS NULL) OR ((("cardinality"("variable_choices_pesewas") >= 1) AND ("cardinality"("variable_choices_pesewas") <= 20)) AND ("array_position"("variable_choices_pesewas", NULL::bigint) IS NULL) AND (0 < ALL ("variable_choices_pesewas"))))),
     CONSTRAINT "menu_items_price_pesewas_check" CHECK (("price_pesewas" > 0)),
-    CONSTRAINT "menu_items_unavailable_reason_shape" CHECK ((("unavailable_reason" IS NULL) OR ("unavailable_reason" = 'SOLD_OUT'::"text")))
+    CONSTRAINT "menu_items_pricing_mode_check" CHECK (("pricing_mode" = ANY (ARRAY['FIXED'::"text", 'STEPPED'::"text", 'CHOICES'::"text"]))),
+    CONSTRAINT "menu_items_unavailable_reason_shape" CHECK ((("unavailable_reason" IS NULL) OR ("unavailable_reason" = 'SOLD_OUT'::"text"))),
+    CONSTRAINT "menu_items_variable_is_configured" CHECK ((("pricing_mode" = 'FIXED'::"text") OR (("pricing_mode" = 'STEPPED'::"text") AND ("variable_min_pesewas" IS NOT NULL) AND ("variable_step_pesewas" IS NOT NULL)) OR (("pricing_mode" = 'CHOICES'::"text") AND ("variable_choices_pesewas" IS NOT NULL)))),
+    CONSTRAINT "menu_items_variable_is_not_scan" CHECK ((("pricing_mode" = 'FIXED'::"text") OR (NOT "scan_eligible"))),
+    CONSTRAINT "menu_items_variable_rule_shape" CHECK (((("variable_min_pesewas" IS NULL) OR ("variable_min_pesewas" > 0)) AND (("variable_step_pesewas" IS NULL) OR ("variable_step_pesewas" > 0)) AND (("variable_max_pesewas" IS NULL) OR (("variable_min_pesewas" IS NOT NULL) AND ("variable_step_pesewas" IS NOT NULL) AND ("variable_max_pesewas" >= "variable_min_pesewas") AND ((("variable_max_pesewas" - "variable_min_pesewas") % "variable_step_pesewas") = 0)))))
 );
 
 
@@ -744,7 +754,22 @@ COMMENT ON COLUMN "public"."menu_items"."image_path" IS 'A photograph of this di
 COMMENT ON COLUMN "public"."menu_items"."unavailable_reason" IS 'Why is_available is false. SOLD_OUT is the only reason there is: today''s problem, cleared when the store next reopens. "Off the menu" is not a kind of unavailability and lives on is_active instead. Null whenever is_available is true.';
 
 
-COMMENT ON COLUMN "public"."menu_items"."is_active" IS 'Whether this catalogue item is on the menu the store is serving RIGHT NOW. OFF is invisible to customers and is NOT sold out — the item keeps its price, its photograph and its history, and the store turns it back on when it next serves it. A store is open if and only if at least one of its items is active; see vendor_apply_menu_state().';
+COMMENT ON COLUMN "public"."menu_items"."is_active" IS 'Whether this catalogue item is on the menu the store is serving RIGHT NOW. OFF is invisible to customers and is NOT sold out — the item keeps its price, its photograph and its history, and the store turns it back on when it next serves it. A store is open if and only if at least one of its active items can be ordered; see vendor_apply_menu_state().';
+
+
+COMMENT ON COLUMN "public"."menu_items"."pricing_mode" IS 'FIXED: sold at price_pesewas. STEPPED: the customer chooses the unit price, from variable_min_pesewas in steps of variable_step_pesewas up to variable_max_pesewas (or without limit when that is null). CHOICES: the customer chooses one of variable_choices_pesewas. STEPPED and CHOICES are sellable only while vendors.can_use_variable_pricing is true, and are never scan_eligible.';
+
+
+COMMENT ON COLUMN "public"."menu_items"."variable_min_pesewas" IS 'The starting price of a STEPPED item, and the first valid one. Kept when the item returns to FIXED or the store loses the capability.';
+
+
+COMMENT ON COLUMN "public"."menu_items"."variable_step_pesewas" IS 'The distance between valid prices of a STEPPED item. A chosen price p is valid when (p - min) is an exact multiple of this. Never rounded to.';
+
+
+COMMENT ON COLUMN "public"."menu_items"."variable_max_pesewas" IS 'The highest valid price of a STEPPED item, itself on a step. NULL means there is no ceiling.';
+
+
+COMMENT ON COLUMN "public"."menu_items"."variable_choices_pesewas" IS 'The exact prices of a CHOICES item, ascending, each once. Nothing between or beyond them is valid. Kept when the item changes mode or the store loses the capability.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_reason" "text", "p_description" "text" DEFAULT NULL::"text", "p_sort_order" integer DEFAULT 0) RETURNS "public"."menu_items"
@@ -803,6 +828,7 @@ CREATE TABLE IF NOT EXISTS "public"."vendors" (
     "submitted_at" timestamp with time zone,
     "reviewed_at" timestamp with time zone,
     "reviewed_by" "uuid",
+    "can_use_variable_pricing" boolean DEFAULT false NOT NULL,
     CONSTRAINT "vendors_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text")),
     CONSTRAINT "vendors_rejection_has_reason" CHECK ((("status" <> 'REJECTED'::"public"."vendor_status") OR (NULLIF("btrim"(COALESCE("rejection_reason", ''::"text")), ''::"text") IS NOT NULL))),
     CONSTRAINT "vendors_walk_minutes_to_campus_check" CHECK (("walk_minutes_to_campus" >= 0))
@@ -822,6 +848,9 @@ COMMENT ON COLUMN "public"."vendors"."owner_user_id" IS 'The identity that opera
 
 
 COMMENT ON COLUMN "public"."vendors"."owner_is_student" IS 'Whether the owner told us they are a student. INFORMATIONAL ONLY. It is not a capability and confers none — a student vendor is not thereby a Customer.';
+
+
+COMMENT ON COLUMN "public"."vendors"."can_use_variable_pricing" IS 'Whether this store may sell items at a price the customer chooses. Set by an administrator only, through admin_set_vendor_variable_pricing(). Turning it off preserves every item''s variable configuration, dormant and unsellable, until it is turned back on.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid" DEFAULT NULL::"uuid", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
@@ -3744,6 +3773,58 @@ $$;
 ALTER FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_before public.vendors%rowtype;
+  v_after  public.vendors%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_enabled is null then
+    raise exception 'say whether the store may use customer-chosen prices'
+      using errcode = 'check_violation';
+  end if;
+
+  select * into v_before from public.vendors where id = p_vendor_id for update;
+  if not found then
+    raise exception 'vendor not found' using errcode = 'no_data_found';
+  end if;
+
+  -- THE STORE'S ROW ONLY. No item is touched either way: switching off leaves
+  -- every configuration where it is, dormant, and switching on brings it back.
+  update public.vendors
+     set can_use_variable_pricing = p_enabled,
+         updated_at = now()
+   where id = p_vendor_id;
+
+  -- WHAT CAN BE ORDERED HAS CHANGED, so whether the store is open may have.
+  -- Off closes a store whose only active items were variable; on reopens it.
+  -- Items stay exactly as the store left them.
+  perform public.vendor_apply_menu_state(p_vendor_id);
+
+  select * into v_after from public.vendors where id = p_vendor_id;
+
+  perform public.log_admin_action(
+    'VENDOR_VARIABLE_PRICING_SET', 'vendor', p_vendor_id, p_reason,
+    to_jsonb(v_before), to_jsonb(v_after)
+  );
+
+  return v_after;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") IS 'The only writer of vendors.can_use_variable_pricing. Administrator only, re-checked in the body, audited. Touches no menu item: a disabled store''s variable items stay configured and dormant.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."customer_rewards" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -4405,6 +4486,40 @@ $$;
 ALTER FUNCTION "public"."admin_webhook_events"("p_limit" integer) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."assert_price_choices"("p_choices" bigint[]) RETURNS bigint[]
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_sorted bigint[];
+begin
+  if p_choices is null or cardinality(p_choices) = 0 then
+    raise exception 'give the item at least one price' using errcode = 'check_violation';
+  end if;
+  if cardinality(p_choices) > 20 then
+    raise exception 'an item can have at most 20 prices' using errcode = 'check_violation';
+  end if;
+  if array_position(p_choices, null) is not null or not (0 < all (p_choices)) then
+    raise exception 'give the item a price' using errcode = 'check_violation';
+  end if;
+  if not (100000 >= all (p_choices)) then
+    raise exception 'that price looks wrong — the most an item can cost is GHS 1000'
+      using errcode = 'check_violation';
+  end if;
+
+  select array_agg(c order by c) into v_sorted from unnest(p_choices) c;
+  if cardinality(v_sorted) <> (select count(distinct c) from unnest(p_choices) c) then
+    raise exception 'each price can be listed once' using errcode = 'check_violation';
+  end if;
+
+  return v_sorted;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."assert_price_choices"("p_choices" bigint[]) OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."assert_service_or_admin"() RETURNS "void"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -4419,6 +4534,41 @@ $$;
 
 
 ALTER FUNCTION "public"."assert_service_or_admin"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."assert_variable_price_rule"("p_min" bigint, "p_step" bigint, "p_max" bigint) RETURNS "void"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+begin
+  if p_min is null or p_min <= 0 then
+    raise exception 'give the item a starting price' using errcode = 'check_violation';
+  end if;
+  if p_min > public.max_item_price_pesewas() then
+    raise exception 'that starting price looks wrong — the most it can be is GHS 1000'
+      using errcode = 'check_violation';
+  end if;
+  if p_step is null or p_step <= 0 then
+    raise exception 'give the item a price step' using errcode = 'check_violation';
+  end if;
+  if p_step > public.max_item_price_pesewas() then
+    raise exception 'that price step looks wrong — the most it can be is GHS 1000'
+      using errcode = 'check_violation';
+  end if;
+  if p_max is not null and (p_max < p_min or (p_max - p_min) % p_step <> 0) then
+    raise exception 'the maximum price must be one of the prices the steps reach'
+      using errcode = 'check_violation';
+  end if;
+  -- A maximum above the ceiling would promise prices the checkout refuses.
+  if p_max is not null and p_max > public.max_item_price_pesewas() then
+    raise exception 'that maximum price looks wrong — the most it can be is GHS 1000'
+      using errcode = 'check_violation';
+  end if;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."assert_variable_price_rule"("p_min" bigint, "p_step" bigint, "p_max" bigint) OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."payments" (
@@ -6806,6 +6956,85 @@ $$;
 ALTER FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "p_status" "public"."webhook_event_status", "p_error" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."max_item_price_pesewas"() RETURNS bigint
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  -- GHS 1000. The same figure the fixed-price writers refuse above.
+  select 100000::bigint;
+$$;
+
+
+ALTER FUNCTION "public"."max_item_price_pesewas"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."max_item_price_pesewas"() IS 'The most one unit of any item can cost, in pesewas. A technical ceiling for the whole platform, not a price any store chose. Equal to the limit vendor_create_menu_item() and vendor_update_menu_item() place on a fixed price.';
+
+
+CREATE OR REPLACE FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") RETURNS bigint
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_raw    jsonb := p_line -> 'unit_price_pesewas';
+  v_sent   boolean := v_raw is not null and jsonb_typeof(v_raw) <> 'null';
+  v_amount numeric;
+begin
+  -- UNCHANGED FOR A FIXED ITEM: the menu price, whatever the request says.
+  if p_item.pricing_mode = 'FIXED' then
+    return p_item.price_pesewas;
+  end if;
+
+  -- DORMANT. The store has lost the capability since this was put in a basket:
+  -- the item is not for sale at any price, including the one the basket kept.
+  if not exists (
+    select 1 from public.vendors
+     where id = p_item.vendor_id and can_use_variable_pricing
+  ) then
+    raise exception 'menu item % is unavailable', p_item.id using errcode = 'check_violation';
+  end if;
+
+  if not v_sent or jsonb_typeof(v_raw) <> 'number' then
+    raise exception 'choose an amount for %', p_item.name using errcode = 'check_violation';
+  end if;
+
+  v_amount := (v_raw #>> '{}')::numeric;
+
+  -- ABOVE WHAT ANY ITEM CAN COST. Checked before the rule, so an absurd number
+  -- is told the one thing that is wrong with it, and never reaches a charge.
+  if v_amount > public.max_item_price_pesewas() then
+    raise exception 'the amount for % is more than any item can cost', p_item.name
+      using errcode = 'check_violation';
+  end if;
+
+  -- WHOLE PESEWAS, ON THE ITEM'S OWN RULE, OR REFUSED. Never rounded,
+  -- snapped or clamped to the nearest valid price.
+  if v_amount <> trunc(v_amount) then
+    raise exception 'the amount for % is not one of its prices', p_item.name
+      using errcode = 'check_violation';
+  end if;
+
+  if p_item.pricing_mode = 'CHOICES' then
+    if not (v_amount = any (p_item.variable_choices_pesewas::numeric[])) then
+      raise exception 'the amount for % is not one of its prices', p_item.name
+        using errcode = 'check_violation';
+    end if;
+  elsif v_amount < p_item.variable_min_pesewas
+     or (p_item.variable_max_pesewas is not null and v_amount > p_item.variable_max_pesewas)
+     or mod(v_amount - p_item.variable_min_pesewas, p_item.variable_step_pesewas) <> 0
+  then
+    raise exception 'the amount for % is not one of its prices', p_item.name
+      using errcode = 'check_violation';
+  end if;
+
+  return v_amount::bigint;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."my_capabilities"() RETURNS "jsonb"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -7106,7 +7335,7 @@ $$;
 ALTER FUNCTION "public"."my_scan_order"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "status" "public"."vendor_status", "description" "text", "category_id" "uuid", "category_name" "text", "applicant_name" "text", "owner_is_student" boolean, "is_accepting_orders" boolean, "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "location_id" "uuid", "location_note" "text", "walk_minutes_to_campus" integer, "can_accept_scans" boolean)
+CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "status" "public"."vendor_status", "description" "text", "category_id" "uuid", "category_name" "text", "applicant_name" "text", "owner_is_student" boolean, "is_accepting_orders" boolean, "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "location_id" "uuid", "location_note" "text", "walk_minutes_to_campus" integer, "can_accept_scans" boolean, "can_use_variable_pricing" boolean)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -7114,7 +7343,8 @@ CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("ven
          v.applicant_name, v.owner_is_student, v.is_accepting_orders,
          v.rejection_reason, v.submitted_at, v.reviewed_at,
          v.location_id, v.location_note, v.walk_minutes_to_campus,
-         v.can_accept_scans
+         v.can_accept_scans,
+         v.can_use_variable_pricing
     from public.vendors v
     left join public.vendor_categories k on k.id = v.category_id
    where v.owner_user_id = auth.uid();
@@ -8264,6 +8494,7 @@ declare
   v_item     jsonb;
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
+  v_unit     bigint;
   v_seen     uuid[] := '{}';
 begin
   -- A CLOSED store takes no new orders. Existing ones are untouched: this
@@ -8307,15 +8538,19 @@ begin
     end if;
     v_seen := v_seen || v_menu.id;
 
+    -- THE UNIT PRICE: the fixed price, or the customer's chosen amount once it
+    -- has been checked against the item's rule.
+    v_unit := public.menu_item_unit_price(v_menu, v_item);
+
     v_lines := v_lines || jsonb_build_object(
       'menu_item_id',       v_menu.id,
       'name',               v_menu.name,
-      'unit_price_pesewas', v_menu.price_pesewas,
+      'unit_price_pesewas', v_unit,
       'quantity',           v_qty,
-      'line_total_pesewas', v_menu.price_pesewas * v_qty
+      'line_total_pesewas', v_unit * v_qty
     );
 
-    v_subtotal := v_subtotal + (v_menu.price_pesewas * v_qty);
+    v_subtotal := v_subtotal + (v_unit * v_qty);
   end loop;
 
   -- 5% of the food, rounded half-up, in whole pesewas. UNCHANGED, and
@@ -8958,6 +9193,7 @@ declare
   v_item     jsonb;
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
+  v_unit     bigint;
   v_seen     uuid[] := '{}';
   v_note     text := nullif(btrim(coalesce(p_order_note, '')), '');
   v_extra    text := nullif(btrim(coalesce(p_destination_note, '')), '');
@@ -9087,15 +9323,19 @@ begin
     end if;
     v_seen := v_seen || v_menu.id;
 
+    -- THE UNIT PRICE: the fixed price, or the customer's chosen amount once it
+    -- has been checked against the item's rule and the store's capability, in
+    -- this transaction. A basket built before either changed is refused here.
+    v_unit := public.menu_item_unit_price(v_menu, v_item);
+
     insert into public.order_items (
       order_id, menu_item_id, name_snapshot, unit_price_pesewas, quantity, line_total_pesewas
     )
     values (
-      v_order_id, v_menu.id, v_menu.name, v_menu.price_pesewas, v_qty,
-      v_menu.price_pesewas * v_qty
+      v_order_id, v_menu.id, v_menu.name, v_unit, v_qty, v_unit * v_qty
     );
 
-    v_subtotal := v_subtotal + (v_menu.price_pesewas * v_qty);
+    v_subtotal := v_subtotal + (v_unit * v_qty);
   end loop;
 
   -- 5% of the food, rounded half-up, in whole pesewas. The delivery fee is not
@@ -9608,9 +9848,14 @@ begin
 
   -- A store that is not ACTIVE is not open, whatever its menu says. An
   -- applicant may build a catalogue while they wait; it sells nothing.
+  --
+  -- AN ITEM A CUSTOMER CAN ORDER. A variable item at a store without the
+  -- capability is on the menu and hidden from everybody, so it does not hold
+  -- the store open. It stays on, and counts again when the capability returns.
   v_open := v_vendor.status = 'ACTIVE' and exists (
     select 1 from public.menu_items m
      where m.vendor_id = p_vendor_id and m.is_active
+       and (m.pricing_mode = 'FIXED' or v_vendor.can_use_variable_pricing)
   );
 
   if v_open is distinct from v_vendor.is_accepting_orders then
@@ -9636,7 +9881,7 @@ $$;
 ALTER FUNCTION "public"."vendor_apply_menu_state"("p_vendor_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."vendor_apply_menu_state"("p_vendor_id" "uuid") IS 'Makes vendors.is_accepting_orders agree with the active menu: open if and only if at least one item is ON and the store is ACTIVE. Internal — every caller has already authorised the move and locked the vendor row. A CLOSED → OPEN transition here clears sold-out marks, exactly as pressing Open always has.';
+COMMENT ON FUNCTION "public"."vendor_apply_menu_state"("p_vendor_id" "uuid") IS 'Makes vendors.is_accepting_orders agree with the active menu: open if and only if the store is ACTIVE and at least one item is ON that a customer can order — a variable item counts only while the store holds can_use_variable_pricing. Internal — every caller has already authorised the move and locked the vendor row. A CLOSED → OPEN transition here clears sold-out marks, exactly as pressing Open always has.';
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_clear_menu_item_image"("p_menu_item_id" "uuid") RETURNS "text"
@@ -9721,17 +9966,25 @@ $$;
 ALTER FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text" DEFAULT NULL::"text", "p_scan_eligible" boolean DEFAULT false) RETURNS "public"."menu_items"
+CREATE OR REPLACE FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text" DEFAULT NULL::"text", "p_scan_eligible" boolean DEFAULT false, "p_pricing_mode" "text" DEFAULT 'FIXED'::"text", "p_variable_min_pesewas" bigint DEFAULT NULL::bigint, "p_variable_step_pesewas" bigint DEFAULT NULL::bigint, "p_variable_max_pesewas" bigint DEFAULT NULL::bigint, "p_variable_choices_pesewas" bigint[] DEFAULT NULL::bigint[]) RETURNS "public"."menu_items"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
   v_item public.menu_items%rowtype;
+  v_choices bigint[];
   v_next integer;
   v_name text := nullif(btrim(coalesce(p_name, '')), '');
+  v_mode text := coalesce(p_pricing_mode, 'FIXED');
+  v_price bigint := p_price_pesewas;
 begin
   if not public.is_vendor_staff(p_vendor_id) and not public.is_admin() then
     raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
+  end if;
+
+  if v_mode not in ('FIXED', 'STEPPED', 'CHOICES') then
+    raise exception 'an item is sold at a set price or a price the customer chooses'
+      using errcode = 'check_violation';
   end if;
 
   if v_name is null then
@@ -9741,12 +9994,36 @@ begin
     raise exception 'keep the name under 120 characters' using errcode = 'check_violation';
   end if;
 
+  if v_mode <> 'FIXED' then
+    if not exists (
+      select 1 from public.vendors where id = p_vendor_id and can_use_variable_pricing
+    ) then
+      raise exception 'customer-chosen prices are not enabled for this store'
+        using errcode = 'insufficient_privilege';
+    end if;
+    if coalesce(p_scan_eligible, false) then
+      raise exception 'an item with a customer-chosen price cannot take meal scans'
+        using errcode = 'check_violation';
+    end if;
+    -- price_pesewas is the FIXED price, and an item created variable has not
+    -- had one. Its lowest price is the honest placeholder should it ever be
+    -- switched to fixed without a new one.
+    if v_mode = 'STEPPED' then
+      perform public.assert_variable_price_rule(
+        p_variable_min_pesewas, p_variable_step_pesewas, p_variable_max_pesewas);
+      v_price := coalesce(v_price, p_variable_min_pesewas);
+    else
+      v_choices := public.assert_price_choices(p_variable_choices_pesewas);
+      v_price := coalesce(v_price, v_choices[1]);
+    end if;
+  end if;
+
   -- MONEY IS INTEGER PESEWAS. A caller sending 35.50 is a bug, not a rounding
   -- opportunity, so it is refused rather than truncated.
-  if p_price_pesewas is null or p_price_pesewas <= 0 then
+  if v_price is null or v_price <= 0 then
     raise exception 'give the item a price' using errcode = 'check_violation';
   end if;
-  if p_price_pesewas > 100000 then
+  if v_price > 100000 then
     raise exception 'that price looks wrong — the most an item can cost is GHS 1000'
       using errcode = 'check_violation';
   end if;
@@ -9762,11 +10039,18 @@ begin
     from public.menu_items where vendor_id = p_vendor_id;
 
   insert into public.menu_items (
-    vendor_id, name, description, price_pesewas, sort_order, scan_eligible
+    vendor_id, name, description, price_pesewas, sort_order, scan_eligible,
+    pricing_mode, variable_min_pesewas, variable_step_pesewas, variable_max_pesewas,
+    variable_choices_pesewas
   )
   values (
     p_vendor_id, v_name, nullif(btrim(coalesce(p_description, '')), ''),
-    p_price_pesewas, v_next, coalesce(p_scan_eligible, false)
+    v_price, v_next, coalesce(p_scan_eligible, false),
+    v_mode,
+    case when v_mode = 'STEPPED' then p_variable_min_pesewas end,
+    case when v_mode = 'STEPPED' then p_variable_step_pesewas end,
+    case when v_mode = 'STEPPED' then p_variable_max_pesewas end,
+    v_choices
   )
   returning * into v_item;
 
@@ -9775,7 +10059,7 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) OWNER TO "postgres";
+ALTER FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_variable_choices_pesewas" bigint[]) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer DEFAULT 30) RETURNS TABLE("order_day" "date", "order_count" integer, "sales_pesewas" bigint)
@@ -10085,7 +10369,7 @@ ALTER FUNCTION "public"."vendor_may_read_scan"("p_order_id" "uuid") OWNER TO "po
 COMMENT ON FUNCTION "public"."vendor_may_read_scan"("p_order_id" "uuid") IS 'Whether the caller staffs the store this scan order belongs to AND the order is still live on its board. The one predicate behind both the order_scans policy and vendor_scan_image_path(), so the row and the image can never disagree about who may look.';
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_menu"("p_vendor_id" "uuid") RETURNS TABLE("id" "uuid", "name" "text", "description" "text", "price_pesewas" bigint, "is_active" boolean, "is_available" boolean, "unavailable_reason" "text", "scan_eligible" boolean, "image_path" "text", "sort_order" integer, "order_count" bigint)
+CREATE OR REPLACE FUNCTION "public"."vendor_menu"("p_vendor_id" "uuid") RETURNS TABLE("id" "uuid", "name" "text", "description" "text", "price_pesewas" bigint, "is_active" boolean, "is_available" boolean, "unavailable_reason" "text", "scan_eligible" boolean, "image_path" "text", "sort_order" integer, "order_count" bigint, "pricing_mode" "text", "variable_min_pesewas" bigint, "variable_step_pesewas" bigint, "variable_max_pesewas" bigint, "variable_choices_pesewas" bigint[])
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -10095,11 +10379,13 @@ CREATE OR REPLACE FUNCTION "public"."vendor_menu"("p_vendor_id" "uuid") RETURNS 
          -- WHETHER IT CAN BE DELETED, answered on the row rather than by
          -- letting somebody press Delete and read an error. An item any order
          -- references is turned off, never removed.
-         (select count(*) from public.order_items oi where oi.menu_item_id = m.id)
+         (select count(*) from public.order_items oi where oi.menu_item_id = m.id),
+         m.pricing_mode, m.variable_min_pesewas, m.variable_step_pesewas, m.variable_max_pesewas,
+         m.variable_choices_pesewas
     from public.menu_items m
    where m.vendor_id = p_vendor_id
      and (public.is_vendor_staff(p_vendor_id) or public.is_admin())
-   -- NEWEST FIRST, AND NEVER BY WHETHER IT IS ON. See the header.
+   -- NEWEST FIRST, AND NEVER BY WHETHER IT IS ON.
    order by m.created_at desc, m.sort_order, m.name, m.id;
 $$;
 
@@ -10693,9 +10979,12 @@ begin
     -- REFUSED, RATHER THAN HELPFULLY GUESSED. An open store with an empty menu
     -- is somebody walking across campus to a counter that has nothing for them,
     -- and picking an item on the vendor's behalf would be deciding what they
-    -- are cooking. The message names the one thing that fixes it.
+    -- are cooking. The message names the one thing that fixes it. An item a
+    -- customer cannot order does not count, for the same reason.
     if not exists (
-      select 1 from public.menu_items m where m.vendor_id = p_vendor_id and m.is_active
+      select 1 from public.menu_items m
+       where m.vendor_id = p_vendor_id and m.is_active
+         and (m.pricing_mode = 'FIXED' or v_vendor.can_use_variable_pricing)
     ) then
       raise exception 'turn at least one item on before you open'
         using errcode = 'check_violation';
@@ -10739,6 +11028,13 @@ begin
 
   if not public.is_vendor_staff(v_item.vendor_id) and not public.is_admin() then
     raise exception 'not authorised for this menu item' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_active and v_item.pricing_mode <> 'FIXED' and not exists (
+    select 1 from public.vendors where id = v_item.vendor_id and can_use_variable_pricing
+  ) then
+    raise exception 'customer-chosen prices are not enabled for this store'
+      using errcode = 'insufficient_privilege';
   end if;
 
   -- THE VENDOR ROW FIRST, ALWAYS IN THAT ORDER. Every function that can move
@@ -11069,12 +11365,19 @@ $$;
 ALTER FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text" DEFAULT NULL::"text", "p_price_pesewas" bigint DEFAULT NULL::bigint, "p_description" "text" DEFAULT NULL::"text", "p_scan_eligible" boolean DEFAULT NULL::boolean) RETURNS "public"."menu_items"
+CREATE OR REPLACE FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text" DEFAULT NULL::"text", "p_price_pesewas" bigint DEFAULT NULL::bigint, "p_description" "text" DEFAULT NULL::"text", "p_scan_eligible" boolean DEFAULT NULL::boolean, "p_pricing_mode" "text" DEFAULT NULL::"text", "p_variable_min_pesewas" bigint DEFAULT NULL::bigint, "p_variable_step_pesewas" bigint DEFAULT NULL::bigint, "p_variable_max_pesewas" bigint DEFAULT NULL::bigint, "p_clear_variable_max" boolean DEFAULT false, "p_variable_choices_pesewas" bigint[] DEFAULT NULL::bigint[]) RETURNS "public"."menu_items"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 declare
   v_item public.menu_items%rowtype;
+  v_mode text;
+  v_min  bigint;
+  v_step bigint;
+  v_max  bigint;
+  v_choices bigint[];
+  v_scan boolean;
+  v_rule_touched boolean;
 begin
   select * into v_item from public.menu_items where id = p_menu_item_id;
   if not found then
@@ -11085,6 +11388,11 @@ begin
     raise exception 'not authorised for this menu item' using errcode = 'insufficient_privilege';
   end if;
 
+  if p_pricing_mode is not null and p_pricing_mode not in ('FIXED', 'STEPPED', 'CHOICES') then
+    raise exception 'an item is sold at a set price or a price the customer chooses'
+      using errcode = 'check_violation';
+  end if;
+
   if p_price_pesewas is not null and (p_price_pesewas <= 0 or p_price_pesewas > 100000) then
     raise exception 'give the item a sensible price' using errcode = 'check_violation';
   end if;
@@ -11092,17 +11400,64 @@ begin
     raise exception 'give the item a name' using errcode = 'check_violation';
   end if;
 
+  v_mode := coalesce(p_pricing_mode, v_item.pricing_mode);
+  v_min  := coalesce(p_variable_min_pesewas, v_item.variable_min_pesewas);
+  v_step := coalesce(p_variable_step_pesewas, v_item.variable_step_pesewas);
+  v_max  := case when coalesce(p_clear_variable_max, false) then null
+                 else coalesce(p_variable_max_pesewas, v_item.variable_max_pesewas) end;
+  v_choices := coalesce(p_variable_choices_pesewas, v_item.variable_choices_pesewas);
+  v_scan := coalesce(p_scan_eligible, v_item.scan_eligible);
+
+  -- CONFIGURING variable pricing: choosing it, or changing any part of its
+  -- rule or its list. A store without the capability can do neither, however
+  -- the request was built. Choosing FIXED is not configuring it and is always
+  -- allowed.
+  v_rule_touched := coalesce(p_pricing_mode in ('STEPPED', 'CHOICES'), false)
+    or p_variable_min_pesewas is not null
+    or p_variable_step_pesewas is not null
+    or p_variable_max_pesewas is not null
+    or p_variable_choices_pesewas is not null
+    or coalesce(p_clear_variable_max, false);
+
+  if v_rule_touched and not exists (
+    select 1 from public.vendors where id = v_item.vendor_id and can_use_variable_pricing
+  ) then
+    raise exception 'customer-chosen prices are not enabled for this store'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if v_mode = 'STEPPED' then
+    perform public.assert_variable_price_rule(v_min, v_step, v_max);
+  elsif v_mode = 'CHOICES' then
+    v_choices := public.assert_price_choices(v_choices);
+  end if;
+
+  if v_mode <> 'FIXED' then
+    if v_scan then
+      raise exception 'an item with a customer-chosen price cannot take meal scans'
+        using errcode = 'check_violation';
+    end if;
+  end if;
+
   -- A PRICE CHANGE REACHES NO EXISTING ORDER. price_order() snapshots every
   -- figure onto the order at submission and order_items keeps its own copy, so
   -- this moves what the NEXT customer is quoted and nothing else. That is the
   -- whole reason a store can be trusted with its own prices.
+  --
+  -- The variable rule is written only when it was touched, so an edit to a
+  -- dormant item's name leaves its configuration exactly as it was.
   update public.menu_items m
      set name = coalesce(nullif(btrim(p_name), ''), m.name),
          price_pesewas = coalesce(p_price_pesewas, m.price_pesewas),
          description = case
            when p_description is null then m.description
            else nullif(btrim(p_description), '') end,
-         scan_eligible = coalesce(p_scan_eligible, m.scan_eligible),
+         scan_eligible = v_scan,
+         pricing_mode = v_mode,
+         variable_min_pesewas = case when v_rule_touched then v_min else m.variable_min_pesewas end,
+         variable_step_pesewas = case when v_rule_touched then v_step else m.variable_step_pesewas end,
+         variable_max_pesewas = case when v_rule_touched then v_max else m.variable_max_pesewas end,
+         variable_choices_pesewas = case when v_rule_touched then v_choices else m.variable_choices_pesewas end,
          updated_at = now()
    where m.id = p_menu_item_id
   returning * into v_item;
@@ -11112,7 +11467,7 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) OWNER TO "postgres";
+ALTER FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_clear_variable_max" boolean, "p_variable_choices_pesewas" bigint[]) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
@@ -12137,7 +12492,7 @@ CREATE POLICY "menu_items_read_own" ON "public"."menu_items" FOR SELECT TO "auth
 
 CREATE POLICY "menu_items_read_public" ON "public"."menu_items" FOR SELECT TO "authenticated", "anon" USING (("is_active" AND (EXISTS ( SELECT 1
    FROM "public"."vendors" "v"
-  WHERE (("v"."id" = "menu_items"."vendor_id") AND ("v"."status" = 'ACTIVE'::"public"."vendor_status"))))));
+  WHERE (("v"."id" = "menu_items"."vendor_id") AND ("v"."status" = 'ACTIVE'::"public"."vendor_status") AND (("menu_items"."pricing_mode" = 'FIXED'::"text") OR "v"."can_use_variable_pricing"))))));
 
 
 ALTER TABLE "public"."notification_events" ENABLE ROW LEVEL SECURITY;
@@ -12675,6 +13030,11 @@ GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_status"("p_vendor_id" "uuid", "p_status" "public"."vendor_status", "p_reason" "text") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_set_vendor_variable_pricing"("p_vendor_id" "uuid", "p_enabled" boolean, "p_reason" "text") TO "authenticated";
+
+
 GRANT ALL ON TABLE "public"."customer_rewards" TO "service_role";
 GRANT SELECT ON TABLE "public"."customer_rewards" TO "authenticated";
 
@@ -12758,8 +13118,16 @@ GRANT ALL ON FUNCTION "public"."admin_webhook_events"("p_limit" integer) TO "ser
 GRANT ALL ON FUNCTION "public"."admin_webhook_events"("p_limit" integer) TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."assert_price_choices"("p_choices" bigint[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."assert_price_choices"("p_choices" bigint[]) TO "service_role";
+
+
 REVOKE ALL ON FUNCTION "public"."assert_service_or_admin"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."assert_service_or_admin"() TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."assert_variable_price_rule"("p_min" bigint, "p_step" bigint, "p_max" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."assert_variable_price_rule"("p_min" bigint, "p_step" bigint, "p_max" bigint) TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."payments" TO "service_role";
@@ -13043,6 +13411,14 @@ GRANT ALL ON FUNCTION "public"."mark_payout_processing"("p_payout_id" "uuid", "p
 
 REVOKE ALL ON FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "p_status" "public"."webhook_event_status", "p_error" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "p_status" "public"."webhook_event_status", "p_error" "text") TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."max_item_price_pesewas"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."max_item_price_pesewas"() TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."my_capabilities"() FROM PUBLIC;
@@ -13359,9 +13735,9 @@ REVOKE ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uui
 GRANT ALL ON FUNCTION "public"."vendor_complete_pickup_order"("p_order_id" "uuid", "p_pickup_code" "text") TO "service_role";
 
 
-REVOKE ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) TO "service_role";
-GRANT ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_variable_choices_pesewas" bigint[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_variable_choices_pesewas" bigint[]) TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_create_menu_item"("p_vendor_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_variable_choices_pesewas" bigint[]) TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_daily_sales"("p_vendor_id" "uuid", "p_days" integer) FROM PUBLIC;
@@ -13511,9 +13887,9 @@ GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_sto
 GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") TO "authenticated";
 
 
-REVOKE ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) TO "service_role";
-GRANT ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean) TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_clear_variable_max" boolean, "p_variable_choices_pesewas" bigint[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_clear_variable_max" boolean, "p_variable_choices_pesewas" bigint[]) TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_clear_variable_max" boolean, "p_variable_choices_pesewas" bigint[]) TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_update_profile"("p_vendor_id" "uuid", "p_name" "text", "p_description" "text", "p_category_id" "uuid", "p_location_id" "uuid", "p_location_note" "text", "p_walk_minutes" integer) FROM PUBLIC;

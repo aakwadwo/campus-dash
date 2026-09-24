@@ -8,7 +8,8 @@ import {
   updateMenuItemAction,
   deleteMenuItemAction,
 } from '../actions';
-import { formatPesewas } from '@/lib/util/money';
+import { cedisInputFromPesewas } from '@/lib/util/money';
+import { PRICING_MODE, isVariablePrice, priceChoices, priceSummary } from '@/lib/util/item-price';
 import {
   Button,
   Card,
@@ -19,6 +20,7 @@ import {
   SuccessNote,
   EmptyState,
   BagIcon,
+  SegmentedOption,
 } from '@/app/ui';
 
 /**
@@ -43,7 +45,7 @@ import {
  * EVERY ROW IS ITS OWN FORM with its own pending state, so turning the jollof
  * off does not grey out the waakye.
  */
-export default function MenuManager({ vendorId, items, storeOpen }) {
+export default function MenuManager({ vendorId, items, storeOpen, variablePricing = false }) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState('');
   const [openRow, setOpenRow] = useState(null);
@@ -76,7 +78,13 @@ export default function MenuManager({ vendorId, items, storeOpen }) {
         </Button>
       </div>
 
-      {adding ? <AddItem vendorId={vendorId} onDone={() => setAdding(false)} /> : null}
+      {adding ? (
+        <AddItem
+          vendorId={vendorId}
+          variablePricing={variablePricing}
+          onDone={() => setAdding(false)}
+        />
+      ) : null}
 
       {searchable ? (
         <Input
@@ -116,6 +124,7 @@ export default function MenuManager({ vendorId, items, storeOpen }) {
                 item={item}
                 vendorId={vendorId}
                 storeOpen={storeOpen}
+                variablePricing={variablePricing}
                 expanded={openRow === item.id}
                 onToggleDetails={() => setOpenRow((id) => (id === item.id ? null : item.id))}
               />
@@ -131,7 +140,7 @@ export default function MenuManager({ vendorId, items, storeOpen }) {
  * One item
  * ------------------------------------------------------------------------ */
 
-function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
+function MenuRow({ item, vendorId, storeOpen, variablePricing, expanded, onToggleDetails }) {
   // THE SWITCH MOVES ON THE TAP, NOT ON THE ANSWER. The answer is a round trip
   // to the server and a fresh render of this page, and on a phone that is long
   // enough to read as a switch that did not work. So the row shows where it is
@@ -166,13 +175,18 @@ function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
               {item.name}
             </span>
             <span className={`shrink-0 font-semibold tabular-nums ${on ? '' : 'text-muted'}`}>
-              {formatPesewas(item.price_pesewas)}
+              {priceSummary(item)}
             </span>
           </span>
 
           <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
             {soldOut ? <span className="text-warn font-semibold">Sold out</span> : null}
             {!on ? <span className="text-muted">Off the menu</span> : null}
+            {/* KEPT, NOT SOLD. Its prices are all still here for when Campus
+                Dash turns customer-chosen prices back on. */}
+            {isVariablePrice(item) && !variablePricing ? (
+              <span className="text-warn font-semibold">Hidden from customers</span>
+            ) : null}
             {item.scan_eligible ? (
               <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 font-semibold">
                 Takes meal scans
@@ -206,6 +220,7 @@ function MenuRow({ item, vendorId, storeOpen, expanded, onToggleDetails }) {
           item={item}
           vendorId={vendorId}
           storeOpen={storeOpen}
+          variablePricing={variablePricing}
           onDone={onToggleDetails}
         />
       ) : null}
@@ -245,7 +260,7 @@ function Switch({ on, pending, label }) {
  * Details: sold out, edit, delete — revealed on tap
  * ------------------------------------------------------------------------ */
 
-function ItemDetails({ item, vendorId, storeOpen, onDone }) {
+function ItemDetails({ item, vendorId, storeOpen, variablePricing, onDone }) {
   const [editing, setEditing] = useState(false);
 
   return (
@@ -255,7 +270,12 @@ function ItemDetails({ item, vendorId, storeOpen, onDone }) {
       ) : null}
 
       {editing ? (
-        <EditItem item={item} vendorId={vendorId} onDone={() => setEditing(false)} />
+        <EditItem
+          item={item}
+          vendorId={vendorId}
+          variablePricing={variablePricing}
+          onDone={() => setEditing(false)}
+        />
       ) : (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {/* SOLD OUT ONLY MEANS ANYTHING FOR AN ITEM THAT IS ON. For one that
@@ -365,7 +385,7 @@ function DeleteControl({ item, vendorId, onDone }) {
  * Adding and editing
  * ------------------------------------------------------------------------ */
 
-function AddItem({ vendorId, onDone }) {
+function AddItem({ vendorId, variablePricing, onDone }) {
   const [state, submit, pending] = useActionState(createMenuItemAction, {});
 
   // The form is REPLACED on success rather than left filled in, which reads as
@@ -382,7 +402,7 @@ function AddItem({ vendorId, onDone }) {
       </p>
       <form action={submit} className="space-y-4">
         <input type="hidden" name="vendor_id" value={vendorId} />
-        <ItemFields />
+        <ItemFields variablePricing={variablePricing} />
         <div className="flex gap-2">
           <Button type="submit" pending={pending}>
             {pending ? 'Adding…' : 'Add item'}
@@ -397,14 +417,14 @@ function AddItem({ vendorId, onDone }) {
   );
 }
 
-function EditItem({ item, vendorId, onDone }) {
+function EditItem({ item, vendorId, variablePricing, onDone }) {
   const [state, submit, pending] = useActionState(updateMenuItemAction, {});
 
   return (
     <form action={submit} className="space-y-4">
       <input type="hidden" name="vendor_id" value={vendorId} />
       <input type="hidden" name="menu_item_id" value={item.id} />
-      <ItemFields item={item} />
+      <ItemFields item={item} variablePricing={variablePricing} />
       <div className="flex gap-2">
         <Button type="submit" size="sm" pending={pending}>
           {pending ? 'Saving…' : 'Save changes'}
@@ -424,24 +444,109 @@ function EditItem({ item, vendorId, onDone }) {
   );
 }
 
-/** The fields an item has, shared by add and edit so the two cannot drift. */
-function ItemFields({ item = null }) {
+/**
+ * The fields an item has, shared by add and edit so the two cannot drift.
+ *
+ * HOW IT IS PRICED is asked only of a store Campus Dash has given
+ * customer-chosen prices. Without it the form is exactly what it always was —
+ * and a variable item kept from before shows no price field at all, because
+ * the one it would show is not what anybody pays.
+ */
+function ItemFields({ item = null, variablePricing = false }) {
+  const [mode, setMode] = useState(item?.pricing_mode ?? PRICING_MODE.FIXED);
+  const dormant = isVariablePrice(item) && !variablePricing;
+  const fixed = mode === PRICING_MODE.FIXED;
+
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
+      <div className={`grid gap-4 ${fixed && !dormant ? 'sm:grid-cols-[1fr_9rem]' : ''}`}>
         <Field label="Name">
           <Input name="name" required maxLength={120} defaultValue={item?.name ?? ''} />
         </Field>
-        <Field label="Price" hint="In cedis">
+        {fixed && !dormant ? (
+          <Field label="Price" hint="In cedis">
+            <Input
+              name="price"
+              required
+              inputMode="decimal"
+              placeholder="35.00"
+              defaultValue={item ? (item.price_pesewas / 100).toFixed(2) : ''}
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      {variablePricing ? (
+        <fieldset>
+          <legend className="mb-1.5 text-sm font-medium">Pricing</legend>
+          <div className="flex gap-2">
+            {[
+              [PRICING_MODE.FIXED, 'One price'],
+              [PRICING_MODE.STEPPED, 'Steps'],
+              [PRICING_MODE.CHOICES, 'List'],
+            ].map(([value, label]) => (
+              <SegmentedOption
+                key={value}
+                name="pricing_mode"
+                value={value}
+                checked={mode === value}
+                onChange={() => setMode(value)}
+              >
+                {label}
+              </SegmentedOption>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+
+      {variablePricing && mode === PRICING_MODE.STEPPED ? (
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="From">
+            <Input
+              name="variable_min"
+              required
+              inputMode="decimal"
+              placeholder="10"
+              defaultValue={cedisOrEmpty(item?.variable_min_pesewas)}
+            />
+          </Field>
+          <Field label="Step">
+            <Input
+              name="variable_step"
+              required
+              inputMode="decimal"
+              placeholder="5"
+              defaultValue={cedisOrEmpty(item?.variable_step_pesewas)}
+            />
+          </Field>
+          <Field label="Up to" hint="Empty for no limit">
+            <Input
+              name="variable_max"
+              inputMode="decimal"
+              placeholder="None"
+              defaultValue={cedisOrEmpty(item?.variable_max_pesewas)}
+            />
+          </Field>
+        </div>
+      ) : null}
+
+      {variablePricing && mode === PRICING_MODE.CHOICES ? (
+        <Field label="Prices" hint="In cedis, separated by commas">
           <Input
-            name="price"
+            name="variable_choices"
             required
             inputMode="decimal"
-            placeholder="35.00"
-            defaultValue={item ? (item.price_pesewas / 100).toFixed(2) : ''}
+            placeholder="10, 15, 30, 50"
+            defaultValue={
+              item?.variable_choices_pesewas
+                ? priceChoices(item)
+                    .map((p) => cedisInputFromPesewas(p).replace(/\.00$/, ''))
+                    .join(', ')
+                : ''
+            }
           />
         </Field>
-      </div>
+      ) : null}
 
       <Field label="Description" hint="Optional. What is in it.">
         <Textarea
@@ -452,20 +557,27 @@ function ItemFields({ item = null }) {
         />
       </Field>
 
-      <label className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          name="scan_eligible"
-          defaultChecked={item?.scan_eligible ?? false}
-          className="accent-brand-500 mt-0.5 size-4 shrink-0"
-        />
-        <span className="text-muted text-sm leading-relaxed">
-          A student may pay for this with a campus meal scan.
-          <span className="text-faint block text-xs">
-            Only has an effect if Campus Dash has turned meal scans on for your store.
+      {/* A MEAL SCAN PAYS A SET PRICE, so only an item with one can take it. */}
+      {fixed && !dormant ? (
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            name="scan_eligible"
+            defaultChecked={item?.scan_eligible ?? false}
+            className="accent-brand-500 mt-0.5 size-4 shrink-0"
+          />
+          <span className="text-muted text-sm leading-relaxed">
+            A student may pay for this with a campus meal scan.
+            <span className="text-faint block text-xs">
+              Only has an effect if Campus Dash has turned meal scans on for your store.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      ) : null}
     </>
   );
+}
+
+function cedisOrEmpty(pesewas) {
+  return pesewas == null ? '' : cedisInputFromPesewas(Number(pesewas)).replace(/\.00$/, '');
 }

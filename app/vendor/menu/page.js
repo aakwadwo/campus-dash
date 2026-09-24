@@ -49,7 +49,12 @@ export default async function VendorMenuPage() {
         }
       />
 
-      <MenuManager vendorId={vendor.vendor_id} items={items} storeOpen={open} />
+      <MenuManager
+        vendorId={vendor.vendor_id}
+        items={items}
+        storeOpen={open}
+        variablePricing={Boolean(vendor.can_use_variable_pricing)}
+      />
     </main>
   );
 }
