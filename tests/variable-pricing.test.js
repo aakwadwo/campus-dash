@@ -40,10 +40,8 @@ describe('variable pricing', () => {
 
   before(cleanUp);
   beforeEach(cleanUp);
-  after(async () => {
-    await cleanUp();
-    await closePools();
-  });
+  // The pools are closed once, by the last block in this file.
+  after(cleanUp);
 
   // --- helpers ---------------------------------------------------------------
 
@@ -792,5 +790,542 @@ describe('variable pricing on the screen', () => {
     assert.equal(priceSummary(unlimited), 'From GH₵10.00');
     assert.equal(priceSummary(limited), 'GH₵10.00–GH₵25.00');
     assert.equal(priceSummary(list), 'GH₵10.00–GH₵50.00');
+  });
+});
+
+/**
+ * THE RULES A STORE TYPES, AND THE PARSING IN FRONT OF THEM.
+ *
+ * The start and the step are each any positive price; only a maximum has to lie
+ * on the sequence they make. These run against the same functions the vendor
+ * form and the vendor action call, and then against the database, so the three
+ * layers are shown to agree rather than assumed to.
+ */
+describe('variable pricing: what a store may configure', () => {
+  const VALID = [
+    [100, 100],
+    [100, 500],
+    [100, 1000],
+    [300, 200],
+    [500, 1000],
+    [1000, 500],
+    [1000, 700],
+    [50, 25],
+  ];
+
+  test('any positive start and step make a rule; the start need not be a multiple of the step', async () => {
+    const { checkSteppedRule, steppedPreview } = await import('@/lib/util/item-price');
+    for (const [minPesewas, stepPesewas] of VALID) {
+      assert.deepEqual(
+        checkSteppedRule({ minPesewas, stepPesewas }),
+        { ok: true },
+        `${minPesewas}/${stepPesewas}`
+      );
+    }
+    assert.equal(
+      steppedPreview({ minPesewas: 100, stepPesewas: 500 }),
+      'GH₵1, GH₵6, GH₵11, GH₵16…'
+    );
+  });
+
+  test('a maximum must lie on the steps, above the start and under the ceiling — and says what would', async () => {
+    const { checkSteppedRule } = await import('@/lib/util/item-price');
+    const on = [
+      [100, 500, 2100],
+      [300, 200, 1100],
+      [1000, 700, 4500],
+      [100, 100, 100000],
+      [100, 500, 100],
+    ];
+    for (const [minPesewas, stepPesewas, maxPesewas] of on) {
+      assert.equal(
+        checkSteppedRule({ minPesewas, stepPesewas, maxPesewas }).ok,
+        true,
+        `${maxPesewas}`
+      );
+    }
+    const off = checkSteppedRule({ minPesewas: 100, stepPesewas: 500, maxPesewas: 2000 });
+    assert.equal(off.field, 'max');
+    assert.match(off.message, /GH₵20 is not one of your prices\. Use GH₵16 or GH₵21/);
+    assert.equal(
+      checkSteppedRule({ minPesewas: 300, stepPesewas: 200, maxPesewas: 1000 }).field,
+      'max'
+    );
+    assert.match(
+      checkSteppedRule({ minPesewas: 1000, stepPesewas: 500, maxPesewas: 500 }).message,
+      /below the starting price/
+    );
+    assert.match(
+      checkSteppedRule({ minPesewas: 100, stepPesewas: 100, maxPesewas: 100100 }).message,
+      /GH₵1000/
+    );
+    for (const [minPesewas, stepPesewas] of [
+      [0, 500],
+      [-100, 500],
+      [100, 0],
+      [100, -500],
+      [100100, 500],
+      [100, 100100],
+    ]) {
+      assert.equal(
+        checkSteppedRule({ minPesewas, stepPesewas }).ok,
+        false,
+        `${minPesewas}/${stepPesewas}`
+      );
+    }
+  });
+
+  test('a cedi amount is parsed strictly: nothing is cleaned into a different price', async () => {
+    const { parseCedis } = await import('@/lib/util/item-price');
+    const good = {
+      1: 100,
+      5: 500,
+      0.5: 50,
+      '12.50': 1250,
+      1.5: 150,
+      'GH₵5': 500,
+      ' 7 ': 700,
+      1000: 100000,
+    };
+    for (const [input, pesewas] of Object.entries(good))
+      assert.equal(parseCedis(input), pesewas, input);
+    for (const bad of ['-5', '1,5', '5a', 'a5', '10 15', '1.005', '5.', '.5', '', 'five', '1e3']) {
+      assert.equal(parseCedis(bad), null, JSON.stringify(bad));
+    }
+  });
+
+  test('a list takes commas, spaces or both, and refuses anything that is not a clean list', async () => {
+    const { parsePriceList } = await import('@/lib/util/item-price');
+    const want = [1000, 1500, 3000, 5000];
+    for (const text of ['10,15,30,50', '10, 15, 30, 50', ' 50 30,15 , 10 ', '10\n15\n30\n50']) {
+      assert.deepEqual(parsePriceList(text), { ok: true, prices: want }, JSON.stringify(text));
+    }
+    assert.deepEqual(parsePriceList('25'), { ok: true, prices: [2500] });
+    assert.deepEqual(parsePriceList('12.50, 7.5'), { ok: true, prices: [750, 1250] });
+    const refusals = {
+      '10,10': /listed twice/,
+      '10, 10.00': /listed twice/,
+      '10, abc': /not a price/,
+      '10, -5': /not a price/,
+      '10, 0': /more than zero/,
+      '10, 1.005': /not a price/,
+      '10, 1001': /GH₵1000/,
+      '': /List the prices/,
+      ',,': /List the prices/,
+    };
+    for (const [text, why] of Object.entries(refusals)) {
+      const result = parsePriceList(text);
+      assert.equal(result.ok, false, JSON.stringify(text));
+      assert.match(result.message, why, JSON.stringify(text));
+    }
+    assert.match(
+      parsePriceList(Array.from({ length: 21 }, (_, i) => i + 1).join(',')).message,
+      /at most 20/
+    );
+  });
+
+  test('the form the vendor submits reaches the database as intended — an empty maximum is no maximum', async () => {
+    const { readPricingForm } = await import('@/lib/util/item-price');
+    const form = (fields) => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries(fields)) f.set(k, v);
+      return f;
+    };
+    const stepped = (min, step, max = '') =>
+      readPricingForm(
+        form({ pricing_mode: 'STEPPED', variable_min: min, variable_step: step, variable_max: max })
+      );
+
+    assert.deepEqual(stepped('1', '5').value, {
+      mode: 'STEPPED',
+      minPesewas: 100,
+      stepPesewas: 500,
+      maxPesewas: null,
+      clearMax: true,
+    });
+    assert.equal(stepped('1', '5', '21').value.maxPesewas, 2100);
+    assert.match(stepped('1', '5', '20').message, /Use GH₵16 or GH₵21/);
+    assert.match(stepped('-1', '5').message, /starting price must be a number/);
+    assert.match(stepped('1', '5a').message, /step must be a number/);
+    assert.match(stepped('1', '5', '0').message, /below the starting price/);
+
+    assert.deepEqual(
+      readPricingForm(form({ pricing_mode: 'CHOICES', variable_choices: '10,15,30,50' })).value,
+      { mode: 'CHOICES', choicesPesewas: [1000, 1500, 3000, 5000] }
+    );
+    assert.match(
+      readPricingForm(form({ pricing_mode: 'CHOICES', variable_choices: '10,10' })).message,
+      /listed twice/
+    );
+    assert.deepEqual(readPricingForm(form({ pricing_mode: 'FIXED' })), { mode: 'FIXED' });
+    assert.deepEqual(readPricingForm(form({})), {});
+  });
+
+  test('a fixed price is parsed strictly too: malformed input is refused, never turned into another price', async () => {
+    const { parsePositiveCedis } = await import('@/lib/util/item-price');
+
+    // Everything a vendor could type before and have saved correctly still
+    // saves as exactly the same number of pesewas.
+    const same = {
+      35: 3500,
+      '35.50': 3550,
+      35.5: 3550,
+      0.01: 1,
+      'GH₵35': 3500,
+      'GHS 35': 3500,
+      ' 35 ': 3500,
+      1000: 100000,
+    };
+    for (const [input, pesewas] of Object.entries(same)) {
+      assert.equal(parsePositiveCedis(input), pesewas, JSON.stringify(input));
+    }
+
+    // What the old parser silently rewrote — '-5' to GH₵5, '5a' to GH₵5,
+    // '1,5' to GH₵15, '10 15' to GH₵1,015 — and what it refused, now all refused.
+    for (const bad of [
+      '-5',
+      '5a',
+      'abc',
+      'a5',
+      '1,5',
+      '10 15',
+      '35.505',
+      '1.005',
+      '0',
+      '0.00',
+      '',
+      '1e3',
+      '.5',
+      '5.',
+    ]) {
+      assert.equal(parsePositiveCedis(bad), null, JSON.stringify(bad));
+    }
+
+    // Both fixed-price paths — adding an item and editing one — use it, and the
+    // lenient parser is gone from the action.
+    const { readFileSync } = await import('node:fs');
+    const actions = readFileSync('app/vendor/actions.js', 'utf8');
+    assert.equal(actions.match(/parsePositiveCedis\(formData\.get\('price'\)\)/g)?.length, 2);
+    assert.equal(actions.includes('function parsePrice('), false);
+    assert.equal(actions.includes("replace(/[^\\d.]/g, '')"), false);
+  });
+
+  test('the database accepts the same rules and refuses the same mistakes', async () => {
+    await resetTransactionalState();
+    await asService((c) =>
+      c.query('update public.vendors set can_use_variable_pricing = true where id = $1', [
+        VENDORS.one,
+      ])
+    );
+    const create = (min, step, max = null) =>
+      asUser(
+        ACTORS.vendor1Staff,
+        async (c) =>
+          (
+            await c.query(
+              `select * from public.vendor_create_menu_item(p_vendor_id => $1, p_name => 'VP rule', p_price_pesewas => null,
+               p_pricing_mode => 'STEPPED', p_variable_min_pesewas => $2, p_variable_step_pesewas => $3, p_variable_max_pesewas => $4)`,
+              [VENDORS.one, min, step, max]
+            )
+          ).rows[0]
+      );
+    try {
+      for (const [min, step] of VALID) assert.ok(await create(min, step), `${min}/${step}`);
+      for (const [min, step, max] of [
+        [100, 500, 2100],
+        [300, 200, 1100],
+        [100, 100, 100000],
+      ]) {
+        assert.equal((await create(min, step, max)).variable_max_pesewas, max);
+      }
+      for (const [min, step, max] of [
+        [0, 500, null],
+        [-100, 500, null],
+        [100, 0, null],
+        [100, -500, null],
+        [100, 500, 2000],
+        [300, 200, 1000],
+        [1000, 500, 500],
+        [100, 100, 100100],
+      ]) {
+        await expectRejection(create(min, step, max));
+      }
+    } finally {
+      await resetTransactionalState();
+    }
+  });
+});
+
+/**
+ * ONE ITEM, SEVERAL PRICES, ONE ORDER.
+ *
+ * Kelewele at GH₵10 once and at GH₵20 twice are two things bought. They are two
+ * basket lines, two order lines, and two snapshots; the same price twice is one
+ * line with a quantity; and none of it lets the browser decide a price.
+ */
+describe('variable pricing: several prices of one item in one order', () => {
+  before(resetTransactionalState);
+  beforeEach(resetTransactionalState);
+  after(async () => {
+    await resetTransactionalState();
+    await closePools();
+  });
+
+  async function kelewele(mode = 'CHOICES') {
+    await asService((c) =>
+      c.query('update public.vendors set can_use_variable_pricing = true where id = $1', [
+        VENDORS.one,
+      ])
+    );
+    const row = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (
+          await c.query(
+            mode === 'CHOICES'
+              ? `select * from public.vendor_create_menu_item(p_vendor_id => $1, p_name => 'VP Kelewele', p_price_pesewas => null,
+                   p_pricing_mode => 'CHOICES', p_variable_choices_pesewas => '{1000,2000,3000}')`
+              : `select * from public.vendor_create_menu_item(p_vendor_id => $1, p_name => 'VP Kelewele', p_price_pesewas => null,
+                   p_pricing_mode => 'STEPPED', p_variable_min_pesewas => 100, p_variable_step_pesewas => 500)`,
+            [VENDORS.one]
+          )
+        ).rows[0],
+      { commit: true }
+    );
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) => c.query('select public.vendor_set_menu_item_active($1, true)', [row.id]),
+      {
+        commit: true,
+      }
+    );
+    return row.id;
+  }
+
+  const at = (id, price, quantity) => ({ menu_item_id: id, quantity, unit_price_pesewas: price });
+  const quote = (items) =>
+    asUser(
+      ACTORS.customerAma,
+      async (c) =>
+        (
+          await c.query("select * from public.quote_order($1, $2::jsonb, 'PICKUP')", [
+            VENDORS.one,
+            JSON.stringify(items),
+          ])
+        ).rows[0]
+    );
+  const place = (items) =>
+    submitOrder({ vendorId: VENDORS.one, items, fulfilment: 'PICKUP', destination: null });
+  const lines = (orderId) =>
+    asService(
+      async (c) =>
+        (
+          await c.query(
+            'select menu_item_id, name_snapshot, unit_price_pesewas, quantity, line_total_pesewas from public.order_items where order_id = $1 order by created_at, unit_price_pesewas',
+            [orderId]
+          )
+        ).rows
+    );
+  const orderRow = (orderId) =>
+    asService(
+      async (c) => (await c.query('select * from public.orders where id = $1', [orderId])).rows[0]
+    );
+  const fee = async (subtotal) => {
+    const bps = await asService(
+      async (c) =>
+        (await c.query('select service_fee_bps from public.pricing_config where id')).rows[0]
+          .service_fee_bps
+    );
+    return Math.floor((subtotal * bps + 5000) / 10000);
+  };
+
+  test('GH₵10 × 1 and GH₵20 × 2 of the same item are two lines, priced 5000 by the server', async () => {
+    const id = await kelewele();
+    const basket = [at(id, 1000, 1), at(id, 2000, 2)];
+
+    const quoted = await quote(basket);
+    assert.equal(quoted.subtotal_pesewas, 5000);
+    assert.deepEqual(
+      quoted.lines.map((l) => [l.unit_price_pesewas, l.quantity, l.line_total_pesewas]),
+      [
+        [1000, 1, 1000],
+        [2000, 2, 4000],
+      ],
+      'in the order they were sent, never merged'
+    );
+
+    const placed = await place(basket);
+    const rows = await lines(placed.order_id);
+    assert.deepEqual(
+      rows.map((r) => [r.menu_item_id, r.unit_price_pesewas, r.quantity, r.line_total_pesewas]),
+      [
+        [id, 1000, 1, 1000],
+        [id, 2000, 2, 4000],
+      ]
+    );
+
+    const order = await orderRow(placed.order_id);
+    assert.equal(order.subtotal_pesewas, 5000);
+    assert.equal(order.service_fee_pesewas, await fee(5000));
+    assert.equal(order.total_pesewas, 5000 + (await fee(5000)));
+    assert.equal(quoted.total_pesewas, order.total_pesewas);
+
+    const payment = await payOrder(placed.order_id);
+    assert.equal(payment.amount_pesewas, order.total_pesewas, 'the charge is the server total');
+
+    // THE STORE SEES BOTH PORTIONS, each with its own price, and the food only.
+    const detail = await asUser(
+      ACTORS.vendor1Staff,
+      async (c) =>
+        (await c.query('select * from public.vendor_order_detail($1)', [placed.order_id])).rows[0]
+    );
+    assert.deepEqual(
+      detail.items.map((i) => [i.name, i.quantity, i.unit_price_pesewas, i.line_total_pesewas]),
+      [
+        ['VP Kelewele', 1, 1000, 1000],
+        ['VP Kelewele', 2, 2000, 4000],
+      ]
+    );
+    for (const hidden of [
+      'service_fee_pesewas',
+      'total_pesewas',
+      'delivery_fee_pesewas',
+      'partner_earnings_pesewas',
+    ]) {
+      assert.equal(hidden in detail, false, `${hidden} is not the store's`);
+    }
+
+    // And the snapshot is the order's own: a later change to the list moves nothing.
+    await asUser(
+      ACTORS.vendor1Staff,
+      (c) =>
+        c.query(
+          "select public.vendor_update_menu_item(p_menu_item_id => $1, p_variable_choices_pesewas => '{5000}')",
+          [id]
+        ),
+      { commit: true }
+    );
+    assert.deepEqual(
+      (await lines(placed.order_id)).map((r) => r.unit_price_pesewas),
+      [1000, 2000]
+    );
+  });
+
+  test('three prices of one item, beside a fixed item, all in one order', async () => {
+    const id = await kelewele();
+    const placed = await place([
+      at(id, 1000, 1),
+      at(id, 2000, 2),
+      at(id, 3000, 3),
+      { menu_item_id: MENU.jollof, quantity: 2 },
+    ]);
+    const rows = await lines(placed.order_id);
+    assert.equal(rows.length, 4);
+    assert.equal((await orderRow(placed.order_id)).subtotal_pesewas, 1000 + 4000 + 9000 + 7000);
+    const jollof = rows.find((r) => r.menu_item_id === MENU.jollof);
+    assert.deepEqual(
+      [jollof.unit_price_pesewas, jollof.quantity],
+      [3500, 2],
+      'the fixed item is untouched'
+    );
+  });
+
+  test('the same price twice is one line with a quantity — sent twice, it is refused, never merged or doubled', async () => {
+    const id = await kelewele();
+    const error = await expectRejection(place([at(id, 1000, 1), at(id, 1000, 2)]));
+    assert.match(error.message, /appears more than once/);
+
+    // What the basket sends instead: one line, quantity 3.
+    const { basketItems, lineKey } = await import('@/lib/orders/basket');
+    const key = lineKey(id, 1000);
+    const basket = { [key]: 1 };
+    basket[key] += 2; // adding the same price again
+    basket[lineKey(id, 2000)] = 2;
+    const sent = basketItems(basket);
+    assert.deepEqual(
+      sent.map(({ menuItemId, quantity, unitPricePesewas }) => [
+        menuItemId,
+        quantity,
+        unitPricePesewas,
+      ]),
+      [
+        [id, 3, 1000],
+        [id, 2, 2000],
+      ]
+    );
+  });
+
+  test('a fixed item still appears once per order, exactly as before', async () => {
+    const error = await expectRejection(
+      place([
+        { menu_item_id: MENU.jollof, quantity: 1 },
+        { menu_item_id: MENU.jollof, quantity: 1 },
+      ])
+    );
+    assert.match(error.message, /appears more than once/);
+    // And a price sent for it — on one line or two — still buys nothing.
+    await expectRejection(
+      place([
+        { menu_item_id: MENU.jollof, quantity: 1, unit_price_pesewas: 100 },
+        { menu_item_id: MENU.jollof, quantity: 1, unit_price_pesewas: 200 },
+      ])
+    );
+  });
+
+  test('every line is checked on its own: one tampered price refuses the whole order', async () => {
+    const id = await kelewele();
+    for (const bad of [1500, 2500, 100100, 0, -1000, 1000.5, '1000']) {
+      await expectRejection(place([at(id, 1000, 1), at(id, bad, 1)]));
+    }
+    await expectRejection(place([at(id, 1000, 0)])); // no quantity
+    await expectRejection(place([at(id, 1000, 51)])); // over the per-line limit
+  });
+
+  test('stepped items take several amounts too, each on the rule, none rounded', async () => {
+    const id = await kelewele('STEPPED'); // GH₵1, 6, 11, 16, 21…
+    const placed = await place([at(id, 100, 1), at(id, 600, 2), at(id, 2100, 1)]);
+    assert.deepEqual(
+      (await lines(placed.order_id)).map((r) => [r.unit_price_pesewas, r.quantity]),
+      [
+        [100, 1],
+        [600, 2],
+        [2100, 1],
+      ]
+    );
+    assert.equal((await orderRow(placed.order_id)).subtotal_pesewas, 100 + 1200 + 2100);
+    for (const bad of [500, 1000, 700, 50]) {
+      const error = await expectRejection(place([at(id, 600, 1), at(id, bad, 1)]));
+      assert.match(error.message, /not one of its prices/, String(bad));
+    }
+  });
+
+  test('a store without the capability sells none of the variations', async () => {
+    const id = await kelewele();
+    await asService((c) =>
+      c.query('update public.vendors set can_use_variable_pricing = false where id = $1', [
+        VENDORS.one,
+      ])
+    );
+    await expectRejection(place([at(id, 1000, 1), at(id, 2000, 1)]));
+  });
+
+  test('screens that show an order name the price when a dish is on more than one line', async () => {
+    const { namesOnSeveralLines } = await import('@/lib/orders/basket');
+    const repeated = namesOnSeveralLines([
+      { name: 'Kelewele', unit_price_pesewas: 1000 },
+      { name: 'Kelewele', unit_price_pesewas: 2000 },
+      { name: 'Jollof', unit_price_pesewas: 3500 },
+    ]);
+    assert.deepEqual([...repeated], ['Kelewele'], 'a fixed-price line keeps its usual look');
+
+    const { readFileSync } = await import('node:fs');
+    for (const page of [
+      'app/orders/[orderId]/page.js',
+      'app/vendor/[vendorId]/orders/[orderId]/page.js',
+    ]) {
+      const source = readFileSync(page, 'utf8');
+      assert.match(source, /namesOnSeveralLines\(order\.items\)/, page);
+      assert.match(source, /repeated\.has\(item\.name\)/, page);
+    }
   });
 });

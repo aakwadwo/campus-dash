@@ -25,6 +25,7 @@ import { notifyOrderEvent } from '@/lib/orders/notify';
 import { NOTIFICATION_EVENT } from '@/lib/notifications';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
+import { readPricingForm, parsePositiveCedis } from '@/lib/util/item-price';
 
 /**
  * Vendor actions.
@@ -235,12 +236,12 @@ function revalidateMenu(vendorId) {
 export async function createMenuItemAction(_prev, formData) {
   const vendorId = str(formData, 'vendor_id');
   const name = str(formData, 'name');
-  const pricing = readPricing(formData);
+  const pricing = readPricingForm(formData);
 
   if (!name) return { ok: false, message: 'Give the item a name.' };
   if (pricing.message) return { ok: false, message: pricing.message };
 
-  const price = pricing.value ? null : parsePrice(formData.get('price'));
+  const price = pricing.value ? null : parsePositiveCedis(formData.get('price'));
   if (!pricing.value && price === null) {
     return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
   }
@@ -272,11 +273,11 @@ export async function createMenuItemAction(_prev, formData) {
  */
 export async function updateMenuItemAction(_prev, formData) {
   const vendorId = str(formData, 'vendor_id');
-  const pricing = readPricing(formData);
+  const pricing = readPricingForm(formData);
   if (pricing.message) return { ok: false, message: pricing.message };
 
   // A variable item keeps its fixed price untouched; the form does not show it.
-  const price = pricing.value ? null : parsePrice(formData.get('price'));
+  const price = pricing.value ? null : parsePositiveCedis(formData.get('price'));
 
   if (!pricing.value && formData.get('price') && price === null) {
     return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
@@ -329,65 +330,6 @@ export async function deleteMenuItemAction(_prev, formData) {
 
   revalidateMenu(vendorId);
   return { ok: true, message: `${name} removed from your items.` };
-}
-
-/**
- * "35" and "35.50" both mean pesewas in the end, and neither may become a float.
- *
- * Parsed as two integer parts and combined, rather than multiplied by 100:
- * `35.35 * 100` is 3534.9999999999995 in IEEE 754, and rounding that is a habit
- * that eventually rounds the wrong way on somebody's money.
- */
-/**
- * The item's pricing, as the form sent it.
- *
- * NO FIELD, NO CHANGE: `pricing_mode` is only on the form for a store that holds
- * the capability. Returns { mode } for a fixed item, { value } — the arguments
- * for the database — for a variable one, or { message } when a figure cannot be
- * read. Whether the figures make a valid rule is the database's to decide.
- */
-function readPricing(formData) {
-  const mode = str(formData, 'pricing_mode');
-  if (!mode) return {};
-  if (mode === 'FIXED') return { mode };
-
-  if (mode === 'STEPPED') {
-    const min = parsePrice(formData.get('variable_min'));
-    const step = parsePrice(formData.get('variable_step'));
-    const maxText = String(formData.get('variable_max') ?? '').trim();
-    const max = maxText ? parsePrice(maxText) : null;
-    if (min === null) return { message: 'Give a starting price, like 10.' };
-    if (step === null) return { message: 'Give a step, like 5.' };
-    if (maxText && max === null) return { message: 'Give a maximum like 25, or leave it empty.' };
-    return {
-      mode,
-      value: { mode, minPesewas: min, stepPesewas: step, maxPesewas: max, clearMax: !maxText },
-    };
-  }
-
-  if (mode === 'CHOICES') {
-    const parts = String(formData.get('variable_choices') ?? '')
-      .split(/[,\s]+/)
-      .filter(Boolean);
-    const choices = parts.map(parsePrice);
-    if (!parts.length || choices.includes(null)) {
-      return { message: 'List the prices separated by commas, like 10, 15, 30, 50.' };
-    }
-    return { mode, value: { mode, choicesPesewas: choices } };
-  }
-
-  return { message: 'Choose how this item is priced.' };
-}
-
-function parsePrice(raw) {
-  const text = String(raw ?? '')
-    .trim()
-    .replace(/[^\d.]/g, '');
-  if (!text || !/^\d+(\.\d{1,2})?$/.test(text)) return null;
-
-  const [cedis, pesewas = ''] = text.split('.');
-  const value = Number(cedis) * 100 + Number(pesewas.padEnd(2, '0'));
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 // --- The store itself --------------------------------------------------------

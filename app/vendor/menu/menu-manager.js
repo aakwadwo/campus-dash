@@ -9,7 +9,16 @@ import {
   deleteMenuItemAction,
 } from '../actions';
 import { cedisInputFromPesewas } from '@/lib/util/money';
-import { PRICING_MODE, isVariablePrice, priceChoices, priceSummary } from '@/lib/util/item-price';
+import {
+  PRICING_MODE,
+  isVariablePrice,
+  priceChoices,
+  priceSummary,
+  parseCedis,
+  checkSteppedRule,
+  steppedPreview,
+  parsePriceList,
+} from '@/lib/util/item-price';
 import {
   Button,
   Card,
@@ -499,63 +508,8 @@ function ItemFields({ item = null, variablePricing = false }) {
         </fieldset>
       ) : null}
 
-      {variablePricing && mode === PRICING_MODE.STEPPED ? (
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="From">
-            <Input
-              name="variable_min"
-              required
-              inputMode="decimal"
-              placeholder="10"
-              defaultValue={cedisOrEmpty(item?.variable_min_pesewas)}
-            />
-          </Field>
-          <Field label="Step">
-            <Input
-              name="variable_step"
-              required
-              inputMode="decimal"
-              placeholder="5"
-              defaultValue={cedisOrEmpty(item?.variable_step_pesewas)}
-            />
-          </Field>
-          <Field label="Up to" hint="Empty for no limit">
-            <Input
-              name="variable_max"
-              inputMode="decimal"
-              placeholder="None"
-              defaultValue={cedisOrEmpty(item?.variable_max_pesewas)}
-            />
-          </Field>
-        </div>
-      ) : null}
-
-      {variablePricing && mode === PRICING_MODE.CHOICES ? (
-        <Field label="Prices" hint="In cedis, separated by commas">
-          <Input
-            name="variable_choices"
-            required
-            inputMode="decimal"
-            placeholder="10, 15, 30, 50"
-            defaultValue={
-              item?.variable_choices_pesewas
-                ? priceChoices(item)
-                    .map((p) => cedisInputFromPesewas(p).replace(/\.00$/, ''))
-                    .join(', ')
-                : ''
-            }
-          />
-        </Field>
-      ) : null}
-
-      <Field label="Description" hint="Optional. What is in it.">
-        <Textarea
-          name="description"
-          rows={2}
-          maxLength={280}
-          defaultValue={item?.description ?? ''}
-        />
-      </Field>
+      {variablePricing && mode === PRICING_MODE.STEPPED ? <SteppedFields item={item} /> : null}
+      {variablePricing && mode === PRICING_MODE.CHOICES ? <ChoiceFields item={item} /> : null}
 
       {/* A MEAL SCAN PAYS A SET PRICE, so only an item with one can take it. */}
       {fixed && !dormant ? (
@@ -580,4 +534,122 @@ function ItemFields({ item = null, variablePricing = false }) {
 
 function cedisOrEmpty(pesewas) {
   return pesewas == null ? '' : cedisInputFromPesewas(Number(pesewas)).replace(/\.00$/, '');
+}
+
+/**
+ * A starting price, a step, and an optional maximum.
+ *
+ * CONTROLLED, ON PURPOSE. React resets a form's uncontrolled fields every time
+ * its action runs — including when the server refuses the save — so a vendor
+ * who got something wrong used to watch what they typed snap back to the old
+ * values. Held in state, the fields keep what was typed until it is fixed.
+ *
+ * CHECKED AS THEY TYPE, by the same rule the server applies: the start and the
+ * step are each any positive price, and only a maximum has to land on the
+ * steps. When it does not, the nearest prices that do are named.
+ */
+function SteppedFields({ item }) {
+  const [min, setMin] = useState(cedisOrEmpty(item?.variable_min_pesewas));
+  const [step, setStep] = useState(cedisOrEmpty(item?.variable_step_pesewas));
+  const [max, setMax] = useState(cedisOrEmpty(item?.variable_max_pesewas));
+
+  const minPesewas = min.trim() ? parseCedis(min) : null;
+  const stepPesewas = step.trim() ? parseCedis(step) : null;
+  const maxPesewas = max.trim() ? parseCedis(max) : null;
+
+  let problem = null;
+  if (min.trim() && minPesewas === null) problem = 'The starting price must be a number, like 10.';
+  else if (step.trim() && stepPesewas === null) problem = 'The step must be a number, like 5.';
+  else if (max.trim() && maxPesewas === null) problem = 'The maximum must be a number, or empty.';
+  else if (minPesewas !== null && stepPesewas !== null) {
+    const rule = checkSteppedRule({ minPesewas, stepPesewas, maxPesewas });
+    if (!rule.ok) problem = rule.message;
+  }
+  const ready = !problem && minPesewas > 0 && stepPesewas > 0;
+
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="From">
+          <Input
+            name="variable_min"
+            required
+            inputMode="decimal"
+            placeholder="10"
+            value={min}
+            onChange={(event) => setMin(event.target.value)}
+          />
+        </Field>
+        <Field label="Step">
+          <Input
+            name="variable_step"
+            required
+            inputMode="decimal"
+            placeholder="5"
+            value={step}
+            onChange={(event) => setStep(event.target.value)}
+          />
+        </Field>
+        <Field label="Up to" hint="Empty for no limit">
+          <Input
+            name="variable_max"
+            inputMode="decimal"
+            placeholder="None"
+            value={max}
+            onChange={(event) => setMax(event.target.value)}
+          />
+        </Field>
+      </div>
+      {problem ? (
+        <p className="text-bad mt-2 text-sm" role="status">
+          {problem}
+        </p>
+      ) : ready ? (
+        <p className="text-muted mt-2 text-sm tabular-nums">
+          {steppedPreview({ minPesewas, stepPesewas, maxPesewas })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A list of exact prices.
+ *
+ * A TEXT KEYBOARD, because the list is separated by commas and a phone's
+ * number pad has none. Spaces work as separators too.
+ */
+function ChoiceFields({ item }) {
+  const [text, setText] = useState(
+    item?.variable_choices_pesewas
+      ? priceChoices(item)
+          .map((p) => cedisOrEmpty(p))
+          .join(', ')
+      : ''
+  );
+  const list = text.trim() ? parsePriceList(text) : null;
+
+  return (
+    <Field label="Prices" hint="In cedis, separated by commas">
+      <Input
+        name="variable_choices"
+        required
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        enterKeyHint="done"
+        placeholder="10, 15, 30, 50"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+      />
+      {list && !list.ok ? (
+        <span className="text-bad mt-1.5 block text-sm" role="status">
+          {list.message}
+        </span>
+      ) : null}
+    </Field>
+  );
 }

@@ -7,7 +7,7 @@ import ContactLine from '../../contact-line';
 import CameraCapture from '../../camera-capture';
 import DestinationPicker from '../../destination-picker';
 import { Card, Money, ErrorNote, Skeleton, Spinner, ArrowLeftIcon, Callout } from '../../ui';
-import { pesewasFromCedisInput } from '@/lib/util/money';
+import { lineKey, parseLineKey, basketItems } from '@/lib/orders/basket';
 import {
   PRICING_MODE,
   isVariablePrice,
@@ -16,6 +16,7 @@ import {
   priceChoices,
   cedisText,
   priceSummary,
+  parseCedis,
 } from '@/lib/util/item-price';
 
 /**
@@ -52,7 +53,11 @@ export default function MenuAndBasket({
   packFeePesewas = 0,
   gate = null,
 }) {
-  const [quantities, setQuantities, prices, setPrices] = useBasket(vendor.vendor_id, menu);
+  const [quantities, setQuantities] = useBasket(vendor.vendor_id, menu);
+  // THE AMOUNT BEING CHOSEN on each variable item's card, as typed. Not the
+  // basket: the basket holds a line per item AND price, and this only decides
+  // which of those lines the card's quantity control is looking at.
+  const [amounts, setAmounts] = useState({});
   const [step, setStep] = useState('menu');
   // NOTHING IS PRESELECTED. Collecting and a Partner are different decisions
   // with different prices, and a default is a decision made for somebody.
@@ -84,17 +89,20 @@ export default function MenuAndBasket({
   // FulfilmentChoice for the full account of that bug.
   const [quotedPartnerFee, setQuotedPartnerFee] = useState(null);
 
-  // THE AMOUNT IS NOT THE QUANTITY. A variable item's chosen price travels on
-  // its line beside how many of it; the stepper never touches it.
-  const chosenPrice = (item) => prices[item.id] ?? lowestPrice(item);
-  const items = Object.entries(quantities)
-    .filter(([, quantity]) => quantity > 0)
-    .map(([menuItemId, quantity]) => {
-      const item = menu.find((m) => m.id === menuItemId);
-      return item && isVariablePrice(item)
-        ? { menuItemId, quantity, unitPricePesewas: chosenPrice(item) }
-        : { menuItemId, quantity };
-    });
+  // THE AMOUNT IS NOT THE QUANTITY. A variable item's chosen price picks the
+  // basket line; the stepper sets how many of that line. Unreadable is NaN, so
+  // it can never be mistaken for the last good amount.
+  const chosenPrice = (item) =>
+    amounts[item.id] === undefined
+      ? lowestPrice(item)
+      : (parseCedis(amounts[item.id]) ?? Number.NaN);
+  const cardKey = (item) => lineKey(item.id, isVariablePrice(item) ? chosenPrice(item) : undefined);
+
+  // ONE LINE PER THING BOUGHT: kelewele at GH₵10 and at GH₵20 are two lines of
+  // one basket, and the same price added twice is one line with a quantity.
+  const items = basketItems(quantities).filter((line) =>
+    menu.some((m) => m.id === line.menuItemId)
+  );
 
   const itemCount = items.reduce((total, item) => total + item.quantity, 0);
   // An amount the customer is still typing is not sent anywhere. Checkout waits
@@ -171,7 +179,6 @@ export default function MenuAndBasket({
     // to this store should not offer to buy the same lunch twice.
     try {
       window.sessionStorage.removeItem(`campus-dash:basket:${vendor.vendor_id}`);
-      window.sessionStorage.removeItem(`campus-dash:basket-prices:${vendor.vendor_id}`);
     } catch {
       // Storage unavailable: nothing was saved to clear.
     }
@@ -194,8 +201,8 @@ export default function MenuAndBasket({
     return () => clearTimeout(timer);
   }, []);
 
-  const setQuantity = (id, next) =>
-    setQuantities((current) => ({ ...current, [id]: Math.max(0, Math.min(50, next)) }));
+  const setQuantity = (key, next) =>
+    setQuantities((current) => ({ ...current, [key]: Math.max(0, Math.min(50, next)) }));
 
   if (step === 'review' && !gate) {
     return (
@@ -262,7 +269,12 @@ export default function MenuAndBasket({
           most of a laptop screen and makes the menu feel thinner than it is. */}
       <ul className="grid gap-3 md:grid-cols-2">
         {menu.map((item) => {
-          const chosen = quantities[item.id] ?? 0;
+          const chosen = quantities[cardKey(item)] ?? 0;
+          // Every line of this item already in the basket, whatever price.
+          const variations = items
+            .filter((line) => line.menuItemId === item.id && line.unitPricePesewas !== undefined)
+            .sort((a, b) => a.unitPricePesewas - b.unitPricePesewas);
+          const inBasket = chosen > 0 || variations.length > 0;
           return (
             // AN ANCHOR PER ITEM, so a search result lands on the thing that
             // was searched for, briefly marked so the eye finds it.
@@ -276,7 +288,7 @@ export default function MenuAndBasket({
               <Card
                 className={`flex h-full gap-3.5 p-3.5 transition-colors sm:p-5 ${
                   item.is_available ? '' : 'bg-surface-2/60'
-                } ${chosen > 0 ? 'border-brand-600 ring-brand-600/25 ring-1' : ''}`}
+                } ${inBasket ? 'border-brand-600 ring-brand-600/25 ring-1' : ''}`}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-4">
@@ -312,19 +324,44 @@ export default function MenuAndBasket({
                         <PriceChoice
                           item={item}
                           value={chosenPrice(item)}
-                          onChange={(pesewas) =>
-                            setPrices((current) => ({ ...current, [item.id]: pesewas }))
+                          text={amounts[item.id] ?? cedisText(lowestPrice(item))}
+                          onText={(text) =>
+                            setAmounts((current) => ({ ...current, [item.id]: text }))
                           }
                         />
                       ) : null}
                       <Stepper
                         value={chosen}
-                        onChange={(next) => setQuantity(item.id, next)}
+                        onChange={(next) => setQuantity(cardKey(item), next)}
                         label={item.name}
                         disabled={
                           isVariablePrice(item) && !checkChosenPrice(item, chosenPrice(item)).ok
                         }
                       />
+                      {/* WHAT IS ALREADY IN THE BASKET at other prices, each
+                          one tap from being the line the stepper edits. */}
+                      {variations.length > 1 ||
+                      (variations.length === 1 &&
+                        variations[0].unitPricePesewas !== chosenPrice(item)) ? (
+                        <p className="text-muted mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                          <span>In your basket:</span>
+                          {variations.map((line) => (
+                            <button
+                              key={line.key}
+                              type="button"
+                              onClick={() =>
+                                setAmounts((current) => ({
+                                  ...current,
+                                  [item.id]: cedisText(line.unitPricePesewas),
+                                }))
+                              }
+                              className="text-ink font-semibold tabular-nums underline-offset-2 hover:underline"
+                            >
+                              <Money pesewas={line.unitPricePesewas} /> × {line.quantity}
+                            </button>
+                          ))}
+                        </p>
+                      ) : null}
                     </>
                   ) : (
                     /* SOLD OUT, SHOWN. A dish that vanishes when it runs out
@@ -487,13 +524,15 @@ function Checkout({
   submitState,
 }) {
   // THE SERVER'S UNIT PRICE once there is a quote, so every line agrees with
-  // the total beside it even if the store changed the item mid-basket.
-  const quoted = new Map((quote?.lines ?? []).map((l) => [l.menu_item_id, l.unit_price_pesewas]));
-  const named = items.map((item) => ({
+  // the total beside it even if the store changed the item mid-basket. The
+  // quote's lines come back in the order they were sent, and the same item can
+  // now be on two of them, so they are matched by position, not by id.
+  const quotedLines = quote?.lines?.length === items.length ? quote.lines : null;
+  const named = items.map((item, index) => ({
     ...item,
     name: menu.find((m) => m.id === item.menuItemId)?.name ?? 'Item',
     price:
-      quoted.get(item.menuItemId) ??
+      quotedLines?.[index]?.unit_price_pesewas ??
       item.unitPricePesewas ??
       menu.find((m) => m.id === item.menuItemId)?.price_pesewas ??
       0,
@@ -571,7 +610,7 @@ function Checkout({
       {/* --- Items ------------------------------------------------------- */}
       <ul className="divide-line border-line mt-6 divide-y border-y">
         {named.map((item) => (
-          <li key={item.menuItemId} className="flex items-baseline justify-between gap-4 py-3">
+          <li key={item.key} className="flex items-baseline justify-between gap-4 py-3">
             <span className="min-w-0">
               <span className="text-muted mr-2 tabular-nums">{item.quantity}×</span>
               {item.name}
@@ -761,18 +800,15 @@ function Line({ label, hint, value }) {
  * WHY. It used to live only in component state, so a refresh, a tap on the
  * header, or — worst — the trip to sign up and back emptied it, even though
  * the page promised the order would be waiting. It is kept per store in
- * sessionStorage: ids and quantities, the same shape the server is sent, and
- * beside them the amount chosen for an item priced that way. Never a total.
- * Items no longer on the menu are dropped on the way back in, and anything
- * unreadable is simply ignored. A kept amount the store has since stopped
- * offering is not corrected here: the screen marks it, and the server would
- * refuse it.
+ * sessionStorage as { lineKey: quantity } — a fixed item's key is its id, a
+ * variable item's is its id and chosen price (see lib/orders/basket.js). Never
+ * a total. On the way back in, a line is dropped if its item is no longer on
+ * the menu, or if its price is no longer one of the item's prices: the server
+ * would refuse it, exactly as it would an item that has gone.
  */
 function useBasket(vendorId, menu) {
   const key = `campus-dash:basket:${vendorId}`;
-  const pricesKey = `campus-dash:basket-prices:${vendorId}`;
   const [quantities, setQuantities] = useState({});
-  const [prices, setPrices] = useState({});
   const [restored, setRestored] = useState(false);
 
   useEffect(() => {
@@ -780,31 +816,23 @@ function useBasket(vendorId, menu) {
     try {
       const raw = window.sessionStorage.getItem(key);
       const parsed = raw ? JSON.parse(raw) : {};
-      const onMenu = new Set(menu.filter((m) => m.is_available).map((m) => m.id));
       saved = Object.fromEntries(
-        Object.entries(parsed).filter(
-          ([id, qty]) => onMenu.has(id) && Number.isInteger(qty) && qty > 0 && qty <= 50
-        )
+        Object.entries(parsed).filter(([line, qty]) => {
+          if (!Number.isInteger(qty) || qty < 1 || qty > 50) return false;
+          const parts = parseLineKey(line);
+          const item = parts && menu.find((m) => m.id === parts.menuItemId && m.is_available);
+          if (!item) return false;
+          return isVariablePrice(item)
+            ? parts.unitPricePesewas !== undefined &&
+                checkChosenPrice(item, parts.unitPricePesewas).ok
+            : parts.unitPricePesewas === undefined;
+        })
       );
     } catch {
       // Private mode or blocked storage: start empty, the basket still works.
     }
-    let savedPrices = {};
-    try {
-      const raw = window.sessionStorage.getItem(pricesKey);
-      const parsed = raw ? JSON.parse(raw) : {};
-      const variable = new Set(menu.filter(isVariablePrice).map((m) => m.id));
-      savedPrices = Object.fromEntries(
-        Object.entries(parsed).filter(
-          ([id, pesewas]) => variable.has(id) && Number.isSafeInteger(pesewas) && pesewas > 0
-        )
-      );
-    } catch {
-      // As above.
-    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring browser-only state after hydration
     setQuantities(saved);
-    setPrices(savedPrices);
     setRestored(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
@@ -820,20 +848,7 @@ function useBasket(vendorId, menu) {
     }
   }, [key, quantities, restored]);
 
-  useEffect(() => {
-    if (!restored) return;
-    try {
-      const kept = Object.fromEntries(
-        Object.entries(prices).filter(([, pesewas]) => Number.isSafeInteger(pesewas))
-      );
-      if (Object.keys(kept).length) window.sessionStorage.setItem(pricesKey, JSON.stringify(kept));
-      else window.sessionStorage.removeItem(pricesKey);
-    } catch {
-      // As above.
-    }
-  }, [pricesKey, prices, restored]);
-
-  return [quantities, setQuantities, prices, setPrices];
+  return [quantities, setQuantities];
 }
 
 /* ---------------------------------------------------------------------------
@@ -848,8 +863,11 @@ function useBasket(vendorId, menu) {
  * listed. A typed amount that is not one of the item's prices is NOT corrected
  * — the box keeps what was typed, the nearest prices are named, and nothing
  * can be added until it is one of them.
+ *
+ * CONTROLLED BY THE PARENT (`text`), because a tap on "In your basket: GH₵20"
+ * has to be able to put GH₵20 back in the box.
  */
-function PriceChoice({ item, value, onChange }) {
+function PriceChoice({ item, value, text, onText }) {
   if (item.pricing_mode === PRICING_MODE.CHOICES) {
     return (
       <div
@@ -865,7 +883,7 @@ function PriceChoice({ item, value, onChange }) {
               type="button"
               role="radio"
               aria-checked={on}
-              onClick={() => onChange(pesewas)}
+              onClick={() => onText(cedisText(pesewas))}
               className={`press-sm h-10 rounded-full border px-4 text-sm font-semibold tabular-nums transition-colors ${
                 on
                   ? 'bg-ink border-ink text-white'
@@ -880,27 +898,14 @@ function PriceChoice({ item, value, onChange }) {
     );
   }
 
-  return <SteppedAmount item={item} value={value} onChange={onChange} />;
+  return <SteppedAmount item={item} value={value} text={text} onText={onText} />;
 }
 
-function SteppedAmount({ item, value, onChange }) {
-  // WHAT WAS TYPED, kept as typed. The parent holds pesewas; this holds the
-  // text, so "1" on the way to "15" is not rewritten under the thumb.
-  const [text, setText] = useState(() => cedisText(value));
-  const parsed = parse(text);
-  const check = parsed === null ? { ok: false } : checkChosenPrice(item, parsed);
+function SteppedAmount({ item, value, text, onText }) {
+  const check = Number.isNaN(value) ? { ok: false } : checkChosenPrice(item, value);
   // Whole cedis on a whole-cedi item: the phone offers digits only.
   const whole =
     Number(item.variable_min_pesewas) % 100 === 0 && Number(item.variable_step_pesewas) % 100 === 0;
-
-  function parse(raw) {
-    try {
-      return pesewasFromCedisInput(raw);
-    } catch {
-      return null;
-    }
-  }
-
   const suggestions = [check.lower, check.higher].filter((p) => Number.isSafeInteger(p));
 
   return (
@@ -915,12 +920,7 @@ function SteppedAmount({ item, value, onChange }) {
           <span className="text-muted mr-1 text-sm">GH₵</span>
           <input
             value={text}
-            onChange={(event) => {
-              setText(event.target.value);
-              // An unreadable amount is sent up as NaN, never as the last good
-              // one: the basket must not hold a price the box no longer shows.
-              onChange(parse(event.target.value) ?? Number.NaN);
-            }}
+            onChange={(event) => onText(event.target.value)}
             inputMode={whole ? 'numeric' : 'decimal'}
             enterKeyHint="done"
             autoComplete="off"
@@ -941,10 +941,7 @@ function SteppedAmount({ item, value, onChange }) {
                   {i ? ' or ' : ''}
                   <button
                     type="button"
-                    onClick={() => {
-                      setText(cedisText(p));
-                      onChange(p);
-                    }}
+                    onClick={() => onText(cedisText(p))}
                     className="font-semibold underline underline-offset-2"
                   >
                     <Money pesewas={p} />

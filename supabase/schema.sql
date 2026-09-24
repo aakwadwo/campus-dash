@@ -8495,7 +8495,8 @@ declare
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
   v_unit     bigint;
-  v_seen     uuid[] := '{}';
+  v_seen     text[] := '{}';
+  v_key      text;
 begin
   -- A CLOSED store takes no new orders. Existing ones are untouched: this
   -- guards submission, not the lifecycle of work already in the kitchen.
@@ -8532,15 +8533,23 @@ begin
         using errcode = 'check_violation';
     end if;
 
-    if v_menu.id = any(v_seen) then
-      raise exception 'item % appears more than once; send a single line with a quantity', v_menu.name
-        using errcode = 'check_violation';
-    end if;
-    v_seen := v_seen || v_menu.id;
 
     -- THE UNIT PRICE: the fixed price, or the customer's chosen amount once it
     -- has been checked against the item's rule.
     v_unit := public.menu_item_unit_price(v_menu, v_item);
+
+    -- ONE LINE PER THING BOUGHT. A fixed item is one thing, so it appears once
+    -- with a quantity, exactly as before. A variable item bought at two prices
+    -- is two things — GH₵10 of kelewele and GH₵20 of kelewele — so the line is
+    -- the item AND its price, and only the same item at the same price twice
+    -- is refused. Checked after the price, which is what makes it a key.
+    v_key := case when v_menu.pricing_mode = 'FIXED' then v_menu.id::text
+                  else v_menu.id::text || '@' || v_unit::text end;
+    if v_key = any(v_seen) then
+      raise exception 'item % appears more than once; send a single line with a quantity', v_menu.name
+        using errcode = 'check_violation';
+    end if;
+    v_seen := v_seen || v_key;
 
     v_lines := v_lines || jsonb_build_object(
       'menu_item_id',       v_menu.id,
@@ -9194,7 +9203,8 @@ declare
   v_menu     public.menu_items%rowtype;
   v_qty      integer;
   v_unit     bigint;
-  v_seen     uuid[] := '{}';
+  v_seen     text[] := '{}';
+  v_key      text;
   v_note     text := nullif(btrim(coalesce(p_order_note, '')), '');
   v_extra    text := nullif(btrim(coalesce(p_destination_note, '')), '');
 begin
@@ -9317,16 +9327,24 @@ begin
         using errcode = 'check_violation';
     end if;
 
-    if v_menu.id = any(v_seen) then
-      raise exception 'item % appears more than once; send a single line with a quantity', v_menu.name
-        using errcode = 'check_violation';
-    end if;
-    v_seen := v_seen || v_menu.id;
 
     -- THE UNIT PRICE: the fixed price, or the customer's chosen amount once it
     -- has been checked against the item's rule and the store's capability, in
     -- this transaction. A basket built before either changed is refused here.
     v_unit := public.menu_item_unit_price(v_menu, v_item);
+
+    -- ONE LINE PER THING BOUGHT. A fixed item is one thing, so it appears once
+    -- with a quantity, exactly as before. A variable item bought at two prices
+    -- is two things — GH₵10 of kelewele and GH₵20 of kelewele — so the line is
+    -- the item AND its price, and only the same item at the same price twice
+    -- is refused. Checked after the price, which is what makes it a key.
+    v_key := case when v_menu.pricing_mode = 'FIXED' then v_menu.id::text
+                  else v_menu.id::text || '@' || v_unit::text end;
+    if v_key = any(v_seen) then
+      raise exception 'item % appears more than once; send a single line with a quantity', v_menu.name
+        using errcode = 'check_violation';
+    end if;
+    v_seen := v_seen || v_key;
 
     insert into public.order_items (
       order_id, menu_item_id, name_snapshot, unit_price_pesewas, quantity, line_total_pesewas

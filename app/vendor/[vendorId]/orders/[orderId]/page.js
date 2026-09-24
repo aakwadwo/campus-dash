@@ -1,3 +1,4 @@
+import { namesOnSeveralLines } from '@/lib/orders/basket';
 import { notFound } from 'next/navigation';
 import { getOrderDetail, getHandoffCode } from '@/lib/vendor';
 import { vendorScanImageUrl } from '@/lib/scan';
@@ -46,6 +47,8 @@ export default async function VendorOrderPage({ params }) {
   const scanUrl =
     order.order_type === 'SCAN' ? await vendorScanImageUrl(orderId).catch(() => null) : null;
 
+  const repeated = namesOnSeveralLines(order.items);
+
   return (
     <main className="mx-auto max-w-2xl px-4 pt-3 pb-16 sm:px-6 sm:pt-6">
       <BackLink href={`/vendor/${vendorId}`}>Orders</BackLink>
@@ -83,6 +86,14 @@ export default async function VendorOrderPage({ params }) {
             <li key={index} className="flex items-baseline justify-between gap-3 py-2.5">
               <span className="min-w-0">
                 <span className="font-semibold tabular-nums">{item.quantity}×</span> {item.name}
+                {/* THE SAME DISH AT TWO PRICES is two portions to make, so
+                    each says which. Only then: every other line is unchanged. */}
+                {repeated.has(item.name) ? (
+                  <span className="font-semibold tabular-nums">
+                    {' '}
+                    at {formatPesewas(item.unit_price_pesewas)}
+                  </span>
+                ) : null}
               </span>
               <span className="text-muted shrink-0 text-sm tabular-nums">
                 {formatPesewas(item.line_total_pesewas)}

@@ -1,3 +1,4 @@
+import { namesOnSeveralLines } from '@/lib/orders/basket';
 import { notFound } from 'next/navigation';
 import { requireCustomer } from '@/lib/auth/session';
 import {
@@ -168,6 +169,8 @@ export default async function CustomerOrderPage({ params }) {
   const stage = STAGE[order.stage] ?? { label: order.stage, tone: '', detail: null };
   const live = !['COMPLETED', 'REJECTED', 'EXPIRED', 'CANCELLED'].includes(order.stage);
   const searching = ['PREPARING_SEARCHING', 'SEARCHING_PARTNER'].includes(order.stage);
+  // The same dish at two prices is two lines; they say which price is which.
+  const repeated = namesOnSeveralLines(order.items);
 
   return (
     <div className="min-h-dvh">
@@ -275,6 +278,12 @@ export default async function CustomerOrderPage({ params }) {
                       {item.quantity}×
                     </span>
                     {item.name}
+                    {repeated.has(item.name) ? (
+                      <span className="text-muted text-sm">
+                        {' '}
+                        at <Money pesewas={item.unit_price_pesewas} />
+                      </span>
+                    ) : null}
                   </span>
                   <span className="text-muted shrink-0 text-sm">
                     <Money pesewas={item.line_total_pesewas} />
