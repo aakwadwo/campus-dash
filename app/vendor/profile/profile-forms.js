@@ -50,7 +50,7 @@ export function PayoutForm({ vendor, destination }) {
       ) : (
         <p className="text-muted text-sm leading-relaxed">
           Add the mobile money account this store is paid into. Until it is set, your share of each
-          order is held by Campus Dash and settled by hand.
+          order is owed to you and cannot be paid.
         </p>
       )}
 

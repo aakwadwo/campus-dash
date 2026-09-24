@@ -12,6 +12,7 @@ import {
   removeImage,
   setPrimaryImage,
   setPayoutDestination,
+  getMyVendors,
   setMenuItemAvailable,
   setMenuItemActive,
   createMenuItem,
@@ -479,18 +480,32 @@ export async function savePayoutDestinationAction(_prev, formData) {
     return fail(error);
   }
 
-  const registered = await syncPayoutSubaccount({
-    payeeType: 'VENDOR',
-    payeeId: vendorId,
-    businessName: str(formData, 'store_name') ?? 'Campus Dash vendor',
-  });
+  // REGISTERED WITH PAYSTACK ONLY FOR AN APPROVED STORE. A live subaccount for
+  // an applicant who may be rejected is payment routing set up for nobody; an
+  // applicant's details are registered when the store is approved.
+  const mine = await getMyVendors().catch(() => []);
+  const approved = mine.some((v) => v.vendor_id === vendorId && v.status === 'ACTIVE');
+
+  const registered = approved
+    ? await syncPayoutSubaccount({
+        payeeType: 'VENDOR',
+        payeeId: vendorId,
+        businessName: str(formData, 'store_name') ?? 'Campus Dash vendor',
+      })
+    : null;
 
   revalidatePath('/vendor/profile');
+  revalidatePath('/vendor/application');
 
+  // WHAT IS TRUE, AND NOT MORE. Paystack paying the store's share into its
+  // subaccount at checkout is what a registration turns on; when the money then
+  // reaches the phone is Paystack's settlement schedule, not a promise we make.
   return {
     ok: true,
-    message: registered.ok
-      ? 'Payout details saved. Paystack will pay your share of each order into this account the next working day.'
-      : 'Payout details saved. We will finish setting them up with our payment provider shortly.',
+    message: !approved
+      ? 'Payout details saved. They are set up for payment when your store is approved.'
+      : registered?.ok
+        ? 'Payout details saved. Your share of each order is now paid to you through Paystack when the customer pays.'
+        : 'Payout details saved. We will finish setting them up with our payment provider shortly.',
   };
 }

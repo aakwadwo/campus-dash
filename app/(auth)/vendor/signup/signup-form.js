@@ -215,6 +215,8 @@ export default function VendorSignUpForm({
         />
       </Field>
 
+      <PayoutFields values={v} />
+
       <label className="border-line bg-surface-2 rounded-card flex items-start gap-3 border p-3.5">
         <input
           type="checkbox"
@@ -389,7 +391,80 @@ function Carried({ values, phone }) {
       {/* WHICH REQUEST SENT IT. A phone change and a sign-in code are checked
           by different Supabase calls, and the answer has to match the ask. */}
       <input type="hidden" name="otp_type" value={values.otpType ?? 'sms'} />
+      {/* WHERE THE STORE IS PAID, saved once the number is proven. */}
+      <input type="hidden" name="momo_network" value={values.momoNetwork ?? ''} />
+      <input type="hidden" name="momo_account_name" value={values.momoAccountName ?? ''} />
+      <input
+        type="hidden"
+        name="momo_use_signin_phone"
+        value={values.momoUseSignInPhone ? 'on' : ''}
+      />
+      <input type="hidden" name="momo_number" value={values.momoNumber ?? ''} />
     </>
+  );
+}
+
+/**
+ * Where the store is paid. Required.
+ *
+ * THE SAME NUMBER, IF IT IS THE SAME NUMBER. Most stores are paid on the phone
+ * they sign in with, so one tick uses it — the number the SMS code is about to
+ * prove, not a second copy typed here. Unticked, a separate MoMo number is
+ * required. The name on the account is required either way: it is what the
+ * network checks a payment against.
+ */
+function PayoutFields({ values }) {
+  const [sameNumber, setSameNumber] = useState(Boolean(values.momoUseSignInPhone));
+
+  return (
+    <fieldset className="border-line space-y-4 border-t pt-4">
+      <legend className="float-left mb-1 w-full font-semibold">Getting paid</legend>
+      <p className="text-muted clear-both text-sm leading-relaxed">
+        The mobile money account your share of each order is paid into.
+      </p>
+
+      <Field label="Mobile money network">
+        <Select name="momo_network" required defaultValue={values.momoNetwork ?? ''}>
+          <option value="" disabled>
+            Choose a network
+          </option>
+          <option value="MTN">MTN Mobile Money</option>
+          <option value="VODAFONE">Telecel Cash</option>
+          <option value="AIRTELTIGO">AirtelTigo Money</option>
+        </Select>
+      </Field>
+
+      <label className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          name="momo_use_signin_phone"
+          checked={sameNumber}
+          onChange={(event) => setSameNumber(event.target.checked)}
+          className="accent-brand-500 mt-0.5 size-4 shrink-0"
+        />
+        <span className="text-sm leading-relaxed">
+          Use my Campus Dash/SMS phone number for MoMo payouts
+        </span>
+      </label>
+
+      {sameNumber ? null : (
+        <Field label="Mobile money number">
+          <Input
+            name="momo_number"
+            type="tel"
+            required
+            inputMode="tel"
+            autoComplete="off"
+            placeholder="055 123 4567"
+            defaultValue={values.momoNumber ?? ''}
+          />
+        </Field>
+      )}
+
+      <Field label="Name on the mobile money account" hint="Exactly as the network has it.">
+        <Input name="momo_account_name" required defaultValue={values.momoAccountName ?? ''} />
+      </Field>
+    </fieldset>
   );
 }
 

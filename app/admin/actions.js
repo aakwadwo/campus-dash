@@ -215,16 +215,41 @@ export async function reviewVendorAction(_prev, formData) {
   if (denied) return denied;
 
   const approved = str(formData, 'decision') === 'APPROVE';
+  const vendorId = str(formData, 'vendor_id');
+  let payoutNote = '';
   return run(
-    () =>
-      admin.reviewVendor({
-        vendorId: str(formData, 'vendor_id'),
+    async () => {
+      const reviewed = await admin.reviewVendor({
+        vendorId,
         approved,
         reason: str(formData, 'reason'),
-      }),
-    approved
-      ? 'Approved. The owner has been texted and can open the store when they are ready.'
-      : 'Rejected. The owner has been texted and can correct the application and resubmit.',
+      });
+
+      // AN APPROVED STORE IS REGISTERED FOR PAYSTACK SPLITS, from the payout
+      // details it gave at sign-up. Not before approval — no live subaccount
+      // for an applicant — and never blocking it: a store with no details, or a
+      // provider that is down, is still approved, and the message says which.
+      if (approved) {
+        const row = Array.isArray(reviewed) ? reviewed[0] : reviewed;
+        const sync = await admin
+          .syncPayoutDestination({
+            payeeType: 'VENDOR',
+            payeeId: vendorId,
+            businessName: row?.name ?? 'Campus Dash vendor',
+          })
+          .catch((error) => ({ ok: false, error: error.message }));
+        payoutNote = sync.ok
+          ? ' Their payout account is registered, so their share of each order is split to them by Paystack.'
+          : sync.skipped === 'no destination on file'
+            ? ' They have not given payout details yet, so they cannot be paid until they do.'
+            : ' Their payout account could not be registered with Paystack yet — retry it on the Settlements page.';
+      }
+      return reviewed;
+    },
+    () =>
+      approved
+        ? `Approved. The owner has been texted and can open the store when they are ready.${payoutNote}`
+        : 'Rejected. The owner has been texted and can correct the application and resubmit.',
     ['/admin/vendors']
   );
 }
@@ -748,16 +773,20 @@ export async function runSettlementAction(_prev, formData) {
         `and swept into a later run.`
       : '';
 
-    // A PARTNER RUN SENDS NOTHING, on purpose. It gathers what is owed into
-    // payouts and stops; the money leaves when a person sends it and records
-    // the reference. Saying "0 payouts sent" here would read as a failure.
+    // A MANUAL RUN SENDS NOTHING, on purpose — every Partner run, and a vendor
+    // run while transfers are off. It gathers what is owed into payouts and
+    // stops; the money leaves when a person sends it and records the
+    // reference. Saying "0 payouts sent" here would read as a failure.
     if (result.manual) {
+      const who =
+        payeeType === 'PARTNER' ? ['Partner is', 'Partners are'] : ['store is', 'stores are'];
       return {
         ok: true,
         message: result.awaitingManualSettlement
           ? `${result.awaitingManualSettlement} ${
-              result.awaitingManualSettlement === 1 ? 'Partner is' : 'Partners are'
-            } ready to be paid. Send the money, then record each one below.` + deferred
+              result.awaitingManualSettlement === 1 ? who[0] : who[1]
+            } ready to be paid. Nothing has been sent: pay each one by mobile money yourself, then record it below.` +
+            deferred
           : 'Nothing was owed for that period.' + deferred,
       };
     }
@@ -779,7 +808,8 @@ export async function runSettlementAction(_prev, formData) {
 }
 
 /**
- * A person recording that they sent a Partner their money.
+ * A person recording that they paid a Partner — or a store with no Paystack
+ * split — outside Campus Dash.
  *
  * THE REFERENCE IS THE EVIDENCE and the database refuses without one: a manual
  * settlement has no provider event behind it, so what the operator typed is the
@@ -799,7 +829,7 @@ export async function settlePayoutManuallyAction(_prev, formData) {
       admin.settlePayoutManually({
         payoutId: str(formData, 'payout_id'),
         reference,
-        reason: str(formData, 'reason') ?? 'Paid by hand at the weekly run',
+        reason: str(formData, 'reason') ?? 'Paid externally and recorded by an administrator',
       }),
     'Recorded as paid.',
     ['/admin/settlements']

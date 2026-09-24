@@ -16,12 +16,17 @@ import { ButtonLink, Callout, Completion, ChevronRightIcon, Card, Disclosure } f
 
 export const dynamic = 'force-dynamic';
 
+// WHAT A PARTNER IS TOLD ABOUT A PAYOUT THAT IS NOT PAID YET. Campus Dash pays
+// Partners by hand: a gathered payout is waiting for an administrator to send
+// the mobile money, and nothing is "on its way" until they have. my_partner_payouts()
+// reports every unpaid payout as PROCESSING, so this never says more than that.
 const PAYOUT_STATUS = {
-  PENDING: 'Scheduled',
-  PROCESSING: 'On its way',
+  PENDING: 'To be paid by Campus Dash',
+  PROCESSING: 'To be paid by Campus Dash',
   FAILED: 'Delayed',
   CANCELLED: 'Cancelled',
   REVERSED: 'Delayed',
+  RETURNED: 'Returned',
 };
 
 const STATUS_COPY = {
@@ -307,7 +312,7 @@ function Earnings({ earnings, payouts }) {
       <p className="text-display mt-2 text-4xl font-semibold tabular-nums">
         {formatPesewas(available)}
       </p>
-      <p className="text-muted mt-1 text-sm">Available now</p>
+      <p className="text-muted mt-1 text-sm">Earned and not yet paid</p>
 
       {threshold > 0 ? (
         <div className="mt-4">
@@ -333,10 +338,11 @@ function Earnings({ earnings, payouts }) {
 
       <Disclosure title="How earnings work" flush className="border-line mt-3 border-t">
         <p className="text-muted text-sm leading-relaxed">
-          You earn the Campus Dash Partner fee for every order you complete. Payouts are processed
-          weekly
-          {threshold > 0 ? ` once your available earnings reach ${formatPesewas(threshold)}` : ''}.
-          Anything below that carries forward to the next cycle, so nothing is lost.
+          You earn the Campus Dash Partner fee for every order you complete. Campus Dash pays you by
+          mobile money every Sunday for the week before
+          {threshold > 0 ? `, once what you are owed reaches ${formatPesewas(threshold)}` : ''}.
+          Anything below that carries into the next week, so nothing is lost. A payout shows as paid
+          once Campus Dash has sent it.
         </p>
       </Disclosure>
 
@@ -344,9 +350,9 @@ function Earnings({ earnings, payouts }) {
         <Row label="Orders completed" value={String(earnings?.delivered_count ?? 0)} />
         <Row label="Earned in total" value={formatPesewas(earnings?.earned_pesewas ?? 0)} />
         {inProgress > 0 ? (
-          <Row label="Payout on its way" value={formatPesewas(inProgress)} />
+          <Row label="Being paid by Campus Dash" value={formatPesewas(inProgress)} />
         ) : null}
-        <Row label="Already paid out" value={formatPesewas(earnings?.settled_pesewas ?? 0)} />
+        <Row label="Paid out" value={formatPesewas(earnings?.settled_pesewas ?? 0)} />
       </dl>
 
       {payouts?.length ? (
@@ -356,13 +362,16 @@ function Earnings({ earnings, payouts }) {
             {payouts.map((p) => (
               <li key={p.payout_id} className="flex items-baseline justify-between gap-3 py-2">
                 <span className="text-muted">
-                  {new Date(p.paid_at ?? p.created_at).toLocaleDateString('en-GB', {
-                    day: 'numeric',
-                    month: 'short',
-                  })}
+                  {/* THE WEEK IT COVERS, then what happened to it. A week closes
+                      only when Campus Dash records paying it. */}
+                  {p.period_start && p.period_end
+                    ? `Week of ${shortDay(p.period_start)} – ${shortDay(
+                        new Date(new Date(p.period_end).getTime() - 86400000)
+                      )}`
+                    : shortDay(p.created_at)}
                   {p.status === 'PAID'
-                    ? ' · Paid'
-                    : ` · ${PAYOUT_STATUS[p.status] ?? 'Processing'}`}
+                    ? ` · Paid out ${shortDay(p.paid_at)}`
+                    : ` · ${PAYOUT_STATUS[p.status] ?? 'To be paid by Campus Dash'}`}
                 </span>
                 <span className="tabular-nums">{formatPesewas(p.amount_pesewas)}</span>
               </li>
@@ -372,4 +381,12 @@ function Earnings({ earnings, payouts }) {
       ) : null}
     </section>
   );
+}
+
+function shortDay(value) {
+  return new Date(value).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
 }

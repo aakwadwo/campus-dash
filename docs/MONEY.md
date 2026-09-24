@@ -8,10 +8,11 @@ the database, not in transit, not in a price input box.
 ```
 customer pays TOTAL
       │
-      ├── VENDOR    = food subtotal    → SPLIT at the charge, or settled DAILY
-      │               (+ the pack on a scan order)
+      ├── VENDOR    = food subtotal    → SPLIT at the charge (subaccount), or
+      │               (+ the pack on       owed and paid BY HAND (no subaccount)
+      │                a scan order)
       ├── PLATFORM  = service fee (+ delivery fee until a Partner earns it)
-      └── PARTNER   = delivery fee     → settled WEEKLY, by transfer
+      └── PARTNER   = delivery fee     → paid BY HAND, weekly on Sunday
                        carved out of PLATFORM at the moment of delivery
 ```
 
@@ -19,10 +20,28 @@ customer pays TOTAL
 A vendor with a registered Paystack subaccount is paid by Paystack as the
 customer pays: their share is split off the charge and never enters the Campus
 Dash balance, so their allocation is born `SETTLED` and no payout run can claim
-it. A vendor without one is settled by the daily run, exactly as before. Both are
+it. A vendor without one is owed: a vendor run gathers what is owed into PENDING
+payouts, and — while Paystack transfers are off, as they are in production — an
+administrator pays each one by mobile money outside Campus Dash and records it
+with the reference (`settlesByHand()`, `admin_settle_payout_manually()`). Both are
 on the ledger at the same amount; only the route differs. See `docs/PAYMENTS.md`.
 
-The Partner is always a transfer, and cannot be otherwise — see below.
+The Partner is never in the split, and cannot be — see below. Partners are paid
+by hand every Sunday for the Sunday-to-Saturday week before; the admin dashboard
+lists who has reached the threshold.
+
+### What "paid" means, at each stage
+
+| Stage                                  | Evidence Campus Dash holds                      | Shown as                           |
+| -------------------------------------- | ----------------------------------------------- | ---------------------------------- |
+| Split to the store's subaccount        | Paystack's signed `charge.success` split shares | "Split confirmed by Paystack"      |
+| Subaccount settled to the store's MoMo | none — Paystack's schedule, no webhook          | "MoMo settlement not tracked here" |
+| Store or Partner paid by hand          | the MoMo reference an administrator recorded    | PAID, provider `manual`            |
+| Money received in the payee's account  | none                                            | never claimed                      |
+
+Reaching Sunday, gathering a run, or a successful charge never makes anything
+PAID. Only a split at the charge (for a store's share) or a recorded payment
+does.
 
 Worked example — 2 × GH₵35 jollof, GH₵3 water, delivered:
 

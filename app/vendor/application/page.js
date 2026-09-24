@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
-import { getMyApplication } from '@/lib/vendor';
+import { getMyApplication, getPayoutDestination } from '@/lib/vendor';
+import { PayoutForm } from '../profile/profile-forms';
 import { signOut } from '@/app/(auth)/login/actions';
 import { Badge, Button, ButtonLink, Callout, Card, Facts, Fact, PageHeader } from '@/app/ui';
 
@@ -24,6 +25,10 @@ export default async function VendorApplicationPage() {
 
   const rejected = application.status === 'REJECTED';
   const suspended = application.status === 'SUSPENDED';
+  // A STORE THAT APPLIED BEFORE PAYOUT DETAILS WERE ASKED FOR has none. It is
+  // asked for them here — never guessed from its phone or anything else on file.
+  const payout = await getPayoutDestination().catch(() => undefined);
+  const needsPayout = !rejected && !suspended && payout === null;
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 pt-6 pb-16 sm:px-6 sm:pt-10">
@@ -52,7 +57,7 @@ export default async function VendorApplicationPage() {
           </Callout>
         ) : null}
 
-        {!rejected && !suspended ? (
+        {!rejected && !suspended && !needsPayout ? (
           <Callout tone="brand" className="mt-4">
             We&apos;ll text you the moment a decision is made. Nothing else is needed from you right
             now.
@@ -83,6 +88,17 @@ export default async function VendorApplicationPage() {
           </div>
         ) : null}
       </Card>
+
+      {needsPayout ? (
+        <Card className="mt-6 p-5">
+          <h2 className="font-semibold">Where should we pay you?</h2>
+          <p className="text-muted mt-1 mb-4 text-sm leading-relaxed">
+            Add the mobile money account your store is paid into. It is needed before your store can
+            be paid for orders.
+          </p>
+          <PayoutForm vendor={{ vendor_id: application.vendor_id, name: application.name }} />
+        </Card>
+      ) : null}
 
       {suspended ? (
         <p className="text-muted mt-5 text-sm leading-relaxed">

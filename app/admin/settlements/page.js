@@ -7,7 +7,10 @@ import {
   partnerBalances,
   payoutHistory,
   payoutsAwaitingSettlement,
+  vendorSplitPayments,
+  listVendors,
 } from '@/lib/admin';
+import { getPaymentProvider } from '@/lib/payments';
 import { formatPesewas } from '@/lib/util/money';
 import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
 import SettlementControls from './settlement-controls';
@@ -34,13 +37,32 @@ export default async function AdminSettlementsPage() {
     payoutHistory({ limit: 100 }).catch(() => null),
   ]);
 
-  const [balances, awaiting] = await Promise.all([
+  const [balances, awaiting, awaitingVendors, splits, vendors] = await Promise.all([
     partnerBalances().catch(() => null),
     // THE WEEKLY LIST. Partner payouts are created by the run and stop there —
     // a person sends the money and records it — so this is the screen's most
     // operational panel, not a report.
     payoutsAwaitingSettlement('PARTNER').catch(() => null),
+    payoutsAwaitingSettlement('VENDOR').catch(() => null),
+    vendorSplitPayments({ limit: 50 }).catch(() => null),
+    listVendors().catch(() => []),
   ]);
+
+  // Whether Campus Dash can push money out at all on this deployment. It
+  // cannot while PAYSTACK_TRANSFERS_ENABLED is off, and every label below that
+  // mentions paying somebody is written from this, not assumed.
+  const transfersOn = getPaymentProvider().canSendTransfers;
+
+  // admin_payouts_awaiting_settlement() names a payee from the account table,
+  // which a STORE is not; the store's own name is what an operator recognises.
+  const vendorPayouts =
+    awaitingVendors === null
+      ? null
+      : awaitingVendors.map((p) => ({
+          ...p,
+          payee_name: (vendors ?? []).find((v) => v.vendor_id === p.payee_id)?.name ?? null,
+          payee_phone: null,
+        }));
 
   const vendorPending =
     overview === null ? null : overview.filter((r) => r.payee_type === 'VENDOR');
@@ -55,19 +77,45 @@ export default async function AdminSettlementsPage() {
   return (
     <>
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settlements</h1>
-      <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
-        A vendor with a registered subaccount is paid by Paystack as each order is charged, and
-        never appears in a run at all. A vendor without one is settled by transfer, daily.
+      <p className="text-muted mb-3 max-w-3xl text-sm leading-relaxed">
+        <span className="text-ink font-semibold">
+          Stores with a Paystack subaccount are paid automatically.
+        </span>{' '}
+        Paystack splits their food amount to their subaccount when the customer pays, and they never
+        appear in a run. There is nothing to pay them here.
       </p>
       <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
-        <span className="text-ink font-semibold">Partners are paid by hand, weekly.</span> The run
-        gathers what is owed into payouts and stops; you send the money and record each one below.
-        Nothing leaves automatically.
+        <span className="text-ink font-semibold">
+          Partners{transfersOn ? '' : ', and stores without a subaccount,'} are paid by you.
+        </span>{' '}
+        Gathering a run lists what is owed and sends nothing. You pay each one by mobile money
+        outside Campus Dash, then record it below with the transaction reference.
       </p>
 
-      <SettlementControls />
+      <SettlementControls transfersOn={transfersOn} />
 
-      <ManualSettlement payouts={awaiting} />
+      <ManualSettlement
+        title="Partners to pay"
+        payouts={awaiting}
+        payeeLabel="Partner"
+        countLabel="Deliveries"
+        emptyText="No Partner payouts are waiting. On Sunday, gather last week's payouts to see who is owed."
+      />
+
+      <ManualSettlement
+        title="Stores without a Paystack split, to pay"
+        payouts={vendorPayouts}
+        payeeLabel="Store"
+        countLabel="Orders"
+        emptyText="No store payouts are waiting. A store paid by Paystack split never needs one."
+      />
+
+      <Panel
+        title="Paid automatically by Paystack split"
+        description="The store's food amount went to its Paystack subaccount when the customer paid. Campus Dash does not track what happens next: Paystack settles the subaccount to the store's mobile money on its own schedule, and that settlement is visible only in the Paystack dashboard."
+      >
+        <SplitLog rows={splits} />
+      </Panel>
 
       <PayoutDestinations destinations={destinations} />
 
@@ -154,7 +202,7 @@ export default async function AdminSettlementsPage() {
                   ) : row.setup_error ? (
                     <Badge tone="bad">Failed</Badge>
                   ) : (
-                    <Badge tone="neutral">By run</Badge>
+                    <Badge tone="neutral">{transfersOn ? 'By transfer' : 'Paid by you'}</Badge>
                   )}
                 </Cell>
                 <Cell>
@@ -174,19 +222,22 @@ export default async function AdminSettlementsPage() {
       </Panel>
 
       <Panel
-        title="Owed to vendors, settled daily"
-        description="Eligible allocations not yet claimed by a run, including anything a run held back for being under the minimum payout. DUE says whether today is the day; owed money that is not yet due is normal, not stuck."
+        title="Owed to stores without a Paystack split"
+        description="The store's amount from orders paid without a split, not yet gathered into a payout. It is owed and has not been paid. Stores paid by split never appear here."
       >
         <PendingTable rows={vendorPending} />
       </Panel>
 
-      <Panel title="Owed to Partners, settled weekly">
+      <Panel
+        title="Owed to Partners, not yet gathered"
+        description="Earned and not yet paid. Gathered into a payout on Sunday once it reaches the threshold."
+      >
         <PendingTable rows={partnerPending} />
       </Panel>
 
       <Panel
         title="Payout history"
-        description="Every payout ever, not only those in the run below. PROCESSING means the provider accepted a transfer; only its own success event makes one PAID."
+        description="Every payout ever gathered. PAID with provider 'manual' means an administrator recorded paying it outside Campus Dash, with the reference shown. A FAILED payout released what it covered back to owed. Split payments are not payouts and are listed above."
       >
         {history === null ? (
           <Unavailable>The payout history could not be loaded.</Unavailable>
@@ -380,6 +431,86 @@ function PendingTable({ rows }) {
             {row.failed_payouts > 0 ? <Badge tone="bad">{row.failed_payouts} failed</Badge> : null}
           </Cell>
           <Cell muted>{row.last_paid_at ? when(row.last_paid_at) : 'never'}</Cell>
+        </Row>
+      ))}
+    </Table>
+  );
+}
+
+/**
+ * Split payments, stated for exactly what they are.
+ *
+ * THE MONEY COLUMNS ARE PAYSTACK'S, read from its signed charge.success split
+ * shares: the store's share, Paystack's fee, what Paystack credited the store's
+ * subaccount, and what Campus Dash kept. With bearer_type 'account' the fee is
+ * Campus Dash's, so the credit equals the share; the row says who bore it
+ * rather than leaving anybody to infer it.
+ *
+ * "Split confirmed by Paystack" means that signed record lists the store's
+ * subaccount receiving its full share. "Awaiting Paystack's confirmation" means
+ * the payment is confirmed and the split was requested, but the signed event
+ * that proves it has not been stored yet — normally a matter of seconds.
+ * NEITHER means the store has received the money: the subaccount is settled to
+ * mobile money by Paystack afterwards, untracked here, and the row says so.
+ */
+function SplitLog({ rows }) {
+  if (rows === null) return <Unavailable>The split payments could not be loaded.</Unavailable>;
+  if (!rows.length) return <Empty>No order has been paid by split yet.</Empty>;
+  const money = (pesewas) => (pesewas === null ? '-' : <Cedis pesewas={pesewas} />);
+  return (
+    <Table
+      head={[
+        'Store',
+        'Order',
+        'Vendor share',
+        'Paystack fee',
+        'Subaccount credit',
+        'Campus Dash net',
+        'Split at',
+        'Paystack',
+        'Status',
+      ]}
+      minWidth="76rem"
+    >
+      {rows.map((row) => (
+        <Row key={row.orderId}>
+          <Cell>{row.vendorName ?? '-'}</Cell>
+          <Cell mono>{row.orderNumber ?? '-'}</Cell>
+          <Cell numeric>{money(row.vendorSharePesewas)}</Cell>
+          <Cell numeric muted>
+            {money(row.paystackFeePesewas)}
+            {row.paystackFeePesewas !== null ? (
+              <span className="text-faint block text-xs">
+                {row.vendorFeePesewas === 0
+                  ? 'borne by Campus Dash'
+                  : `store bore ${(row.vendorFeePesewas / 100).toFixed(2)}`}
+              </span>
+            ) : null}
+          </Cell>
+          <Cell numeric>{money(row.subaccountCreditPesewas)}</Cell>
+          <Cell numeric muted>
+            {money(row.campusDashNetPesewas)}
+          </Cell>
+          <Cell muted>{row.splitAt ? when(row.splitAt) : '-'}</Cell>
+          <Cell mono>
+            {row.paystackTransactionId ? (
+              <span className="block">txn {row.paystackTransactionId}</span>
+            ) : null}
+            <span className="text-faint block text-xs">
+              ref {row.paystackReference ? `${row.paystackReference.slice(0, 8)}…` : '-'}
+            </span>
+            <span className="text-faint block text-xs">{row.subaccountCode ?? '-'}</span>
+          </Cell>
+          <Cell>
+            {row.confirmedByPaystack ? (
+              <Badge tone="good">Split confirmed by Paystack</Badge>
+            ) : (
+              <Badge tone="warn">Awaiting Paystack&apos;s confirmation</Badge>
+            )}
+            <span className="text-muted mt-1 block text-xs">
+              Automatically split by Paystack. MoMo settlement not tracked here.
+            </span>
+          </Cell>
         </Row>
       ))}
     </Table>

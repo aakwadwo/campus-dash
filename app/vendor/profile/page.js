@@ -76,8 +76,8 @@ export default async function VendorProfilePage() {
           {payout ? (
             <p className="text-muted mt-4 text-sm leading-relaxed">
               {payout.split_ready
-                ? 'Paystack pays your amount into this account the next working day after each order is paid.'
-                : 'Being registered with our payment provider. Until then, Campus Dash settles your amount in the daily run.'}
+                ? 'Your share of each order is paid to you through Paystack when the customer pays. Paystack then settles it to this account on its own schedule.'
+                : 'Not yet set up with our payment provider. Until it is, your share of each order is owed to you and Campus Dash pays it to this account.'}
             </p>
           ) : null}
         </Disclosure>

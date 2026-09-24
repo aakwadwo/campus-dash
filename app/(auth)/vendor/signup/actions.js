@@ -5,7 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { actionFailure } from '@/lib/errors';
-import { signUp } from '@/lib/vendor';
+import { signUp, setPayoutDestination } from '@/lib/vendor';
+import { readSignupPayout, payoutNumberFor } from '@/lib/vendor/payout-details';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { isOtpShape } from '@/lib/auth/customer-signup';
 
@@ -47,6 +48,12 @@ function collect(formData) {
     // re-proving the number their account already holds.
     otpType: formData.get('otp_type') === 'phone_change' ? 'phone_change' : 'sms',
     accepted: formData.get('accept_terms') === 'on',
+    // WHERE THE STORE IS PAID. Carried through the code step like everything
+    // else, and saved only once the store exists on a verified session.
+    momoNetwork: String(formData.get('momo_network') ?? ''),
+    momoAccountName: String(formData.get('momo_account_name') ?? '').trim(),
+    momoUseSignInPhone: formData.get('momo_use_signin_phone') === 'on',
+    momoNumber: String(formData.get('momo_number') ?? '').trim(),
   };
 }
 
@@ -135,7 +142,7 @@ async function createStore(d, applicantName) {
   const { data: terms } = await supabase.rpc('current_terms', { p_audience: 'VENDOR' });
   const termsId = (Array.isArray(terms) ? terms[0] : terms)?.terms_id;
 
-  await signUp({
+  return signUp({
     applicantName,
     storeName: d.storeName,
     isStudent: d.isStudent === 'yes',
@@ -159,6 +166,10 @@ function carry(d) {
     categoryId: d.categoryId,
     phoneRaw: d.phoneRaw,
     otpType: d.otpType,
+    momoNetwork: d.momoNetwork,
+    momoAccountName: d.momoAccountName,
+    momoUseSignInPhone: d.momoUseSignInPhone,
+    momoNumber: d.momoNumber,
   };
 }
 
@@ -206,6 +217,11 @@ export async function startVendorSignUpAction(_prev, formData) {
 
   const phone = normaliseGhanaPhone(d.phoneRaw);
   if (!phone) return fail('Enter a valid Ghanaian phone number, e.g. 020 123 4567.');
+
+  // WHERE THE STORE IS PAID, required before any code is sent: a store with no
+  // payout account has money it cannot receive. The database checks it again.
+  const payout = readSignupPayout(formData);
+  if (!payout.ok) return fail(payout.message);
 
   if (!d.accepted) return fail('You must accept the vendor terms to continue.');
 
@@ -347,6 +363,40 @@ export async function resendVendorCodeAction(_prev, formData) {
   });
 }
 
+/**
+ * The store's mobile money account, saved on the session that just proved the
+ * phone. "Use my sign-in number" means THAT number — the one the code was
+ * checked against a moment ago — and nothing typed or remembered.
+ *
+ * NOT REGISTERED WITH PAYSTACK HERE. The store is waiting for approval, and a
+ * live subaccount for an applicant who may be rejected is money routing set up
+ * for nobody. It is registered when an administrator approves the store.
+ *
+ * A failure here does not undo the store: it exists, and its application page
+ * asks for the payout details it is missing. It is logged, not hidden.
+ */
+async function savePayoutDetails(created, d, verifiedPhone) {
+  const vendor = Array.isArray(created) ? created[0] : created;
+  const accountNumber = payoutNumberFor(
+    { useSignInPhone: d.momoUseSignInPhone, numberRaw: d.momoNumber },
+    verifiedPhone
+  );
+  if (!vendor?.id || !accountNumber) {
+    console.error('[vendor-signup] store created without payout details: nothing usable to save');
+    return;
+  }
+  try {
+    await setPayoutDestination({
+      vendorId: vendor.id,
+      momoNetwork: d.momoNetwork,
+      accountNumber,
+      accountName: d.momoAccountName,
+    });
+  } catch (error) {
+    console.error('[vendor-signup] store created, payout details not saved:', error.message);
+  }
+}
+
 export async function finishVendorSignUpAction(_prev, formData) {
   const d = collect(formData);
   const token = String(formData.get('token') ?? '').trim();
@@ -391,7 +441,8 @@ export async function finishVendorSignUpAction(_prev, formData) {
       const { error: syncError } = await supabase.rpc('sync_my_verified_phone');
       if (syncError) throw new Error(syncError.message);
     }
-    await createStore(d, d.applicantName || account?.name || '');
+    const created = await createStore(d, d.applicantName || account?.name || '');
+    await savePayoutDetails(created, d, phone);
   } catch (error) {
     const failure = actionFailure(error, CONTEXT);
     return at({ step: 'code', ...carry(d), phone, error: failure.message });

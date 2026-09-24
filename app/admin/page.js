@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { dashboard, dashboardTotals, orderBoard } from '@/lib/admin';
+import { dashboard, dashboardTotals, orderBoard, partnerPaydayReminder } from '@/lib/admin';
 import { Panel, Badge, Empty, Unavailable, Cedis, Table, Row, Cell } from './ui';
 
 export const dynamic = 'force-dynamic';
@@ -25,10 +25,11 @@ export const dynamic = 'force-dynamic';
  * decides anything — this page is a read.
  */
 export default async function AdminOverviewPage() {
-  const [data, totals, recent] = await Promise.all([
+  const [data, totals, recent, payday] = await Promise.all([
     dashboard().catch(() => null),
     dashboardTotals().catch(() => null),
     orderBoard({ limit: 8 }).catch(() => null),
+    partnerPaydayReminder().catch(() => null),
   ]);
 
   // Null means the database declined, not that the business is empty. Saying
@@ -64,6 +65,8 @@ export default async function AdminOverviewPage() {
       <p className="text-muted mt-1 text-sm">
         Everything Campus Dash has handled, and what is open.
       </p>
+
+      <PartnerPayday payday={payday} />
 
       {/* 1. WAITING ON YOU — rendered only when something is. An approvals
              panel that permanently reads "0 waiting" trains people to skip the
@@ -265,4 +268,71 @@ function Approval({ count, noun, label, action, href }) {
       </Link>
     </div>
   );
+}
+
+/**
+ * THE SUNDAY REMINDER. Partners are paid by hand, weekly: Campus Dash sends
+ * nothing. On Sunday this lists everybody who reached the threshold for the
+ * week that just ended, with the amount and the week, and says plainly that
+ * the money is paid outside Campus Dash. It stays up after Sunday while that
+ * week is still ungathered, and while gathered payouts are still unrecorded —
+ * and it never marks anybody paid. Rendered only when there is something to do.
+ */
+function PartnerPayday({ payday }) {
+  if (!payday) return null;
+  const { due, gathered, isPayday: sunday, periodStart, periodEnd } = payday;
+  if (!due.length && !gathered.length) return null;
+
+  const last = new Date(new Date(periodEnd).getTime() - 86400000);
+  const week = `${fmtDay(periodStart)} – ${fmtDay(last)}`;
+  const dueTotal = due.reduce((sum, p) => sum + p.owedPesewas, 0);
+
+  return (
+    <div className="mt-6">
+      <Panel
+        title={sunday ? 'Sunday: pay your Partners' : 'Partners still to be paid'}
+        description={`Week of ${week}. Campus Dash does not send this money. Pay each Partner by mobile money yourself, then record the payment on the Settlements page. Nobody is marked paid until you record it.`}
+      >
+        {due.length ? (
+          <>
+            <p className="mb-2 text-sm">
+              <span className="font-semibold">{due.length}</span>{' '}
+              {due.length === 1 ? 'Partner has' : 'Partners have'} reached the payout threshold,{' '}
+              <Cedis pesewas={dueTotal} /> in total. Gather last week&apos;s payouts to pay them.
+            </p>
+            <Table head={['Partner', 'Owed for the week']} minWidth="24rem">
+              {due.map((p) => (
+                <Row key={p.partnerId}>
+                  <Cell>{p.partnerName ?? '-'}</Cell>
+                  <Cell numeric>
+                    <Cedis pesewas={p.owedPesewas} />
+                  </Cell>
+                </Row>
+              ))}
+            </Table>
+          </>
+        ) : null}
+        {gathered.length ? (
+          <p className="mt-3 text-sm">
+            <span className="font-semibold">{gathered.length}</span> gathered{' '}
+            {gathered.length === 1 ? 'payout is' : 'payouts are'} waiting for you to pay and record.
+          </p>
+        ) : null}
+        <Link
+          href="/admin/settlements"
+          className="text-brand-700 mt-3 inline-block text-sm font-semibold"
+        >
+          Go to Settlements
+        </Link>
+      </Panel>
+    </div>
+  );
+}
+
+function fmtDay(value) {
+  return new Date(value).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
 }

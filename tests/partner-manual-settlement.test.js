@@ -117,12 +117,23 @@ describe('partner manual settlement', () => {
     const start = source.indexOf('export async function runSettlement(');
     const body = source.slice(start, source.indexOf('\n}', start));
 
-    assert.match(body, /payeeType === 'PARTNER'/, 'the Partner case is explicit');
+    // The decision lives in settlesByHand(), which runSettlement() asks; the
+    // Partner case is its first, unconditional clause.
+    const rule = source.slice(
+      source.indexOf('export function settlesByHand('),
+      source.indexOf('\n}', source.indexOf('export function settlesByHand('))
+    );
+    assert.match(
+      rule,
+      /return payeeType === 'PARTNER' \|\|/,
+      'the Partner case is explicit, and first'
+    );
+    assert.match(body, /const manual = settlesByHand\(payeeType\)/, 'the run asks it');
     assert.match(body, /if \(!manual\)/, 'and it is what gates sendPayout');
 
     // Comments stripped, because the prose above the code explains the old
     // behaviour by name and would otherwise match.
-    const code = body.replace(/\/\/.*$/gm, '');
+    const code = (body + rule).replace(/\/\/.*$/gm, '');
     assert.doesNotMatch(
       code,
       /PAYSTACK_TRANSFERS_ENABLED|transfersEnabled/,

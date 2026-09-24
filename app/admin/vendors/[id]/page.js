@@ -14,6 +14,7 @@ import VendorImageForms from './vendor-image-forms';
 import MenuForms from './menu-forms';
 import DeleteVendorForm from './delete-vendor-form';
 import { vendorImageUrl } from '@/lib/verification/documents';
+import { payoutDestinations } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,6 +74,13 @@ export default async function VendorDetailPage({ params }) {
       supabase.from('orders').select('id', { count: 'exact', head: true }).eq('vendor_id', id),
     ]);
 
+  // WHERE THIS STORE IS PAID, if it has said. undefined = could not ask.
+  const payout = await payoutDestinations()
+    .then(
+      (rows) => (rows ?? []).find((d) => d.payee_type === 'VENDOR' && d.payee_id === id) ?? null
+    )
+    .catch(() => undefined);
+
   const menu = menuResult.error ? null : (menuResult.data ?? []);
   const locations = locationsResult.error ? null : (locationsResult.data ?? []);
   const categories = categoriesResult.error ? [] : (categoriesResult.data ?? []);
@@ -126,6 +134,16 @@ export default async function VendorDetailPage({ params }) {
             />
             <FactRow label="Phone" value={owner?.phone ?? vendor.phone} />
             <FactRow label="Describes itself as" value={vendor.description ?? '-'} />
+            <FactRow
+              label="Payout details"
+              value={
+                payout === undefined
+                  ? 'could not be checked'
+                  : payout
+                    ? `${payout.momo_network} ···${String(payout.account_number ?? '').slice(-3)} · ${payout.account_name}`
+                    : 'none given — the store cannot be paid until it adds them'
+              }
+            />
             {vendor.rejection_reason ? (
               <FactRow label="Previously rejected because" value={vendor.rejection_reason} />
             ) : null}
