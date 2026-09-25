@@ -51,7 +51,9 @@ export default async function VendorProfilePage() {
 
       {vendor.status !== 'ACTIVE' ? (
         <Callout tone="warn" className="mb-6">
-          Your store is not live yet. Customers will see it once Campus Dash approves it.
+          {vendor.status === 'SUSPENDED'
+            ? 'Your store is suspended by Campus Dash. Customers cannot see it until it is reinstated.'
+            : 'Your store is not live yet. Customers will see it once Campus Dash approves it.'}
         </Callout>
       ) : null}
 

@@ -360,6 +360,9 @@ describe('schema invariants', () => {
       'admin_set_payout_destination',
       'admin_settle_payout_manually',
       'admin_set_user_suspended',
+      // An administrator's close and reopen of a store. Closing is the store's
+      // own close, audited; reopening puts back exactly what that close took.
+      'admin_set_vendor_open',
       'admin_set_vendor_scans',
       'admin_set_vendor_status',
       // Whether a store may sell at a price the customer chooses. Audited, and

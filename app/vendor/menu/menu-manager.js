@@ -54,7 +54,13 @@ import {
  * EVERY ROW IS ITS OWN FORM with its own pending state, so turning the jollof
  * off does not grey out the waakye.
  */
-export default function MenuManager({ vendorId, items, storeOpen, variablePricing = false }) {
+export default function MenuManager({
+  vendorId,
+  items,
+  storeOpen,
+  variablePricing = false,
+  scans = false,
+}) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState('');
   const [openRow, setOpenRow] = useState(null);
@@ -91,6 +97,7 @@ export default function MenuManager({ vendorId, items, storeOpen, variablePricin
         <AddItem
           vendorId={vendorId}
           variablePricing={variablePricing}
+          scans={scans}
           onDone={() => setAdding(false)}
         />
       ) : null}
@@ -134,6 +141,7 @@ export default function MenuManager({ vendorId, items, storeOpen, variablePricin
                 vendorId={vendorId}
                 storeOpen={storeOpen}
                 variablePricing={variablePricing}
+                scans={scans}
                 expanded={openRow === item.id}
                 onToggleDetails={() => setOpenRow((id) => (id === item.id ? null : item.id))}
               />
@@ -149,7 +157,7 @@ export default function MenuManager({ vendorId, items, storeOpen, variablePricin
  * One item
  * ------------------------------------------------------------------------ */
 
-function MenuRow({ item, vendorId, storeOpen, variablePricing, expanded, onToggleDetails }) {
+function MenuRow({ item, vendorId, storeOpen, variablePricing, scans, expanded, onToggleDetails }) {
   // THE SWITCH MOVES ON THE TAP, NOT ON THE ANSWER. The answer is a round trip
   // to the server and a fresh render of this page, and on a phone that is long
   // enough to read as a switch that did not work. So the row shows where it is
@@ -196,7 +204,9 @@ function MenuRow({ item, vendorId, storeOpen, variablePricing, expanded, onToggl
             {isVariablePrice(item) && !variablePricing ? (
               <span className="text-warn font-semibold">Hidden from customers</span>
             ) : null}
-            {item.scan_eligible ? (
+            {/* ONLY WHERE MEAL SCANS ARE ON. The flag is kept when Campus Dash
+                turns them off, and means nothing until they come back. */}
+            {scans && item.scan_eligible ? (
               <span className="bg-brand-50 text-brand-800 rounded px-1.5 py-0.5 font-semibold">
                 Takes meal scans
               </span>
@@ -230,6 +240,7 @@ function MenuRow({ item, vendorId, storeOpen, variablePricing, expanded, onToggl
           vendorId={vendorId}
           storeOpen={storeOpen}
           variablePricing={variablePricing}
+          scans={scans}
           onDone={onToggleDetails}
         />
       ) : null}
@@ -269,7 +280,7 @@ function Switch({ on, pending, label }) {
  * Details: sold out, edit, delete — revealed on tap
  * ------------------------------------------------------------------------ */
 
-function ItemDetails({ item, vendorId, storeOpen, variablePricing, onDone }) {
+function ItemDetails({ item, vendorId, storeOpen, variablePricing, scans, onDone }) {
   const [editing, setEditing] = useState(false);
 
   return (
@@ -283,6 +294,7 @@ function ItemDetails({ item, vendorId, storeOpen, variablePricing, onDone }) {
           item={item}
           vendorId={vendorId}
           variablePricing={variablePricing}
+          scans={scans}
           onDone={() => setEditing(false)}
         />
       ) : (
@@ -394,7 +406,7 @@ function DeleteControl({ item, vendorId, onDone }) {
  * Adding and editing
  * ------------------------------------------------------------------------ */
 
-function AddItem({ vendorId, variablePricing, onDone }) {
+function AddItem({ vendorId, variablePricing, scans, onDone }) {
   const [state, submit, pending] = useActionState(createMenuItemAction, {});
 
   // The form is REPLACED on success rather than left filled in, which reads as
@@ -411,7 +423,7 @@ function AddItem({ vendorId, variablePricing, onDone }) {
       </p>
       <form action={submit} className="space-y-4">
         <input type="hidden" name="vendor_id" value={vendorId} />
-        <ItemFields variablePricing={variablePricing} />
+        <ItemFields variablePricing={variablePricing} scans={scans} />
         <div className="flex gap-2">
           <Button type="submit" pending={pending}>
             {pending ? 'Adding…' : 'Add item'}
@@ -426,14 +438,14 @@ function AddItem({ vendorId, variablePricing, onDone }) {
   );
 }
 
-function EditItem({ item, vendorId, variablePricing, onDone }) {
+function EditItem({ item, vendorId, variablePricing, scans, onDone }) {
   const [state, submit, pending] = useActionState(updateMenuItemAction, {});
 
   return (
     <form action={submit} className="space-y-4">
       <input type="hidden" name="vendor_id" value={vendorId} />
       <input type="hidden" name="menu_item_id" value={item.id} />
-      <ItemFields item={item} variablePricing={variablePricing} />
+      <ItemFields item={item} variablePricing={variablePricing} scans={scans} />
       <div className="flex gap-2">
         <Button type="submit" size="sm" pending={pending}>
           {pending ? 'Saving…' : 'Save changes'}
@@ -461,7 +473,7 @@ function EditItem({ item, vendorId, variablePricing, onDone }) {
  * and a variable item kept from before shows no price field at all, because
  * the one it would show is not what anybody pays.
  */
-function ItemFields({ item = null, variablePricing = false }) {
+function ItemFields({ item = null, variablePricing = false, scans = false }) {
   const [mode, setMode] = useState(item?.pricing_mode ?? PRICING_MODE.FIXED);
   const dormant = isVariablePrice(item) && !variablePricing;
   const fixed = mode === PRICING_MODE.FIXED;
@@ -511,8 +523,10 @@ function ItemFields({ item = null, variablePricing = false }) {
       {variablePricing && mode === PRICING_MODE.STEPPED ? <SteppedFields item={item} /> : null}
       {variablePricing && mode === PRICING_MODE.CHOICES ? <ChoiceFields item={item} /> : null}
 
-      {/* A MEAL SCAN PAYS A SET PRICE, so only an item with one can take it. */}
-      {fixed && !dormant ? (
+      {/* A MEAL SCAN PAYS A SET PRICE, so only an item with one can take it,
+          and only at a store Campus Dash has turned meal scans on for. Without
+          that the option is not shown at all; the server refuses it too. */}
+      {scans && fixed && !dormant ? (
         <label className="flex items-start gap-3">
           <input
             type="checkbox"
@@ -522,9 +536,6 @@ function ItemFields({ item = null, variablePricing = false }) {
           />
           <span className="text-muted text-sm leading-relaxed">
             A student may pay for this with a campus meal scan.
-            <span className="text-faint block text-xs">
-              Only has an effect if Campus Dash has turned meal scans on for your store.
-            </span>
           </span>
         </label>
       ) : null}

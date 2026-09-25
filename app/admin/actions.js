@@ -271,6 +271,27 @@ export async function setVendorStatusAction(_prev, formData) {
 }
 
 /**
+ * An administrator closing or reopening a store. The database does the work
+ * and writes the audit row; see admin_set_vendor_open().
+ */
+export async function setVendorOpenAction(_prev, formData) {
+  const denied = await authoriseAdminAction();
+  if (denied) return denied;
+
+  const open = str(formData, 'open') === 'true';
+  return run(
+    () =>
+      admin.setVendorOpen({
+        vendorId: str(formData, 'vendor_id'),
+        open,
+        reason: str(formData, 'reason'),
+      }),
+    (v) => (v.is_accepting_orders ? 'The store is open again.' : 'The store is closed.'),
+    ['/admin/vendors', '/order', '/']
+  );
+}
+
+/**
  * Whether this restaurant honours campus meal scans.
  *
  * Off for every vendor until somebody says otherwise, because a scan errand
@@ -917,6 +938,12 @@ export async function syncPayoutDestinationAction(_prev, formData) {
 
   const payeeType = str(formData, 'payee_type');
   const payeeId = str(formData, 'payee_id');
+
+  // Only a store's share is ever split. A Partner cannot be in a split (hard
+  // rule 17), so a subaccount registered for one would exist and never be used.
+  if (payeeType !== 'VENDOR') {
+    return { ok: false, message: 'Only a store is paid by Paystack split.' };
+  }
 
   return run(
     async () => {

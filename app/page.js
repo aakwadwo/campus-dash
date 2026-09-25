@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import SiteHeader from './site-header';
 import SiteFooter from './site-footer';
-import LandingBanner from './landing-banner';
 import ContactLine from './contact-line';
 import { listVendors } from '@/lib/customer';
 import { vendorImageUrl } from '@/lib/verification/documents';
@@ -76,8 +75,8 @@ const HOW_IT_WORKS = [
 ];
 
 /**
- * The two secondary audiences, as quiet rows. Signposts, not pitches. The
- * banner above is about the food and points at neither, so both rows show.
+ * The two secondary audiences, as quiet rows. Signposts, not pitches: nothing
+ * above the open stores competes with them for a customer's attention.
  */
 const SIGNPOSTS = [
   {
@@ -150,15 +149,11 @@ export default async function Home() {
         </Container>
 
         {/* ----------------------------------------------------------------
-            The food banner. See app/landing-banner.js. */}
-        <Container size="wide" className="pb-8 sm:pb-11">
-          <LandingBanner />
-        </Container>
-
-        {/* ----------------------------------------------------------------
-            Real stores, or nothing at all. */}
+            Real stores, or nothing at all. DIRECTLY UNDER THE PITCH, with no
+            banner or rule between them: what is open right now is the most
+            useful thing on this page for somebody who is hungry. */}
         {open.length ? (
-          <Container size="wide" className="border-line border-t pt-8 sm:pt-9">
+          <Container size="wide">
             <div className="mb-4 flex items-end justify-between gap-4">
               <h2 className="text-lg font-semibold tracking-tight sm:text-2xl">Open right now</h2>
               <Link

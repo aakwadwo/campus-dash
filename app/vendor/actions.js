@@ -234,6 +234,20 @@ function revalidateMenu(vendorId) {
   revalidatePath('/order');
 }
 
+/**
+ * Whether Campus Dash has turned meal scans on for this store.
+ *
+ * Asked HERE, on the server, and not taken from the form: the option is not
+ * shown to a store without scans, and a form that sends it anyway is refused
+ * rather than trusted. The database refuses it again on the write.
+ */
+async function storeTakesScans(vendorId) {
+  const vendors = await getMyVendors();
+  return Boolean(vendors.find((v) => v.vendor_id === vendorId)?.can_accept_scans);
+}
+
+const SCANS_OFF = 'Meal scans are not turned on for your store.';
+
 export async function createMenuItemAction(_prev, formData) {
   const vendorId = str(formData, 'vendor_id');
   const name = str(formData, 'name');
@@ -241,6 +255,9 @@ export async function createMenuItemAction(_prev, formData) {
 
   if (!name) return { ok: false, message: 'Give the item a name.' };
   if (pricing.message) return { ok: false, message: pricing.message };
+
+  const wantsScan = !pricing.value && formData.get('scan_eligible') === 'on';
+  if (wantsScan && !(await storeTakesScans(vendorId))) return { ok: false, message: SCANS_OFF };
 
   const price = pricing.value ? null : parsePositiveCedis(formData.get('price'));
   if (!pricing.value && price === null) {
@@ -253,7 +270,7 @@ export async function createMenuItemAction(_prev, formData) {
       name,
       pricePesewas: price,
       description: str(formData, 'description'),
-      scanEligible: !pricing.value && formData.get('scan_eligible') === 'on',
+      scanEligible: wantsScan,
       pricing: pricing.value,
     });
   } catch (error) {
@@ -284,6 +301,12 @@ export async function updateMenuItemAction(_prev, formData) {
     return { ok: false, message: 'Give the item a price, like 35 or 35.50.' };
   }
 
+  // A STORE WITHOUT SCANS NEVER TOUCHES THE FLAG. Its form has no checkbox, so
+  // reading the missing box as "off" would silently clear a flag set while
+  // scans were on, and it would be lost when Campus Dash turns them back on.
+  const scans = await storeTakesScans(vendorId);
+  if (!scans && formData.get('scan_eligible') === 'on') return { ok: false, message: SCANS_OFF };
+
   try {
     await updateMenuItem({
       menuItemId: str(formData, 'menu_item_id'),
@@ -293,7 +316,7 @@ export async function updateMenuItemAction(_prev, formData) {
       // "leave it alone" — so the empty string is passed through rather than
       // collapsed to null by str().
       description: String(formData.get('description') ?? '').trim(),
-      scanEligible: !pricing.value && formData.get('scan_eligible') === 'on',
+      scanEligible: scans ? !pricing.value && formData.get('scan_eligible') === 'on' : null,
       // FIXED is sent too, so choosing "One price" returns a variable item to
       // its fixed price. No field at all means the store cannot see the
       // choice, and the item's mode is left exactly as it is.

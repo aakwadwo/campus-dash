@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
-import { vendorOnlyHome } from '@/lib/auth/landing';
+import { vendorOnlyHome, vendorStoreId } from '@/lib/auth/landing';
 import SiteHeader from '../site-header';
 import SiteFooter from '../site-footer';
 import { Container } from '../ui';
@@ -81,7 +81,7 @@ function navFor(me) {
 
   items.push({ href: '/account/settings', label: 'Settings' });
 
-  if (me.vendor_ids?.length) {
+  if (vendorStoreId(me)) {
     items.push({ href: '/vendor', label: 'Store dashboard' });
   } else if (me.vendor_status && me.vendor_status !== 'NOT_APPLIED') {
     items.push({

@@ -9,6 +9,7 @@ import { orderLabel } from '@/lib/orders/state';
 import {
   Button,
   ButtonLink,
+  Callout,
   Stat,
   Unavailable,
   ChevronRightIcon,
@@ -78,6 +79,7 @@ export default function OrderBoard({
   });
 
   const open = vendor.is_accepting_orders;
+  const suspended = vendor.status === 'SUSPENDED';
   const nothingActive = buckets.NEW.length === 0 && buckets.READY.length === 0;
 
   return (
@@ -96,9 +98,15 @@ export default function OrderBoard({
               aria-hidden
             />
             <span className={open ? 'text-good font-semibold' : 'text-muted font-semibold'}>
-              {open ? 'Open for orders' : hasActiveItems ? 'Closed to new orders' : 'Closed'}
+              {suspended
+                ? 'Suspended by Campus Dash'
+                : open
+                  ? 'Open for orders'
+                  : hasActiveItems
+                    ? 'Closed to new orders'
+                    : 'Closed'}
             </span>
-            {!open && !hasActiveItems ? (
+            {!suspended && !open && !hasActiveItems ? (
               <span className="text-muted">· nothing on your menu</span>
             ) : null}
           </p>
@@ -108,7 +116,9 @@ export default function OrderBoard({
             is not offered: a customer walking to a counter that has nothing for
             them is the thing this rule exists to prevent, and the way out is
             one tap away rather than behind a failed press. */}
-        {!open && !hasActiveItems ? (
+        {/* SUSPENDED: nothing here can reopen it, so nothing is offered.
+            Campus Dash reinstates the store, and it reopens with its menu. */}
+        {suspended ? null : !open && !hasActiveItems ? (
           <ButtonLink href="/vendor/menu" className="shrink-0">
             Set your menu
           </ButtonLink>
@@ -124,6 +134,14 @@ export default function OrderBoard({
           </form>
         )}
       </header>
+
+      {suspended ? (
+        <Callout tone="bad" className="mt-4">
+          Customers cannot see or order from your store while it is suspended. Finish any order
+          already placed as usual. Your menu and history are kept, and your store reopens when
+          Campus Dash reinstates it.
+        </Callout>
+      ) : null}
 
       {openState.message ? (
         openState.ok ? (

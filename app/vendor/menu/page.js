@@ -39,13 +39,15 @@ export default async function VendorMenuPage() {
       <PageHeader
         title="Menu"
         description={
-          items.length === 0
-            ? 'Add everything you sell. Turn things on when you are serving them, and off when you are not — nothing is deleted by a switch.'
-            : open
-              ? `Open, serving ${on.length} item${on.length === 1 ? '' : 's'}${
-                  soldOut ? `, ${soldOut} sold out` : ''
-                }.`
-              : 'Closed. Turn an item on and your store opens.'
+          vendor.status === 'SUSPENDED'
+            ? 'Your store is suspended by Campus Dash, so customers cannot see this menu. It is kept exactly as it is.'
+            : items.length === 0
+              ? 'Add everything you sell. Turn things on when you are serving them, and off when you are not — nothing is deleted by a switch.'
+              : open
+                ? `Open, serving ${on.length} item${on.length === 1 ? '' : 's'}${
+                    soldOut ? `, ${soldOut} sold out` : ''
+                  }.`
+                : 'Closed. Turn an item on and your store opens.'
         }
       />
 
@@ -54,6 +56,7 @@ export default async function VendorMenuPage() {
         items={items}
         storeOpen={open}
         variablePricing={Boolean(vendor.can_use_variable_pricing)}
+        scans={Boolean(vendor.can_accept_scans)}
       />
     </main>
   );

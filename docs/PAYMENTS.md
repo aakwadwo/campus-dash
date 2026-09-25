@@ -255,6 +255,25 @@ pulled back. A refund on a split order comes out of the Campus Dash balance, and
 `/admin/orders/[id]` shows the split so nobody discovers this during a
 reconciliation.
 
+### After the split: settlement
+
+Paystack settles each subaccount to its bank or mobile money on the
+subaccount's schedule. Campus Dash reads that and never drives it:
+
+| What                             | Source                                          |
+| -------------------------------- | ----------------------------------------------- |
+| A subaccount's settlements       | `GET /settlement?subaccount=ACCT_…`             |
+| The charges in one settlement    | `GET /settlement/:id/transactions`              |
+| Subaccount status, destination   | `GET /subaccount/:code` (account number masked) |
+| A settlement webhook             | none exists, so every screen reads on load      |
+| A subaccount's unsettled balance | not exposed by Paystack, so not shown           |
+
+The adapter maps Paystack's `success` to SETTLED and nothing else to it. An
+unrecognised status stays visible as UNKNOWN with its raw word. The field names
+follow Paystack's API reference; the test account has no subaccounts to
+confirm them against, so the first live settlement should be checked against
+its dashboard record.
+
 **3. A split can be refused, and must not stop the payment.** A deactivated
 subaccount, or an account without multi-split enabled, makes Paystack reject the
 whole initialisation. The adapter drops the split and retries once; the customer

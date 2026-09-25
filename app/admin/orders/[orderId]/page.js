@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { BackLink } from '@/app/ui';
 import { notFound } from 'next/navigation';
-import { orderMoney } from '@/lib/admin';
+import { orderMoney, orderVendorMoney } from '@/lib/admin';
+import { ORDER_SETTLEMENT_LABEL, accraTime } from '@/lib/settlement/vendor-settlement';
 import { adminScanOrder } from '@/lib/scan';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -36,6 +37,10 @@ export default async function AdminOrderPage({ params }) {
 
   const money = await orderMoney(orderId);
   if (!money) notFound();
+
+  // Payment, Paystack split and vendor settlement, read as three facts. Null
+  // means the question failed, which the panel says rather than drawing blanks.
+  const vendorMoney = await orderVendorMoney(orderId).catch(() => null);
 
   const supabase = await createClient();
   const [{ data: order }, { data: events }, { data: items }, { data: note }] = await Promise.all([
@@ -226,7 +231,7 @@ export default async function AdminOrderPage({ params }) {
             value={<Cedis pesewas={order.subtotal_pesewas} />}
           />
           <Fact
-            label={isScan ? 'Scan service fee (flat)' : 'Service fee (5% of food)'}
+            label={isScan ? 'Scan service fee (flat)' : 'Service fee (percentage of food)'}
             value={<Cedis pesewas={order.service_fee_pesewas} />}
           />
           <Fact label="Delivery fee" value={<Cedis pesewas={order.delivery_fee_pesewas} />} />
@@ -265,29 +270,25 @@ export default async function AdminOrderPage({ params }) {
           ledger, and it is never deducted from what a vendor or a Partner is owed.
         </p>
 
-        <p className="text-muted mt-3 text-xs">
-          Provider: {money.payment_provider ?? '-'} · txn{' '}
-          <span className="font-mono">{money.provider_transaction_id ?? '-'}</span> ·{' '}
-          {money.payment_txn_status ?? 'no payment'}
-        </p>
-
         {money.allocations?.length ? (
           <div className="mt-4">
-            <Table head={['Payee', 'Amount', 'Status', 'Settled']} minWidth="30rem">
+            <Table head={['Payee', 'Amount', 'Route', 'Ledger']} minWidth="30rem">
               {money.allocations.map((a, i) => (
                 <Row key={i}>
                   <Cell>{a.payee_type}</Cell>
                   <Cell numeric>
                     <Cedis pesewas={a.amount_pesewas} />
                   </Cell>
-                  <Cell>{a.status}</Cell>
-                  <Cell muted>{when(a.settled_at)}</Cell>
+                  <Cell muted>{ROUTE[a.settlement_channel] ?? '-'}</Cell>
+                  <Cell muted>{ledgerState(a)}</Cell>
                 </Row>
               ))}
             </Table>
           </div>
         ) : null}
       </Panel>
+
+      <VendorMoney vendorMoney={vendorMoney} channel={money.vendor_channel} />
 
       {/* ---------------------------------------------------------------- */}
       <Panel title="Overrides" description="Every one of these is recorded with your reason.">
@@ -323,3 +324,162 @@ export default async function AdminOrderPage({ params }) {
     </>
   );
 }
+
+const ROUTE = {
+  SPLIT: 'Paystack split',
+  TRANSFER: 'Campus Dash balance',
+};
+
+/**
+ * What the ledger row says, in words that do not overclaim. A SPLIT row is
+ * written SETTLED the moment Paystack splits the charge, which is a fact
+ * about the ledger, not about the store's bank or mobile money account.
+ */
+function ledgerState(a) {
+  if (a.settlement_channel === 'SPLIT' && a.status === 'SETTLED') {
+    return `Split to subaccount ${when(a.settled_at)}`;
+  }
+  if (a.status === 'SETTLED') return `Paid, recorded ${when(a.settled_at)}`;
+  if (a.status === 'SETTLING') return 'Gathered, awaiting payment';
+  if (a.status === 'ELIGIBLE') return 'Owed';
+  return a.status;
+}
+
+/**
+ * THE STORE'S MONEY, AS THREE SEPARATE FACTS.
+ *
+ * Payment: the customer paid. Paystack split: Paystack's signed record credits
+ * the store's subaccount. Vendor settlement: a Paystack settlement's own
+ * transaction list contains this charge. Each is shown on its own evidence,
+ * and none is inferred from another. There is no action on this panel,
+ * because Campus Dash controls none of it.
+ */
+function VendorMoney({ vendorMoney, channel }) {
+  if (vendorMoney === null) {
+    return (
+      <Panel title="Store's money">
+        <Unavailable>The payment, split and settlement could not be read.</Unavailable>
+      </Panel>
+    );
+  }
+  const { payment, split, settlement } = vendorMoney;
+  const state = ORDER_SETTLEMENT_LABEL[settlement?.state] ?? ORDER_SETTLEMENT_LABEL.UNKNOWN;
+
+  return (
+    <Panel
+      title="Store's money"
+      description="Payment, split and settlement are separate events. Each is shown only on its own evidence."
+    >
+      <h3 className="text-muted mb-2 text-xs font-semibold tracking-wide uppercase">Payment</h3>
+      {payment ? (
+        <Facts>
+          <Fact label="Customer paid" value={<Cedis pesewas={payment.amount_pesewas} />} />
+          <Fact label="Confirmed" value={when(payment.succeeded_at)} />
+          <Fact label="Provider" value={payment.provider} />
+          <Fact label="Reference" value={<span className="font-mono text-xs">{payment.id}</span>} />
+        </Facts>
+      ) : (
+        <Empty>No succeeded payment on this order.</Empty>
+      )}
+
+      <h3 className="text-muted mt-5 mb-2 text-xs font-semibold tracking-wide uppercase">
+        Paystack split
+      </h3>
+      {split ? (
+        <Facts>
+          <Fact
+            label="Status"
+            value={
+              split.confirmed ? (
+                <Badge tone="good">Split confirmed by Paystack</Badge>
+              ) : (
+                <Badge tone="warn">Awaiting Paystack&apos;s signed record</Badge>
+              )
+            }
+          />
+          <Fact label="Vendor share" value={<Cedis pesewas={split.vendorSharePesewas} />} />
+          <Fact
+            label="Credited to subaccount"
+            value={
+              split.subaccountCreditPesewas === null ? (
+                '-'
+              ) : (
+                <Cedis pesewas={split.subaccountCreditPesewas} />
+              )
+            }
+          />
+          <Fact
+            label="Subaccount"
+            value={<span className="font-mono text-xs">{split.subaccountCode}</span>}
+          />
+          <Fact label="Split at (Paystack)" value={accraTime(split.paystackPaidAt) ?? '-'} />
+          <Fact
+            label="Paystack transaction"
+            value={<span className="font-mono text-xs">{split.paystackTransactionId ?? '-'}</span>}
+          />
+        </Facts>
+      ) : (
+        <p className="text-muted text-sm">
+          {channel === 'TRANSFER'
+            ? "Not split. The store's share stayed in the Campus Dash balance and is a manual vendor payment, recorded on the Money page."
+            : 'No Paystack split on this order.'}
+        </p>
+      )}
+
+      {split ? (
+        <>
+          <h3 className="text-muted mt-5 mb-2 text-xs font-semibold tracking-wide uppercase">
+            Vendor settlement
+          </h3>
+          <Facts>
+            <Fact label="Status" value={<Badge tone={state.tone}>{state.label}</Badge>} />
+            {settlement.settlement ? (
+              <>
+                <Fact
+                  label="Settlement"
+                  value={<span className="font-mono text-xs">{settlement.settlement.id}</span>}
+                />
+                <Fact
+                  label="Settlement date"
+                  value={accraTime(settlement.settlement.settlementDate) ?? 'not reported'}
+                />
+                <Fact
+                  label="Settlement amount"
+                  value={
+                    settlement.settlement.totalAmountPesewas === null ? (
+                      'not reported'
+                    ) : (
+                      <Cedis pesewas={settlement.settlement.totalAmountPesewas} />
+                    )
+                  }
+                />
+              </>
+            ) : null}
+            {settlement.fetchedAt ? (
+              <Fact label="Read from Paystack" value={accraTime(settlement.fetchedAt)} />
+            ) : null}
+          </Facts>
+          <p className="text-muted mt-2 text-xs leading-relaxed">
+            {SETTLEMENT_NOTE[settlement.state] ?? ''}
+          </p>
+        </>
+      ) : null}
+    </Panel>
+  );
+}
+
+const SETTLEMENT_NOTE = {
+  SETTLED:
+    "Paystack lists this charge in a successful settlement to the store's destination. Whether the store's bank or network has shown it in their balance is theirs to confirm.",
+  PROCESSING: 'Paystack lists this charge in a settlement it has not finished.',
+  PENDING: 'Paystack lists this charge in a settlement it has not paid out yet.',
+  FAILED:
+    'Paystack lists this charge in a settlement that failed. The money has not reached the store. Check the subaccount in the Paystack dashboard.',
+  NOT_FOUND:
+    "No settlement Paystack returned contains this charge yet. The money is in the store's subaccount and has not been paid out to them.",
+  INCOMPLETE:
+    'This charge was not in the settlements that were read, but Paystack returned more than could be checked. It is not established either way.',
+  UNAVAILABLE:
+    'Paystack could not be asked about settlements from this deployment, so nothing is claimed either way.',
+  UNKNOWN: 'Paystack reported a settlement status Campus Dash does not recognise.',
+};

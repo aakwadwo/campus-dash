@@ -20,7 +20,7 @@ export default function VendorStatusForm({ vendor }) {
           { value: 'ACTIVE', label: 'ACTIVE (can trade)' },
           { value: 'SUSPENDED', label: 'SUSPENDED (cannot trade)' },
         ]}
-        hint="Moving away from ACTIVE also closes them to new orders."
+        hint="Anything but ACTIVE closes the store to new orders. Orders already placed carry on."
       />
       <ReasonField placeholder="Hygiene complaint under review" />
       <div className="sm:col-span-2">

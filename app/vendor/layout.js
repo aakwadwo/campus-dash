@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
+import { vendorStoreId } from '@/lib/auth/landing';
 import AreaSwitcher from '@/app/area-switcher';
 import { UserIcon } from '@/app/ui';
 import { CampusDashMark } from '@/app/brand';
@@ -43,7 +44,8 @@ export const metadata = {
  */
 export default async function VendorLayout({ children }) {
   const me = await requireUser('/vendor');
-  const vendorId = me.vendor_ids?.[0] ?? null;
+  // An ACTIVE store, or a SUSPENDED one, which its owner still runs.
+  const vendorId = vendorStoreId(me);
   // The account area admits anybody who orders or delivers; everyone else is
   // sent back here from it (see the account layout).
   const hasAccountArea = Boolean(me.can_order || me.is_partner);

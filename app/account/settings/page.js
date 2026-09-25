@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth/session';
+import { vendorStoreId } from '@/lib/auth/landing';
 import { signOut } from '@/app/(auth)/login/actions';
 import { outstandingTerms } from '@/lib/terms';
 import ProfileForm from '../profile-form';
@@ -28,7 +29,7 @@ export default async function AccountSettingsPage() {
 
   // A store owner signs in with their number, so it is a credential rather than
   // a profile field. The database enforces that; the form just stops offering it.
-  const phoneIsCredential = Boolean(me.vendor_ids?.length) || me.is_admin;
+  const phoneIsCredential = Boolean(vendorStoreId(me)) || me.is_admin;
 
   return (
     <div>

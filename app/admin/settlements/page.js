@@ -1,18 +1,21 @@
+import Link from 'next/link';
 import {
   settlementOverview,
   settlementRuns,
-  settlementPayouts,
   payoutDestinations,
   payoutReadiness,
   partnerBalances,
   payoutHistory,
   payoutsAwaitingSettlement,
   vendorSplitPayments,
+  paystackVendorSummary,
   listVendors,
 } from '@/lib/admin';
 import { getPaymentProvider } from '@/lib/payments';
 import { formatPesewas } from '@/lib/util/money';
+import { SETTLEMENT_LABEL, accraTime } from '@/lib/settlement/vendor-settlement';
 import { Panel, Badge, Empty, Unavailable, Table, Row, Cell, Cedis, when } from '../ui';
+import RefreshButton from '../refresh-button';
 import SettlementControls from './settlement-controls';
 import PayoutDestinations from './payout-destinations';
 import ManualSettlement from './manual-settlement';
@@ -20,13 +23,20 @@ import ManualSettlement from './manual-settlement';
 export const dynamic = 'force-dynamic';
 
 /**
- * NULL MEANS THE QUESTION FAILED, [] MEANS THE ANSWER IS NONE.
+ * THE MONEY PAGE, IN TWO HALVES, BY WHO CONTROLS THE MONEY.
  *
- * Every fetch on this page is caught to null, and every panel below renders
- * <Unavailable> for null and <Empty> for an empty list. On a settlement screen
- * the difference is money: "nothing owed to Partners" and "we could not find
- * out what is owed to Partners" look identical as an empty table, and an
- * operator who reads the second as the first concludes the week is settled.
+ * NEEDS YOU: Partner payouts and manual vendor payments. Campus Dash gathers
+ * what is owed; an administrator pays it outside Campus Dash and records it.
+ * Every button on the page lives in this half, and each one does what it says.
+ *
+ * PAYSTACK HANDLES: stores with a subaccount. Paystack splits their share at
+ * the charge and later settles the subaccount to their bank or mobile money.
+ * Campus Dash controls neither, so this half is status and history, read from
+ * Paystack when the page loads, with no action but a re-read.
+ *
+ * NULL MEANS THE QUESTION FAILED, [] MEANS THE ANSWER IS NONE. Every fetch is
+ * caught to null and every panel renders <Unavailable> for null and <Empty>
+ * for an empty list. On a money screen the difference is money.
  */
 export default async function AdminSettlementsPage() {
   const [overview, runs, destinations, readiness, history] = await Promise.all([
@@ -34,19 +44,21 @@ export default async function AdminSettlementsPage() {
     settlementRuns(20).catch(() => null),
     payoutDestinations().catch(() => null),
     payoutReadiness().catch(() => null),
-    payoutHistory({ limit: 100 }).catch(() => null),
+    payoutHistory({ limit: 200 }).catch(() => null),
   ]);
 
   const [balances, awaiting, awaitingVendors, splits, vendors] = await Promise.all([
     partnerBalances().catch(() => null),
-    // THE WEEKLY LIST. Partner payouts are created by the run and stop there —
-    // a person sends the money and records it — so this is the screen's most
-    // operational panel, not a report.
+    // THE WEEKLY LIST. Partner payouts are created by the run and stop there:
+    // a person sends the money and records it.
     payoutsAwaitingSettlement('PARTNER').catch(() => null),
     payoutsAwaitingSettlement('VENDOR').catch(() => null),
-    vendorSplitPayments({ limit: 50 }).catch(() => null),
+    vendorSplitPayments({ limit: 200 }).catch(() => null),
     listVendors().catch(() => []),
   ]);
+
+  const paystackStores =
+    splits === null ? null : await paystackVendorSummary(splits).catch(() => null);
 
   // Whether Campus Dash can push money out at all on this deployment. It
   // cannot while PAYSTACK_TRANSFERS_ENABLED is off, and every label below that
@@ -68,34 +80,23 @@ export default async function AdminSettlementsPage() {
     overview === null ? null : overview.filter((r) => r.payee_type === 'VENDOR');
   const partnerPending =
     overview === null ? null : overview.filter((r) => r.payee_type === 'PARTNER');
-
-  const latestRun = runs?.[0];
-  const latestPayouts = latestRun
-    ? await settlementPayouts(latestRun.run_id).catch(() => null)
-    : [];
+  const partnerHistory =
+    history === null ? null : history.filter((p) => p.payee_type === 'PARTNER');
+  const vendorHistory = history === null ? null : history.filter((p) => p.payee_type === 'VENDOR');
 
   return (
     <>
-      <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settlements</h1>
-      <p className="text-muted mb-3 max-w-3xl text-sm leading-relaxed">
-        <span className="text-ink font-semibold">
-          Stores with a Paystack subaccount are paid automatically.
-        </span>{' '}
-        Paystack splits their food amount to their subaccount when the customer pays, and they never
-        appear in a run. There is nothing to pay them here.
-      </p>
-      <p className="text-muted mb-6 max-w-3xl text-sm leading-relaxed">
-        <span className="text-ink font-semibold">
-          Partners{transfersOn ? '' : ', and stores without a subaccount,'} are paid by you.
-        </span>{' '}
-        Gathering a run lists what is owed and sends nothing. You pay each one by mobile money
-        outside Campus Dash, then record it below with the transaction reference.
-      </p>
+      <h1 className="mb-6 text-2xl font-semibold tracking-tight">Money</h1>
+
+      <SectionHeading
+        title="Needs you"
+        body={`Partner payouts${transfersOn ? '' : ' and manual vendor payments'}. Campus Dash lists what is owed and sends nothing. You pay each one by mobile money outside Campus Dash, then record it with the transaction reference.`}
+      />
 
       <SettlementControls transfersOn={transfersOn} />
 
       <ManualSettlement
-        title="Partners to pay"
+        title="Partner payouts to pay"
         payouts={awaiting}
         payeeLabel="Partner"
         countLabel="Deliveries"
@@ -103,25 +104,52 @@ export default async function AdminSettlementsPage() {
       />
 
       <ManualSettlement
-        title="Stores without a Paystack split, to pay"
+        title="Manual vendor payments to pay"
         payouts={vendorPayouts}
         payeeLabel="Store"
         countLabel="Orders"
-        emptyText="No store payouts are waiting. A store paid by Paystack split never needs one."
+        emptyText="No manual vendor payments are waiting. A store paid by Paystack split never needs one."
       />
 
       <Panel
-        title="Paid automatically by Paystack split"
-        description="The store's food amount went to its Paystack subaccount when the customer paid. Campus Dash does not track what happens next: Paystack settles the subaccount to the store's mobile money on its own schedule, and that settlement is visible only in the Paystack dashboard."
+        title="Owed to stores without a Paystack split"
+        description="From orders paid without a split, not yet gathered into a manual vendor payment."
+      >
+        <PendingTable rows={vendorPending} />
+      </Panel>
+
+      <Panel
+        title="Owed to Partners, not yet gathered"
+        description="Earned and not yet paid. Gathered into a payout on Sunday once it reaches the threshold."
+      >
+        <PendingTable rows={partnerPending} />
+      </Panel>
+
+      <SectionHeading
+        title="Paystack handles these"
+        body="Stores with a Paystack subaccount. Paystack splits their share into the subaccount when the customer pays, then settles the subaccount to their bank or mobile money on its own schedule. Campus Dash controls neither step, so there is nothing to pay here. A split is not a settlement."
+      />
+
+      <Panel
+        title="Paystack vendor settlements"
+        description="One row per store paid by split. Settlement status is read from Paystack when this page loads, because Paystack sends no settlement webhook."
+        actions={<RefreshButton>Refresh from Paystack</RefreshButton>}
+      >
+        <PaystackStores rows={paystackStores} />
+      </Panel>
+
+      <Panel
+        title="Paystack splits"
+        description="Each order whose vendor share Paystack split into a subaccount. The money columns are Paystack's own signed record of the charge. Open an order to see whether its split has been settled."
       >
         <SplitLog rows={splits} />
       </Panel>
 
-      <PayoutDestinations destinations={destinations} />
+      <SectionHeading title="Records and setup" />
 
       <Panel
         title="Partner balances"
-        description="Every approved Partner and what they are owed. ELIGIBLE means the weekly run will pay them; anything under the threshold is carried forward, not lost. Change the threshold at /admin/pilot."
+        description="Every approved Partner and what they are owed. Anything under the threshold is carried forward, not lost. Change the threshold at /admin/pilot."
       >
         {balances === null ? (
           <Unavailable>Partner balances could not be loaded.</Unavailable>
@@ -164,12 +192,10 @@ export default async function AdminSettlementsPage() {
                   )}
                 </Cell>
                 <Cell>
-                  {!row.has_destination ? (
-                    <Badge tone="bad">None</Badge>
-                  ) : row.transfers_ready ? (
-                    <Badge tone="good">Ready</Badge>
+                  {row.has_destination ? (
+                    <Badge tone="good">On file</Badge>
                   ) : (
-                    <Badge tone="warn">Not registered</Badge>
+                    <Badge tone="bad">None</Badge>
                   )}
                 </Cell>
                 <Cell muted>{row.last_paid_at ? when(row.last_paid_at) : 'never'}</Cell>
@@ -181,14 +207,14 @@ export default async function AdminSettlementsPage() {
 
       <Panel
         title="Payout setup"
-        description="Every vendor and Partner who could be owed money, and whether they can actually be paid. The rows with nothing set are the ones that matter."
+        description="Every store and Partner who could be owed money, and how they are paid. A Partner is never in a Paystack split."
       >
         {readiness === null ? (
           <Unavailable>Payout setup could not be loaded.</Unavailable>
         ) : readiness.length === 0 ? (
           <Empty>No active vendors or approved Partners yet.</Empty>
         ) : (
-          <Table head={['Payee', 'Type', 'Account', 'Split', 'Transfers', 'Owed']} minWidth="44rem">
+          <Table head={['Payee', 'Type', 'Account', 'Paid by', 'Owed']} minWidth="40rem">
             {readiness.map((row) => (
               <Row key={`${row.payee_type}:${row.payee_id}`}>
                 <Cell>{row.payee_name ?? '-'}</Cell>
@@ -197,19 +223,12 @@ export default async function AdminSettlementsPage() {
                   {row.has_destination ? `${row.momo_network} ···${row.account_last3}` : 'none'}
                 </Cell>
                 <Cell>
-                  {row.split_ready ? (
-                    <Badge tone="good">Automatic</Badge>
-                  ) : row.setup_error ? (
-                    <Badge tone="bad">Failed</Badge>
+                  {row.payee_type === 'VENDOR' && row.split_ready ? (
+                    <Badge tone="good">Paystack split</Badge>
+                  ) : row.payee_type === 'VENDOR' && row.setup_error ? (
+                    <Badge tone="bad">Split setup failed</Badge>
                   ) : (
-                    <Badge tone="neutral">{transfersOn ? 'By transfer' : 'Paid by you'}</Badge>
-                  )}
-                </Cell>
-                <Cell>
-                  {row.transfers_ready ? (
-                    <Badge tone="good">Ready</Badge>
-                  ) : (
-                    <Badge tone="neutral">Not registered</Badge>
+                    <Badge tone="neutral">{transfersOn ? 'Transfer' : 'You, manually'}</Badge>
                   )}
                 </Cell>
                 <Cell>
@@ -221,167 +240,167 @@ export default async function AdminSettlementsPage() {
         )}
       </Panel>
 
+      <PayoutDestinations destinations={destinations} />
+
       <Panel
-        title="Owed to stores without a Paystack split"
-        description="The store's amount from orders paid without a split, not yet gathered into a payout. It is owed and has not been paid. Stores paid by split never appear here."
+        title="Partner payout history"
+        description="Every Partner payout gathered. PAID with provider 'manual' means an administrator recorded paying it outside Campus Dash, with the reference shown."
       >
-        <PendingTable rows={vendorPending} />
+        <PayoutHistory rows={partnerHistory} empty="No Partner payouts yet." />
       </Panel>
 
       <Panel
-        title="Owed to Partners, not yet gathered"
-        description="Earned and not yet paid. Gathered into a payout on Sunday once it reaches the threshold."
+        title="Manual vendor payment history"
+        description="Payments to stores without a Paystack split. Paystack settlements are not listed here. They are on each store's page."
       >
-        <PendingTable rows={partnerPending} />
+        <PayoutHistory rows={vendorHistory} empty="No manual vendor payments yet." />
       </Panel>
 
       <Panel
-        title="Payout history"
-        description="Every payout ever gathered. PAID with provider 'manual' means an administrator recorded paying it outside Campus Dash, with the reference shown. A FAILED payout released what it covered back to owed. Split payments are not payouts and are listed above."
+        title="Gathering runs"
+        description="Each run gathers what is owed for a period into payouts. Gathering pays nobody."
       >
-        {history === null ? (
-          <Unavailable>The payout history could not be loaded.</Unavailable>
-        ) : history.length === 0 ? (
-          <Empty>No payouts yet.</Empty>
-        ) : (
-          <Table
-            head={['Payee', 'Type', 'Amount', 'Status', 'Attempt', 'Reference', 'Created', 'Paid']}
-            minWidth="56rem"
-          >
-            {history.map((payout) => (
-              <Row key={payout.payout_id}>
-                <Cell>{payout.payee_name ?? '-'}</Cell>
-                <Cell>{payout.payee_type}</Cell>
-                <Cell numeric>
-                  <Cedis pesewas={payout.amount_pesewas} />
+        {runs === null ? (
+          <Unavailable>The runs could not be loaded.</Unavailable>
+        ) : runs.length ? (
+          <Table head={['Type', 'Period', 'Total', 'Payouts recorded', 'Status']} minWidth="40rem">
+            {runs.map((run) => (
+              <Row key={run.run_id}>
+                <Cell>{run.payee_type}</Cell>
+                <Cell muted>
+                  {new Date(run.period_start).toLocaleDateString()} →{' '}
+                  {new Date(run.period_end).toLocaleDateString()}
                 </Cell>
-                <Cell>
-                  <Badge tone={PAYOUT_TONE[payout.status] ?? 'neutral'}>{payout.status}</Badge>
-                  {payout.failure_reason ? (
-                    <span className="text-muted block text-xs">{payout.failure_reason}</span>
+                <Cell numeric>
+                  {formatPesewas(run.total_pesewas)}
+                  {run.deferred_pesewas > 0 ? (
+                    <span className="text-muted ml-1 text-xs">
+                      (+{formatPesewas(run.deferred_pesewas)} held)
+                    </span>
                   ) : null}
                 </Cell>
-                <Cell numeric>{payout.transfer_attempt}</Cell>
-                <Cell mono>{payout.provider_transfer_id ?? '-'}</Cell>
-                <Cell muted>{when(payout.created_at)}</Cell>
-                <Cell muted>{payout.paid_at ? when(payout.paid_at) : '-'}</Cell>
+                <Cell numeric>
+                  {run.paid_count}/{run.payout_count}
+                  {run.failed_count > 0 ? (
+                    <span className="text-bad ml-1">({run.failed_count} failed)</span>
+                  ) : null}
+                </Cell>
+                <Cell>
+                  <Badge
+                    tone={
+                      run.status === 'COMPLETED' ? 'good' : run.status === 'FAILED' ? 'bad' : 'warn'
+                    }
+                  >
+                    {run.status}
+                  </Badge>
+                </Cell>
               </Row>
             ))}
           </Table>
-        )}
-      </Panel>
-
-      <Panel title="Settlement runs">
-        {runs === null ? (
-          <Unavailable>The settlement runs could not be loaded.</Unavailable>
-        ) : runs.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[40rem] text-sm">
-              <thead className="text-muted text-left text-xs uppercase">
-                <tr>
-                  <th className="pb-2 font-medium">Type</th>
-                  <th className="pb-2 font-medium">Period</th>
-                  <th className="pb-2 font-medium">Total</th>
-                  <th className="pb-2 font-medium">Payouts</th>
-                  <th className="pb-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr key={run.run_id} className="border-line border-t">
-                    <td className="py-2">{run.payee_type}</td>
-                    <td className="text-muted py-2 text-xs tabular-nums">
-                      {new Date(run.period_start).toLocaleDateString()} →{' '}
-                      {new Date(run.period_end).toLocaleDateString()}
-                    </td>
-                    <td className="py-2 tabular-nums">
-                      {formatPesewas(run.total_pesewas)}
-                      {run.deferred_pesewas > 0 ? (
-                        <span className="text-muted ml-1 text-xs">
-                          (+{formatPesewas(run.deferred_pesewas)} held)
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="py-2 tabular-nums">
-                      {run.paid_count}/{run.payout_count}
-                      {run.failed_count > 0 ? (
-                        <span className="text-bad ml-1">({run.failed_count} failed)</span>
-                      ) : null}
-                    </td>
-                    <td className="py-2">
-                      <Badge
-                        tone={
-                          run.status === 'COMPLETED'
-                            ? 'good'
-                            : run.status === 'FAILED'
-                              ? 'bad'
-                              : 'warn'
-                        }
-                      >
-                        {run.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         ) : (
-          <Empty>No settlement runs yet.</Empty>
+          <Empty>No runs yet.</Empty>
         )}
       </Panel>
-
-      {latestRun ? (
-        <Panel
-          title="Most recent run"
-          description={`${latestRun.payee_type} · ${new Date(latestRun.created_at).toLocaleString()}`}
-        >
-          {latestPayouts === null ? (
-            <Unavailable>This run&apos;s payouts could not be loaded.</Unavailable>
-          ) : latestPayouts.length ? (
-            <table className="w-full text-sm">
-              <thead className="text-muted text-left text-xs uppercase">
-                <tr>
-                  <th className="pb-2 font-medium">Payee</th>
-                  <th className="pb-2 font-medium">Amount</th>
-                  <th className="pb-2 font-medium">Status</th>
-                  <th className="pb-2 font-medium">Transfer</th>
-                </tr>
-              </thead>
-              <tbody>
-                {latestPayouts.map((payout) => (
-                  <tr key={payout.payout_id} className="border-line border-t">
-                    <td className="py-2">{payout.payee_name}</td>
-                    <td className="py-2 tabular-nums">{formatPesewas(payout.amount_pesewas)}</td>
-                    <td className="py-2">
-                      <Badge
-                        tone={
-                          payout.status === 'PAID'
-                            ? 'good'
-                            : payout.status === 'FAILED'
-                              ? 'bad'
-                              : 'warn'
-                        }
-                      >
-                        {payout.status}
-                      </Badge>
-                      {payout.failure_reason ? (
-                        <span className="text-muted ml-2 text-xs">{payout.failure_reason}</span>
-                      ) : null}
-                    </td>
-                    <td className="text-muted py-2 font-mono text-xs">
-                      {payout.provider_transfer_id ?? '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <Empty>This run produced no payouts.</Empty>
-          )}
-        </Panel>
-      ) : null}
     </>
+  );
+}
+
+function SectionHeading({ title, body }) {
+  return (
+    <div className="border-line mt-10 mb-4 border-t pt-6 first-of-type:mt-0">
+      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      {body ? <p className="text-muted mt-1 max-w-3xl text-sm leading-relaxed">{body}</p> : null}
+    </div>
+  );
+}
+
+function PayoutHistory({ rows, empty }) {
+  if (rows === null) return <Unavailable>The history could not be loaded.</Unavailable>;
+  if (!rows.length) return <Empty>{empty}</Empty>;
+  return (
+    <Table
+      head={['Payee', 'Amount', 'Status', 'Attempt', 'Reference', 'Created', 'Paid']}
+      minWidth="52rem"
+    >
+      {rows.map((payout) => (
+        <Row key={payout.payout_id}>
+          <Cell>{payout.payee_name ?? '-'}</Cell>
+          <Cell numeric>
+            <Cedis pesewas={payout.amount_pesewas} />
+          </Cell>
+          <Cell>
+            <Badge tone={PAYOUT_TONE[payout.status] ?? 'neutral'}>{payout.status}</Badge>
+            {payout.failure_reason ? (
+              <span className="text-muted block text-xs">{payout.failure_reason}</span>
+            ) : null}
+          </Cell>
+          <Cell numeric>{payout.transfer_attempt}</Cell>
+          <Cell mono>{payout.provider_transfer_id ?? '-'}</Cell>
+          <Cell muted>{when(payout.created_at)}</Cell>
+          <Cell muted>{payout.paid_at ? when(payout.paid_at) : '-'}</Cell>
+        </Row>
+      ))}
+    </Table>
+  );
+}
+
+/**
+ * One row per store paid by split: what was split, and the latest settlement
+ * Paystack reports for its subaccount. No action column, deliberately.
+ */
+function PaystackStores({ rows }) {
+  if (rows === null) return <Unavailable>The Paystack stores could not be loaded.</Unavailable>;
+  if (!rows.length) return <Empty>No order has been paid by split yet.</Empty>;
+  return (
+    <Table
+      head={['Store', 'Split orders', 'Vendor amount', 'Split', 'Latest settlement', 'Settled', '']}
+      minWidth="60rem"
+    >
+      {rows.map((row) => {
+        const latest = row.latest ? SETTLEMENT_LABEL[row.latest.status] : null;
+        return (
+          <Row key={row.vendorId}>
+            <Cell>{row.vendorName ?? '-'}</Cell>
+            <Cell numeric>{row.orders}</Cell>
+            <Cell numeric>
+              <Cedis pesewas={row.vendorSharePesewas} />
+            </Cell>
+            <Cell>
+              <Badge tone={row.awaiting ? 'warn' : 'good'}>
+                {row.confirmed}/{row.orders} confirmed
+              </Badge>
+            </Cell>
+            <Cell>
+              {!row.readable ? (
+                <span className="text-muted text-xs">not readable here</span>
+              ) : row.error ? (
+                <span className="text-muted text-xs">could not be read</span>
+              ) : latest ? (
+                <>
+                  <Badge tone={latest.tone}>{latest.label}</Badge>
+                  <span className="text-faint block font-mono text-xs">{row.latest.id}</span>
+                </>
+              ) : (
+                <span className="text-muted text-xs">none yet</span>
+              )}
+            </Cell>
+            <Cell muted>
+              {row.lastSettled
+                ? accraTime(row.lastSettled.settlementDate ?? row.lastSettled.createdAt)
+                : '-'}
+            </Cell>
+            <Cell>
+              <Link
+                href={`/admin/vendors/${row.vendorId}#settlements`}
+                className="text-brand-700 text-xs font-semibold underline underline-offset-4"
+              >
+                View settlements
+              </Link>
+            </Cell>
+          </Row>
+        );
+      })}
+    </Table>
   );
 }
 
@@ -450,8 +469,9 @@ function PendingTable({ rows }) {
  * subaccount receiving its full share. "Awaiting Paystack's confirmation" means
  * the payment is confirmed and the split was requested, but the signed event
  * that proves it has not been stored yet — normally a matter of seconds.
- * NEITHER means the store has received the money: the subaccount is settled to
- * mobile money by Paystack afterwards, untracked here, and the row says so.
+ * NEITHER means the store has received the money: Paystack settles the
+ * subaccount afterwards, and that settlement is read per order and per store,
+ * never inferred from the split.
  */
 function SplitLog({ rows }) {
   if (rows === null) return <Unavailable>The split payments could not be loaded.</Unavailable>;
@@ -475,7 +495,14 @@ function SplitLog({ rows }) {
       {rows.map((row) => (
         <Row key={row.orderId}>
           <Cell>{row.vendorName ?? '-'}</Cell>
-          <Cell mono>{row.orderNumber ?? '-'}</Cell>
+          <Cell mono>
+            <Link
+              href={`/admin/orders/${row.orderId}`}
+              className="text-brand-700 underline underline-offset-4"
+            >
+              {row.orderNumber ?? '-'}
+            </Link>
+          </Cell>
           <Cell numeric>{money(row.vendorSharePesewas)}</Cell>
           <Cell numeric muted>
             {money(row.paystackFeePesewas)}
@@ -507,9 +534,7 @@ function SplitLog({ rows }) {
             ) : (
               <Badge tone="warn">Awaiting Paystack&apos;s confirmation</Badge>
             )}
-            <span className="text-muted mt-1 block text-xs">
-              Automatically split by Paystack. MoMo settlement not tracked here.
-            </span>
+            <span className="text-muted mt-1 block text-xs">A split, not a settlement.</span>
           </Cell>
         </Row>
       ))}

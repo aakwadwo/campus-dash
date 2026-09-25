@@ -228,7 +228,8 @@ describe('payout honesty: the split record', () => {
     }
     assert.doesNotMatch(page, /Fee on store share/);
     assert.match(page, /borne by Campus Dash/);
-    assert.match(page, /Automatically split by Paystack\. MoMo settlement not tracked here\./);
+    // A split is labelled as a split, never as the store being settled.
+    assert.match(page, /A split, not a settlement\./);
   });
 });
 
@@ -247,10 +248,10 @@ describe('payout honesty: the screens say what happens', () => {
     assert.match(manual, /Campus Dash does not send this money/);
     // A FAILED payout is never offered for recording (the database refuses it).
     assert.match(manual, /p\.status === 'PENDING' \|\| p\.status === 'PROCESSING'/);
-    // Split payments are shown as automatic, with no pay action, and MoMo
-    // settlement is stated as untracked.
-    assert.match(page, /Paid automatically by Paystack split/);
-    assert.match(page, /MoMo settlement not tracked here/);
+    // Split payments sit in the half Paystack handles, with no pay action,
+    // and a split is never presented as the store's settlement.
+    assert.match(page, /Paystack handles these/);
+    assert.match(page, /A split is not a settlement/);
     assert.equal(/settled by transfer, daily/.test(page), false);
   });
 

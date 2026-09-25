@@ -3704,6 +3704,110 @@ $$;
 ALTER FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_before public.vendors%rowtype;
+  v_after  public.vendors%rowtype;
+  v_items  uuid[] := '{}';
+  v_close  public.admin_actions%rowtype;
+begin
+  if not public.is_admin() then
+    raise exception 'admin privileges required' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_open is null then
+    raise exception 'say whether the store should be open' using errcode = 'check_violation';
+  end if;
+
+  select * into v_before from public.vendors where id = p_vendor_id for update;
+  if not found then
+    raise exception 'vendor not found' using errcode = 'no_data_found';
+  end if;
+
+  -- Open and closed are states of a TRADING store. A suspended one is closed
+  -- by its status, and is reinstated through admin_set_vendor_status().
+  if v_before.status <> 'ACTIVE' then
+    raise exception 'only an ACTIVE store can be opened or closed'
+      using errcode = 'check_violation';
+  end if;
+
+  if not p_open then
+    if not v_before.is_accepting_orders then
+      raise exception 'this store is already closed' using errcode = 'check_violation';
+    end if;
+
+    -- WHAT THIS CLOSE TURNS OFF, recorded so that reopening can put back
+    -- exactly this and nothing else.
+    select coalesce(array_agg(m.id order by m.id), '{}') into v_items
+      from public.menu_items m
+     where m.vendor_id = p_vendor_id and m.is_active;
+
+    -- The store's own close: the active menu off, the catalogue untouched.
+    perform public.vendor_set_accepting_orders(p_vendor_id, false);
+  else
+    if v_before.is_accepting_orders then
+      raise exception 'this store is already open' using errcode = 'check_violation';
+    end if;
+
+    select * into v_close
+      from public.admin_actions a
+     where a.target_type = 'vendor' and a.target_id = p_vendor_id
+       and a.action = 'VENDOR_CLOSED_BY_ADMIN'
+     order by a.id desc
+     limit 1;
+
+    -- ONLY AN UNTOUCHED ADMIN CLOSE IS UNDONE. The close stamped the items it
+    -- turned off with its own transaction time; any later edit to this store's
+    -- menu, by anybody, means the menu is no longer the one that was closed.
+    if v_close.id is null
+       or exists (
+         select 1 from public.menu_items m
+          where m.vendor_id = p_vendor_id and m.updated_at > v_close.created_at
+       ) then
+      raise exception 'the store has nothing on its menu. It opens when the store turns an item on'
+        using errcode = 'check_violation';
+    end if;
+
+    select coalesce(array_agg(m.id order by m.id), '{}') into v_items
+      from public.menu_items m
+     where m.vendor_id = p_vendor_id
+       and not m.is_active
+       and m.id in (
+         select (jsonb_array_elements_text(coalesce(v_close.details -> 'turned_off', '[]'::jsonb)))::uuid
+       );
+
+    update public.menu_items
+       set is_active = true, updated_at = now()
+     where id = any(v_items);
+
+    -- The store's own open, with its own rule: refused unless an item a
+    -- customer can actually order is now on.
+    perform public.vendor_set_accepting_orders(p_vendor_id, true);
+  end if;
+
+  select * into v_after from public.vendors where id = p_vendor_id;
+
+  perform public.log_admin_action(
+    case when p_open then 'VENDOR_OPENED_BY_ADMIN' else 'VENDOR_CLOSED_BY_ADMIN' end,
+    'vendor', p_vendor_id, p_reason,
+    to_jsonb(v_before), to_jsonb(v_after),
+    jsonb_build_object(case when p_open then 'turned_on' else 'turned_off' end, to_jsonb(v_items))
+  );
+
+  return v_after;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") IS 'An administrator closing or reopening an ACTIVE store, audited. Closing is the store''s own close through vendor_set_accepting_orders(): the active menu off, the catalogue untouched, and the items it turned off recorded in admin_actions.details. Reopening turns exactly those items back on and opens the store, and is refused if the menu has been edited since, because an administrator does not choose what a store is cooking.';
+
+
 CREATE OR REPLACE FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") RETURNS "public"."vendors"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -3759,6 +3863,14 @@ begin
          is_accepting_orders = case when p_status = 'ACTIVE' then is_accepting_orders else false end
    where id = p_vendor_id
   returning * into v_after;
+
+  -- REINSTATED, NOT APPROVED. Suspension closed the store and left its menu
+  -- alone, so the menu decides again: open if an orderable item is on. Only
+  -- from SUSPENDED — approval never opens a store on its owner's behalf.
+  if v_before.status = 'SUSPENDED' and p_status = 'ACTIVE' then
+    perform public.vendor_apply_menu_state(p_vendor_id);
+    select * into v_after from public.vendors where id = p_vendor_id;
+  end if;
 
   perform public.log_admin_action(
     'VENDOR_STATUS_' || p_status::text, 'vendor', p_vendor_id, p_reason,
@@ -6969,6 +7081,30 @@ ALTER FUNCTION "public"."max_item_price_pesewas"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."max_item_price_pesewas"() IS 'The most one unit of any item can cost, in pesewas. A technical ceiling for the whole platform, not a price any store chose. Equal to the limit vendor_create_menu_item() and vendor_update_menu_item() place on a fixed price.';
+
+
+CREATE OR REPLACE FUNCTION "public"."menu_item_scan_needs_scan_store"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+begin
+  -- Only the MOVE to eligible is checked. An item already eligible keeps its
+  -- flag through every other edit, whatever the store's setting is today.
+  if new.scan_eligible
+     and (tg_op = 'INSERT' or not old.scan_eligible)
+     and not exists (
+       select 1 from public.vendors v
+        where v.id = new.vendor_id and v.can_accept_scans
+     ) then
+    raise exception 'meal scans are not turned on for this store'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."menu_item_scan_needs_scan_store"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") RETURNS bigint
@@ -12213,6 +12349,9 @@ CREATE OR REPLACE TRIGGER "locations_no_cycles" BEFORE INSERT OR UPDATE OF "pare
 CREATE OR REPLACE TRIGGER "locations_set_updated_at" BEFORE UPDATE ON "public"."locations" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
+CREATE OR REPLACE TRIGGER "menu_items_scan_needs_scan_store" BEFORE INSERT OR UPDATE OF "scan_eligible" ON "public"."menu_items" FOR EACH ROW EXECUTE FUNCTION "public"."menu_item_scan_needs_scan_store"();
+
+
 CREATE OR REPLACE TRIGGER "menu_items_set_updated_at" BEFORE UPDATE ON "public"."menu_items" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
 
 
@@ -13038,6 +13177,11 @@ GRANT ALL ON FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p
 GRANT ALL ON FUNCTION "public"."admin_set_user_suspended"("p_user_id" "uuid", "p_suspended" boolean, "p_reason" "text") TO "authenticated";
 
 
+REVOKE ALL ON FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."admin_set_vendor_open"("p_vendor_id" "uuid", "p_open" boolean, "p_reason" "text") TO "authenticated";
+
+
 REVOKE ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."admin_set_vendor_scans"("p_vendor_id" "uuid", "p_accepts" boolean, "p_reason" "text") TO "authenticated";
@@ -13433,6 +13577,10 @@ GRANT ALL ON FUNCTION "public"."mark_webhook_processed"("p_webhook_id" "uuid", "
 
 REVOKE ALL ON FUNCTION "public"."max_item_price_pesewas"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."max_item_price_pesewas"() TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."menu_item_scan_needs_scan_store"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."menu_item_scan_needs_scan_store"() TO "service_role";
 
 
 REVOKE ALL ON FUNCTION "public"."menu_item_unit_price"("p_item" "public"."menu_items", "p_line" "jsonb") FROM PUBLIC;

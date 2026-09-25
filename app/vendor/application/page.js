@@ -21,7 +21,11 @@ export default async function VendorApplicationPage() {
   const application = await getMyApplication();
 
   if (!application) redirect('/vendor/signup');
-  if (application.status === 'ACTIVE') redirect(`/vendor/${application.vendor_id}`);
+  // A SUSPENDED store is still its owner's to run: it has orders to finish and
+  // a menu to keep, and its dashboard says it is suspended.
+  if (application.status === 'ACTIVE' || application.status === 'SUSPENDED') {
+    redirect(`/vendor/${application.vendor_id}`);
+  }
 
   const rejected = application.status === 'REJECTED';
   const suspended = application.status === 'SUSPENDED';

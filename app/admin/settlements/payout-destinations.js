@@ -30,7 +30,7 @@ export default function PayoutDestinations({ destinations }) {
   return (
     <Panel
       title="Payout destinations"
-      description="Mobile money accounts settlement transfers are sent to. Server-only: no client role can read this table."
+      description="The mobile money account each store and Partner is paid to. A store's subaccount is where Paystack splits its share. Server-only: no client role can read this table."
     >
       {destinations === null ? (
         <div className="mb-6">
@@ -61,10 +61,17 @@ export default function PayoutDestinations({ destinations }) {
                     <span className="text-muted ml-2 text-xs">{row.payee_type}</span>
                   </td>
                   <td className="py-2">{row.momo_network}</td>
-                  <td className="py-2 font-mono text-xs tabular-nums">{row.account_number}</td>
+                  {/* THE LAST THREE DIGITS ONLY, as everywhere else an operator
+                      reads a destination. The whole number is re-typed in the
+                      form below when it changes, never read off this screen. */}
+                  <td className="py-2 font-mono text-xs tabular-nums">
+                    ···{String(row.account_number ?? '').slice(-3)}
+                  </td>
                   <td className="py-2">{row.account_name}</td>
                   <td className="py-2 text-xs">
-                    {row.provider_subaccount_code ? (
+                    {row.payee_type !== 'VENDOR' ? (
+                      <span className="text-muted">never split</span>
+                    ) : row.provider_subaccount_code ? (
                       <span className="text-good font-mono">{row.provider_subaccount_code}</span>
                     ) : row.subaccount_error ? (
                       <span className="text-bad" title={row.subaccount_error}>
@@ -82,7 +89,10 @@ export default function PayoutDestinations({ destinations }) {
                     )}
                   </td>
                   <td className="py-2">
-                    {row.provider_subaccount_code ? null : (
+                    {/* A PARTNER IS NEVER IN A SPLIT (hard rule 17), so a
+                        subaccount for one would be registered and never used.
+                        The button is offered only where it has an effect. */}
+                    {row.payee_type !== 'VENDOR' || row.provider_subaccount_code ? null : (
                       <form action={sync}>
                         <input type="hidden" name="payee_type" value={row.payee_type} />
                         <input type="hidden" name="payee_id" value={row.payee_id} />

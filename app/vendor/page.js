@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { ButtonLink, TextLink } from '@/app/ui';
 import { getMyVendors } from '@/lib/vendor';
 import { getCapabilities, myLanding } from '@/lib/auth/session';
+import { vendorStoreId } from '@/lib/auth/landing';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,7 @@ const HOME_LABEL = {
 export default async function VendorIndexPage() {
   const me = await getCapabilities();
 
-  if (me.vendor_ids?.length) {
+  if (vendorStoreId(me)) {
     const vendors = await getMyVendors();
     if (vendors.length > 0) redirect(`/vendor/${vendors[0].vendor_id}`);
   }

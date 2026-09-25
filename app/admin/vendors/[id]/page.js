@@ -7,6 +7,7 @@ import { priceSummary } from '@/lib/util/item-price';
 import { Panel, Badge, Empty, Unavailable } from '../../ui';
 import VendorSettingsForm from './vendor-settings-form';
 import VendorStatusForm from './vendor-status-form';
+import VendorOpenForm from './vendor-open-form';
 import VendorScansForm from './vendor-scans-form';
 import VendorVariablePricingForm from './vendor-variable-pricing-form';
 import VendorReviewForm from './vendor-review-form';
@@ -14,7 +15,14 @@ import VendorImageForms from './vendor-image-forms';
 import MenuForms from './menu-forms';
 import DeleteVendorForm from './delete-vendor-form';
 import { vendorImageUrl } from '@/lib/verification/documents';
-import { payoutDestinations } from '@/lib/admin';
+import {
+  payoutDestinations,
+  vendorSettlements,
+  pendingSettlement,
+  payoutsAwaitingSettlement,
+  payoutHistory,
+} from '@/lib/admin';
+import VendorMoney from './vendor-money';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,6 +88,24 @@ export default async function VendorDetailPage({ params }) {
       (rows) => (rows ?? []).find((d) => d.payee_type === 'VENDOR' && d.payee_id === id) ?? null
     )
     .catch(() => undefined);
+
+  // THE STORE'S MONEY. Each read fails on its own, to null, so a Paystack
+  // outage costs this panel its settlements and nothing else on the page.
+  const mine = (rows) => (rows ?? []).filter((r) => r.payee_id === id);
+  const [settlementHistory, owed, awaiting, paid] = await Promise.all([
+    vendorSettlements(id, { currentSubaccount: payout?.provider_subaccount_code ?? null }).catch(
+      () => null
+    ),
+    pendingSettlement('VENDOR')
+      .then(mine)
+      .catch(() => null),
+    payoutsAwaitingSettlement('VENDOR')
+      .then(mine)
+      .catch(() => null),
+    payoutHistory({ payeeType: 'VENDOR', limit: 500 })
+      .then(mine)
+      .catch(() => null),
+  ]);
 
   const menu = menuResult.error ? null : (menuResult.data ?? []);
   const locations = locationsResult.error ? null : (locationsResult.data ?? []);
@@ -170,7 +196,24 @@ export default async function VendorDetailPage({ params }) {
         )}
       </Panel>
 
-      <Panel title="Status" description="Only an ACTIVE vendor can be open for orders.">
+      <VendorMoney
+        vendorId={vendor.id}
+        history={settlementHistory}
+        manual={{ owed, awaiting, paid }}
+        destination={payout ?? null}
+      />
+
+      <Panel
+        title="Open or closed"
+        description="The same open sign the store uses. Closing stops new orders; nothing already placed is touched."
+      >
+        <VendorOpenForm vendor={vendor} />
+      </Panel>
+
+      <Panel
+        title="Status"
+        description="SUSPENDED takes the store off Campus Dash: customers cannot see or order from it. Its menu, orders and history are kept, and the owner can still sign in and finish orders already placed. Returning it to ACTIVE reopens it with the menu it had."
+      >
         <VendorStatusForm vendor={vendor} />
       </Panel>
 

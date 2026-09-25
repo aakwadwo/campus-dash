@@ -32,12 +32,26 @@ lists who has reached the threshold.
 
 ### What "paid" means, at each stage
 
-| Stage                                  | Evidence Campus Dash holds                      | Shown as                           |
-| -------------------------------------- | ----------------------------------------------- | ---------------------------------- |
-| Split to the store's subaccount        | Paystack's signed `charge.success` split shares | "Split confirmed by Paystack"      |
-| Subaccount settled to the store's MoMo | none — Paystack's schedule, no webhook          | "MoMo settlement not tracked here" |
-| Store or Partner paid by hand          | the MoMo reference an administrator recorded    | PAID, provider `manual`            |
-| Money received in the payee's account  | none                                            | never claimed                      |
+| Stage                                  | Evidence                                                             | Shown as                      |
+| -------------------------------------- | -------------------------------------------------------------------- | ----------------------------- |
+| Customer paid                          | a succeeded `payments` row, confirmed by webhook or verify           | Payment                       |
+| Split to the store's subaccount        | Paystack's signed `charge.success` split shares                      | "Split confirmed by Paystack" |
+| Subaccount settled to the store's bank | a Paystack settlement whose own transaction list contains the charge | Vendor settlement: "Settled"  |
+| Store or Partner paid by hand          | the MoMo reference an administrator recorded                         | PAID, provider `manual`       |
+| Money received in the payee's account  | none                                                                 | never claimed                 |
+
+**A split is not a settlement, and neither is a payout.** The split credits the
+subaccount at the charge. Paystack then settles the subaccount to the store's
+bank or mobile money on the subaccount's own schedule, which Campus Dash does
+not start or control. Paystack sends no settlement webhook, so nothing about a
+settlement is stored: the admin screens read it from Paystack when they load
+(`GET /settlement?subaccount=…` and `GET /settlement/:id/transactions`, through
+`PaymentProvider.listSettlements()` and `settlementTransactions()`), and a
+"Refresh from Paystack" control re-reads. An order is shown as settled only
+when a settlement's transaction list contains its reference; see
+`lib/settlement/vendor-settlement.js`. Paystack reports no subaccount balance,
+so none is shown. There is no admin action anywhere that pays a store Paystack
+settles.
 
 Reaching Sunday, gathering a run, or a successful charge never makes anything
 PAID. Only a split at the charge (for a store's share) or a recorded payment
@@ -239,8 +253,9 @@ The shape was chosen so the answer would not matter, and it did not: collect
 centrally and transfer later produces exactly the `payments`, `allocations`,
 `settlement_runs` and `payouts` rows a split-at-source provider would. Only
 which adapter fills in `provider_transaction_id` and `provider_transfer_id`
-changes. **No splits and no subaccounts are used** — Campus Dash's own
-allocations are the source of truth for what a vendor and a Partner are owed.
+changes. Where a store has a subaccount, its share is split at the charge
+(see above); Campus Dash's own allocations remain the source of truth for what
+a vendor and a Partner are owed either way.
 
 Paystack's transaction fee is absorbed by Campus Dash. It does not reduce the
 vendor's food entitlement or the Partner's delivery entitlement: allocations are
