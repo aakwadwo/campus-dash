@@ -10,7 +10,8 @@ import {
 import { vendorImageUrl } from '@/lib/verification/documents';
 import { signOut } from '@/app/(auth)/login/actions';
 import { PageHeader, Button, Callout, Card, Disclosure } from '@/app/ui';
-import { StoreDetailsForm, ImageForms, PayoutForm } from './profile-forms';
+import { hasVendorLocation, vendorLocationLine } from '@/lib/util/vendor-location';
+import { StoreDetailsForm, ImageForms, LocationForm, PayoutForm } from './profile-forms';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Store' };
@@ -44,6 +45,9 @@ export default async function VendorProfilePage() {
 
   const gallery = images.map((image) => ({ ...image, url: vendorImageUrl(image.storage_path) }));
   const category = categories.find((c) => c.id === vendor.category_id)?.name ?? null;
+  // STORES THAT PREDATE THE QUESTION have not answered it. Nothing about the
+  // store depends on the answer; this only asks for it.
+  const located = hasVendorLocation(vendor);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 pt-5 pb-16 sm:px-6 sm:pt-8">
@@ -65,6 +69,19 @@ export default async function VendorProfilePage() {
       <Card className="mt-8 px-5">
         <Disclosure title="Details" summary={[vendor.name, category].filter(Boolean).join(' · ')}>
           <StoreDetailsForm vendor={vendor} categories={categories} locations={locations} />
+        </Disclosure>
+
+        <Disclosure
+          title="Location"
+          summary={vendorLocationLine(vendor) ?? 'Not added yet'}
+          defaultOpen={!located}
+        >
+          {located ? null : (
+            <p className="text-muted mb-4 text-sm leading-relaxed">
+              Tell customers where to find you. It appears under your store name.
+            </p>
+          )}
+          <LocationForm vendor={vendor} />
         </Disclosure>
 
         <Disclosure

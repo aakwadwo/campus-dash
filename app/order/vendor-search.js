@@ -4,6 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { matchesQuery } from '@/lib/util/catalogue';
+import { vendorLocationLine } from '@/lib/util/vendor-location';
 import { isVariablePrice, priceSummary } from '@/lib/util/item-price';
 import { SearchIcon, VendorCard, Money, ChevronRightIcon, ImagePlaceholder } from '../ui';
 
@@ -147,6 +148,7 @@ function StoreGrid({ vendors }) {
             href={`/order/${vendor.vendor_id}`}
             imageUrl={vendor.image_url}
             meta={vendor.category_name}
+            location={vendorLocationLine(vendor)}
           />
         </li>
       ))}

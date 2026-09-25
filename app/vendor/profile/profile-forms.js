@@ -2,8 +2,10 @@
 
 import { useActionState } from 'react';
 import StorePhotos from '@/app/store-photos';
+import VendorLocationFields from '@/app/vendor-location-fields';
 import {
   updateProfileAction,
+  updateLocationAction,
   addImageAction,
   deleteImageAction,
   setPrimaryImageAction,
@@ -135,6 +137,25 @@ export function StoreDetailsForm({ vendor, categories, locations }) {
 
       <Button type="submit" disabled={pending}>
         {pending ? 'Saving…' : 'Save details'}
+      </Button>
+      <Result state={state} />
+    </form>
+  );
+}
+
+/**
+ * On or off campus, and where exactly. What a customer reads under the store's
+ * name. Pre-filled with whatever the store has already said and nothing else.
+ */
+export function LocationForm({ vendor }) {
+  const [state, action, pending] = useActionState(updateLocationAction, {});
+
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="vendor_id" value={vendor.vendor_id} />
+      <VendorLocationFields area={vendor.location_area} details={vendor.location_details} />
+      <Button type="submit" disabled={pending}>
+        {pending ? 'Saving…' : 'Save location'}
       </Button>
       <Result state={state} />
     </form>

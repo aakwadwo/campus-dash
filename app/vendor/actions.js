@@ -8,6 +8,7 @@ import { revalidatePath } from 'next/cache';
 import { vendorMarkReady, vendorSetAcceptingOrders } from '@/lib/orders/transitions';
 import {
   updateProfile,
+  updateLocation,
   addImage,
   removeImage,
   setPrimaryImage,
@@ -27,6 +28,7 @@ import { NOTIFICATION_EVENT } from '@/lib/notifications';
 import { syncPayoutSubaccount } from '@/lib/settlement/destinations';
 import { uploadVendorImage, deleteVendorImage } from '@/lib/verification/documents';
 import { readPricingForm, parsePositiveCedis } from '@/lib/util/item-price';
+import { readVendorLocation } from '@/lib/util/vendor-location';
 
 /**
  * Vendor actions.
@@ -379,6 +381,24 @@ export async function updateProfileAction(_prev, formData) {
   revalidatePath(`/vendor/${vendorId}`);
   revalidatePath('/vendor/profile');
   return { ok: true, message: 'Store details saved.' };
+}
+
+/**
+ * On or off campus, and where exactly. Its own form and its own write, so a
+ * store that has never said where it is can say so without re-saving (and
+ * re-validating) every other detail. Ownership is checked in SQL.
+ */
+export async function updateLocationAction(_prev, formData) {
+  const vendorId = str(formData, 'vendor_id');
+  const location = readVendorLocation(formData);
+  if (!location.ok) return { ok: false, message: location.message };
+  try {
+    await updateLocation({ vendorId, area: location.area, details: location.details });
+  } catch (error) {
+    return fail(error);
+  }
+  revalidatePath('/vendor/profile');
+  return { ok: true, message: 'Location saved.' };
 }
 
 /**

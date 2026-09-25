@@ -491,6 +491,9 @@ describe('schema invariants', () => {
       'vendor_set_menu_item_available',
       'vendor_set_payout_destination',
       'vendor_signup',
+      // On or off campus and where, in the store's words. Owner only, and it
+      // writes those two columns and nothing else.
+      'vendor_update_location',
       'vendor_update_profile',
     ];
 

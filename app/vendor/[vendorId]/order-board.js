@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { setAcceptingOrdersAction } from '../actions';
 import { formatPesewas } from '@/lib/util/money';
 import { orderLabel } from '@/lib/orders/state';
+import { hasVendorLocation } from '@/lib/util/vendor-location';
 import {
   Button,
   ButtonLink,
@@ -140,6 +141,20 @@ export default function OrderBoard({
           Customers cannot see or order from your store while it is suspended. Finish any order
           already placed as usual. Your menu and history are kept, and your store reopens when
           Campus Dash reinstates it.
+        </Callout>
+      ) : null}
+
+      {/* ASKED, NEVER REQUIRED. A store that registered before the question
+          trades exactly as before; this only points at where to answer it. */}
+      {!suspended && !hasVendorLocation(vendor) ? (
+        <Callout tone="neutral" className="mt-4">
+          Customers cannot see where your store is yet.{' '}
+          <Link
+            href="/vendor/profile"
+            className="text-brand-700 font-semibold underline-offset-4 hover:underline"
+          >
+            Add your location
+          </Link>
         </Callout>
       ) : null}
 

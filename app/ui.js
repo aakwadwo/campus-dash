@@ -766,7 +766,7 @@ export function ImagePlaceholder({ name = '', className = '', ratio = 'aspect-[1
  * so it cannot waste a tap. Greying the whole card made a real place read as a
  * broken one.
  */
-export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
+export function VendorCard({ vendor, href, meta = null, location = null, imageUrl = null }) {
   const open = vendor.is_accepting_orders;
 
   const body = (
@@ -804,6 +804,11 @@ export function VendorCard({ vendor, href, meta = null, imageUrl = null }) {
         <p className="leading-snug font-semibold break-words" title={vendor.name}>
           {vendor.name}
         </p>
+        {location ? (
+          <p className="text-muted mt-0.5 truncate text-sm" title={location}>
+            {location}
+          </p>
+        ) : null}
         {meta ? (
           <p className="text-muted mt-1 flex flex-wrap items-center gap-x-2 text-sm">{meta}</p>
         ) : null}

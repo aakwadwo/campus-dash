@@ -8,6 +8,7 @@ import {
 } from './actions';
 import { Button, ErrorNote, Field, Input, Select, Textarea, TextLink } from '@/app/ui';
 import OtpInput from '@/app/otp-input';
+import VendorLocationFields from '@/app/vendor-location-fields';
 
 /**
  * The store form first, the code second.
@@ -189,6 +190,8 @@ export default function VendorSignUpForm({
           ))}
         </Select>
       </Field>
+
+      <VendorLocationFields area={v.locationArea} details={v.locationDetails} />
 
       {/* THE NUMBER THE ACCOUNT ALREADY HAS, and it can be changed. It becomes
           how the store signs in, so it is ALWAYS confirmed with a code —
@@ -385,6 +388,8 @@ function Carried({ values, phone }) {
       <input type="hidden" name="is_student" value={values.isStudent ?? ''} />
       <input type="hidden" name="description" value={values.description ?? ''} />
       <input type="hidden" name="category_id" value={values.categoryId ?? ''} />
+      <input type="hidden" name="location_area" value={values.locationArea ?? ''} />
+      <input type="hidden" name="location_details" value={values.locationDetails ?? ''} />
       <input type="hidden" name="phone" value={values.phoneRaw ?? ''} />
       {/* E.164, and the one the code was sent to. */}
       <input type="hidden" name="verified_phone" value={phone ?? ''} />

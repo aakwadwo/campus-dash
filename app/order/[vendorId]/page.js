@@ -9,6 +9,7 @@ import { OrderingGate } from '../page';
 import MenuAndBasket from './menu-and-basket';
 import { Container, ImagePlaceholder, BackLink } from '../../ui';
 import { catalogueLabel } from '@/lib/util/catalogue';
+import { vendorLocationLine } from '@/lib/util/vendor-location';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,6 +67,8 @@ export default async function VendorMenuPage({ params }) {
   }));
   const [primary, ...more] = images;
   const label = catalogueLabel(vendor.category_slug);
+  // In the store's own words. A store that has not said yet shows nothing here.
+  const whereabouts = vendorLocationLine(vendor);
 
   // THE STORE'S HEADER, handed to the menu so it can step aside at checkout:
   // a checkout under a store's photo had two back links and began mid-page.
@@ -101,6 +104,9 @@ export default async function VendorMenuPage({ params }) {
           <h1 className="text-display text-2xl font-semibold break-words sm:text-4xl">
             {vendor.name}
           </h1>
+          {whereabouts ? (
+            <p className="text-muted mt-1.5 text-sm break-words">{whereabouts}</p>
+          ) : null}
           <p className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
             {vendor.is_accepting_orders ? (
               <span className="text-good inline-flex items-center gap-1.5 font-semibold">
@@ -130,7 +136,11 @@ export default async function VendorMenuPage({ params }) {
                 <span className="text-muted">{vendor.category_name}</span>
               </>
             ) : null}
-            {vendor.location_path ? (
+            {/* ONE LOCATION FOR A CUSTOMER. The campus place is the fallback
+                for a store that has not described itself; once it has, its own
+                words under the name are the location. The place itself stays:
+                it is what a Partner is sent to. */}
+            {vendor.location_path && !whereabouts ? (
               <>
                 <span className="text-faint">·</span>
                 <span className="text-muted">{vendor.location_path}</span>

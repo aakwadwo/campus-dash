@@ -829,6 +829,10 @@ CREATE TABLE IF NOT EXISTS "public"."vendors" (
     "reviewed_at" timestamp with time zone,
     "reviewed_by" "uuid",
     "can_use_variable_pricing" boolean DEFAULT false NOT NULL,
+    "location_area" "text",
+    "location_details" "text",
+    CONSTRAINT "vendors_location_area_check" CHECK (("location_area" = ANY (ARRAY['ON_CAMPUS'::"text", 'OFF_CAMPUS'::"text"]))),
+    CONSTRAINT "vendors_location_details_shape" CHECK ((("location_details" IS NULL) OR (("char_length"("btrim"("location_details")) >= 1) AND ("char_length"("btrim"("location_details")) <= 160)))),
     CONSTRAINT "vendors_phone_e164" CHECK (("phone" ~ '^\+[1-9]\d{7,14}$'::"text")),
     CONSTRAINT "vendors_rejection_has_reason" CHECK ((("status" <> 'REJECTED'::"public"."vendor_status") OR (NULLIF("btrim"(COALESCE("rejection_reason", ''::"text")), ''::"text") IS NOT NULL))),
     CONSTRAINT "vendors_walk_minutes_to_campus_check" CHECK (("walk_minutes_to_campus" >= 0))
@@ -851,6 +855,12 @@ COMMENT ON COLUMN "public"."vendors"."owner_is_student" IS 'Whether the owner to
 
 
 COMMENT ON COLUMN "public"."vendors"."can_use_variable_pricing" IS 'Whether this store may sell items at a price the customer chooses. Set by an administrator only, through admin_set_vendor_variable_pricing(). Turning it off preserves every item''s variable configuration, dormant and unsellable, until it is turned back on.';
+
+
+COMMENT ON COLUMN "public"."vendors"."location_area" IS 'ON_CAMPUS or OFF_CAMPUS, as the vendor states it. NULL means not stated yet: stores that predate the question keep NULL until their owner answers it. Informational only; nothing decides anything on it.';
+
+
+COMMENT ON COLUMN "public"."vendors"."location_details" IS 'Where the store is, in the vendor''s own words, shown to customers under the store name. NULL means not stated. Free text by design, not an address system.';
 
 
 CREATE OR REPLACE FUNCTION "public"."admin_create_vendor"("p_name" "text", "p_phone" "text", "p_reason" "text", "p_category_id" "uuid" DEFAULT NULL::"uuid", "p_location_id" "uuid" DEFAULT NULL::"uuid", "p_location_note" "text" DEFAULT NULL::"text", "p_walk_minutes_to_campus" integer DEFAULT NULL::integer) RETURNS "public"."vendors"
@@ -7471,7 +7481,7 @@ $$;
 ALTER FUNCTION "public"."my_scan_order"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "status" "public"."vendor_status", "description" "text", "category_id" "uuid", "category_name" "text", "applicant_name" "text", "owner_is_student" boolean, "is_accepting_orders" boolean, "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "location_id" "uuid", "location_note" "text", "walk_minutes_to_campus" integer, "can_accept_scans" boolean, "can_use_variable_pricing" boolean)
+CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("vendor_id" "uuid", "name" "text", "status" "public"."vendor_status", "description" "text", "category_id" "uuid", "category_name" "text", "applicant_name" "text", "owner_is_student" boolean, "is_accepting_orders" boolean, "rejection_reason" "text", "submitted_at" timestamp with time zone, "reviewed_at" timestamp with time zone, "location_id" "uuid", "location_note" "text", "walk_minutes_to_campus" integer, "can_accept_scans" boolean, "can_use_variable_pricing" boolean, "location_area" "text", "location_details" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -7480,7 +7490,8 @@ CREATE OR REPLACE FUNCTION "public"."my_vendor_application"() RETURNS TABLE("ven
          v.rejection_reason, v.submitted_at, v.reviewed_at,
          v.location_id, v.location_note, v.walk_minutes_to_campus,
          v.can_accept_scans,
-         v.can_use_variable_pricing
+         v.can_use_variable_pricing,
+         v.location_area, v.location_details
     from public.vendors v
     left join public.vendor_categories k on k.id = v.category_id
    where v.owner_user_id = auth.uid();
@@ -9241,7 +9252,7 @@ $$;
 ALTER FUNCTION "public"."settle_partner_earnings"("p_order_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "location_note" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "images" "jsonb")
+CREATE OR REPLACE FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "location_note" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "images" "jsonb", "location_area" "text", "location_details" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -9255,7 +9266,8 @@ CREATE OR REPLACE FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") RE
                      from (select * from public.vendor_images i2
                             where i2.vendor_id = v.id
                             order by i2.sort_order, i2.created_at
-                            limit 4) i), '[]'::jsonb)
+                            limit 4) i), '[]'::jsonb),
+         v.location_area, v.location_details
     from public.vendors v
     left join public.vendor_categories k on k.id = v.category_id
    where v.id = p_vendor_id and v.status = 'ACTIVE';
@@ -9265,7 +9277,7 @@ $$;
 ALTER FUNCTION "public"."storefront_vendor"("p_vendor_id" "uuid") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."storefront_vendors"("p_category_id" "uuid" DEFAULT NULL::"uuid", "p_search" "text" DEFAULT NULL::"text") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "image_path" "text", "image_count" bigint, "menu_count" bigint)
+CREATE OR REPLACE FUNCTION "public"."storefront_vendors"("p_category_id" "uuid" DEFAULT NULL::"uuid", "p_search" "text" DEFAULT NULL::"text") RETURNS TABLE("vendor_id" "uuid", "name" "text", "description" "text", "category_id" "uuid", "category_name" "text", "category_slug" "text", "location_path" "text", "walk_minutes_to_campus" integer, "is_accepting_orders" boolean, "can_accept_scans" boolean, "image_path" "text", "image_count" bigint, "menu_count" bigint, "location_area" "text", "location_details" "text")
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -9280,7 +9292,8 @@ CREATE OR REPLACE FUNCTION "public"."storefront_vendors"("p_category_id" "uuid" 
          -- catalogue behind it: a card promising nine dishes and a page showing
          -- two is worse than a card that says two.
          (select count(*) from public.menu_items m
-           where m.vendor_id = v.id and m.is_active and m.is_available)
+           where m.vendor_id = v.id and m.is_active and m.is_available),
+         v.location_area, v.location_details
     from public.vendors v
     left join public.vendor_categories k on k.id = v.category_id
    where v.status = 'ACTIVE'
@@ -11517,6 +11530,42 @@ $$;
 
 
 ALTER FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."vendor_update_location"("p_vendor_id" "uuid", "p_area" "text", "p_details" "text") RETURNS "public"."vendors"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_vendor  public.vendors%rowtype;
+  v_details text := nullif(btrim(coalesce(p_details, '')), '');
+begin
+  if not public.is_vendor_staff(p_vendor_id) then
+    raise exception 'not authorised for this store' using errcode = 'insufficient_privilege';
+  end if;
+
+  if p_area is null or p_area not in ('ON_CAMPUS', 'OFF_CAMPUS') then
+    raise exception 'say whether the store is on or off campus' using errcode = 'check_violation';
+  end if;
+  if v_details is null then
+    raise exception 'say where the store is' using errcode = 'check_violation';
+  end if;
+  if char_length(v_details) > 160 then
+    raise exception 'keep the location under 160 characters' using errcode = 'check_violation';
+  end if;
+
+  update public.vendors
+     set location_area    = p_area,
+         location_details = v_details
+   where id = p_vendor_id
+  returning * into v_vendor;
+
+  return v_vendor;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."vendor_update_location"("p_vendor_id" "uuid", "p_area" "text", "p_details" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text" DEFAULT NULL::"text", "p_price_pesewas" bigint DEFAULT NULL::bigint, "p_description" "text" DEFAULT NULL::"text", "p_scan_eligible" boolean DEFAULT NULL::boolean, "p_pricing_mode" "text" DEFAULT NULL::"text", "p_variable_min_pesewas" bigint DEFAULT NULL::bigint, "p_variable_step_pesewas" bigint DEFAULT NULL::bigint, "p_variable_max_pesewas" bigint DEFAULT NULL::bigint, "p_clear_variable_max" boolean DEFAULT false, "p_variable_choices_pesewas" bigint[] DEFAULT NULL::bigint[]) RETURNS "public"."menu_items"
@@ -14051,6 +14100,11 @@ GRANT ALL ON FUNCTION "public"."vendor_set_primary_image"("p_image_id" "uuid") T
 REVOKE ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."vendor_signup"("p_applicant_name" "text", "p_store_name" "text", "p_is_student" boolean, "p_description" "text", "p_category_id" "uuid", "p_terms_id" "uuid") TO "authenticated";
+
+
+REVOKE ALL ON FUNCTION "public"."vendor_update_location"("p_vendor_id" "uuid", "p_area" "text", "p_details" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."vendor_update_location"("p_vendor_id" "uuid", "p_area" "text", "p_details" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."vendor_update_location"("p_vendor_id" "uuid", "p_area" "text", "p_details" "text") TO "authenticated";
 
 
 REVOKE ALL ON FUNCTION "public"."vendor_update_menu_item"("p_menu_item_id" "uuid", "p_name" "text", "p_price_pesewas" bigint, "p_description" "text", "p_scan_eligible" boolean, "p_pricing_mode" "text", "p_variable_min_pesewas" bigint, "p_variable_step_pesewas" bigint, "p_variable_max_pesewas" bigint, "p_clear_variable_max" boolean, "p_variable_choices_pesewas" bigint[]) FROM PUBLIC;

@@ -5,10 +5,11 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { normaliseGhanaPhone } from '@/lib/sms';
 import { actionFailure } from '@/lib/errors';
-import { signUp, setPayoutDestination } from '@/lib/vendor';
+import { signUp, setPayoutDestination, updateLocation } from '@/lib/vendor';
 import { readSignupPayout, payoutNumberFor } from '@/lib/vendor/payout-details';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { isOtpShape } from '@/lib/auth/customer-signup';
+import { readVendorLocation } from '@/lib/util/vendor-location';
 
 const CONTEXT = 'vendor sign-up';
 
@@ -35,6 +36,9 @@ function collect(formData) {
     isStudent: String(formData.get('is_student') ?? ''),
     description: String(formData.get('description') ?? '').trim(),
     categoryId: String(formData.get('category_id') ?? ''),
+    // WHERE THE STORE IS, on or off campus and in the vendor's words.
+    locationArea: String(formData.get('location_area') ?? ''),
+    locationDetails: String(formData.get('location_details') ?? '').trim(),
     phoneRaw: String(formData.get('phone') ?? '').trim(),
     // THE NUMBER THE CODE WENT TO, in E.164, carried back by the code screen.
     // Verification uses this rather than re-deriving it from what was typed, so
@@ -164,6 +168,8 @@ function carry(d) {
     isStudent: d.isStudent,
     description: d.description,
     categoryId: d.categoryId,
+    locationArea: d.locationArea,
+    locationDetails: d.locationDetails,
     phoneRaw: d.phoneRaw,
     otpType: d.otpType,
     momoNetwork: d.momoNetwork,
@@ -214,6 +220,9 @@ export async function startVendorSignUpAction(_prev, formData) {
   }
   if (!d.description) return fail('Describe what your store sells.');
   if (!d.categoryId) return fail('Choose a business category.');
+
+  const location = readVendorLocation(formData);
+  if (!location.ok) return fail(location.message);
 
   const phone = normaliseGhanaPhone(d.phoneRaw);
   if (!phone) return fail('Enter a valid Ghanaian phone number, e.g. 020 123 4567.');
@@ -364,6 +373,27 @@ export async function resendVendorCodeAction(_prev, formData) {
 }
 
 /**
+ * Where the store is, saved on the session that just created it.
+ *
+ * Its own call, like the payout details below, and for the same reason: a
+ * failure here does not undo a store that exists. The owner can add it from
+ * the Store page, which asks for it. It is logged, not hidden.
+ */
+async function saveLocation(created, d) {
+  const vendor = Array.isArray(created) ? created[0] : created;
+  if (!vendor?.id) return;
+  try {
+    await updateLocation({
+      vendorId: vendor.id,
+      area: d.locationArea,
+      details: d.locationDetails,
+    });
+  } catch (error) {
+    console.error('[vendor-signup] store created, location not saved:', error.message);
+  }
+}
+
+/**
  * The store's mobile money account, saved on the session that just proved the
  * phone. "Use my sign-in number" means THAT number — the one the code was
  * checked against a moment ago — and nothing typed or remembered.
@@ -442,6 +472,7 @@ export async function finishVendorSignUpAction(_prev, formData) {
       if (syncError) throw new Error(syncError.message);
     }
     const created = await createStore(d, d.applicantName || account?.name || '');
+    await saveLocation(created, d);
     await savePayoutDetails(created, d, phone);
   } catch (error) {
     const failure = actionFailure(error, CONTEXT);
